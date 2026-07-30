@@ -2257,7 +2257,7 @@ function dessineDeckPicker(ctx, state) {
   if (!state.decksRoot) state.decksRoot = sanitizeRoot(loadDecks());
   const root = state.decksRoot;
   const activeDeck = root.decks[root.active];
-  const currentSlot = activeDeck ? activeDeck.slots[type][cat] : null;
+  const currentSlot = (activeDeck && activeDeck.slots && activeDeck.slots[type]) ? activeDeck.slots[type][cat] : null;
 
   // Overlay sombre transparent.
   ctx.save();
