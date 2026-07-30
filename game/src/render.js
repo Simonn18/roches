@@ -2267,7 +2267,15 @@ function dessineDeckPicker(ctx, state) {
   // Titre.
   ctx.fillStyle = C_BRUME; ctx.font = `22px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText(`${LETTRE[type]} — ${nomType(type).toUpperCase()} · ${DECK_CAT_LABEL[cat].toUpperCase()}`,
+  // Phase 6.2 belt-and-braces — defensive defaults pour les 3 reads.
+  // _deckEditor peut etre mal forme (race, partial sanitize, deck user-created
+  // incomplet entre frames) — on wrappe chaque lookup avec un fallback chain.
+  // Le pattern defense-in-depth protege contre ANY collision future avec un
+  // mode degrade silencieux (jamais de throw) au lieu d'un crash picker.
+  const typeStr   = (LETTRE && LETTRE[type]) || type || '?';
+  const typeNom   = ((typeof nomType === 'function' ? nomType(type) : null) || typeStr).toUpperCase();
+  const catLabel  = (DECK_CAT_LABEL && DECK_CAT_LABEL[cat]) || cat || '—';
+  ctx.fillText(`${typeStr} — ${typeNom} · ${catLabel.toUpperCase()}`,
     CANVAS_W / 2, 80);
   ctx.fillStyle = C_CARTE; ctx.font = `12px ${F_TEXTE}`;
   ctx.fillText('Choisis une amélioration (ou vide le slot)', CANVAS_W / 2, 102);
