@@ -3,7 +3,7 @@
 
 // --- Économie (GDD §7) ---
 export const REVENU_PAR_COUP = 2;   // +2 écus par coup joué
-export const SOLDE_DEPART = 0; // GDD §7 : les deux joueurs commencent à sec.
+export const SOLDE_DEPART = 30; // GDD §7 : les deux joueurs commencent à sec.
 export const PLAFOND_ECUS = 30;
 
 // Valeurs de pièce = bonus de capture (GDD §7). Roi = 0 (fin de partie).
@@ -20,7 +20,7 @@ export const UPGRADES = {
     desc: "Recule d'une case (jamais pour capturer).",
   },
   'bouclier':{
-    id: 'bouclier', nom: 'Bouclier de fantassin',cat:'A',cout:6,piece: 'P',
+    id: 'bouclier', nom: 'Bouclier de fantassin',cat:'S',cout:6,piece: 'P',
     desc: 'Annule la prochaine capture subie'
   },
   'vet':{
@@ -50,8 +50,8 @@ export const UPGRADES = {
     desc: "Actif, capture à distance la 1re pièce adverse sur une diagonale, sans bouger.",
   },
   'Zone': {
-    id: 'Zone', nom: 'Zone de contrôle', cat: 'S', cout: 6, piece: 'B',
-    desc: "Empêche n'importe quelle pièce de rang inférieur ou égal de se déplacer sur les cases autour de lui",
+    id: 'Zone', nom: 'Parade', cat: 'S', cout: 6, piece: 'B',
+    desc: "Parade : annule la prochaine capture subie par le fou.",
   },
 
   'pivot': {
@@ -84,9 +84,10 @@ export const UPGRADES = {
     id: 'passe-royale', nom: 'Passe royal', cat: 'D', cout: 8, piece: 'K',
     desc:"Le roi peut se déplacer de 2 cases en ligne droite (orthogonal/diagonal), cases libres.",
   },
+  // Roi — 1re actif : si la reine adverse est à 2 cases ou moins, elle ne peut plus bouger pendant 2 tours
   'sacrifice': {
-    id: 'sacrifice', nom: 'Sacrifice', cat: 'A', cout: 12, piece: 'K', cooldown: 6,
-    desc: "Appelle un pion pour le protéger, le pion meurt à la place du roi et le roi peut se déplacer sur une des cases autour de lui. Si auncun pion n'est disponible, la pièce avec avec une valeur juste supérieur aux pions protège le roi .",
+    id: 'sacrifice', nom: 'Mariage stratégique', cat: 'A', cout: 12, piece: 'K', cooldown: 6,
+    desc: "Actif : si la reine adverse est à 2 cases ou moins du roi, elle ne peut plus bouger pendant les 2 prochains tours.",
   },
   'decret': {
     id: 'decret', nom: 'Décret', cat: 'A', cout: 12, piece: 'K', once: true,
@@ -109,50 +110,51 @@ export const UPGRADES = {
     id: 'grand-saut', nom: 'Grand saut', cat: 'D', cout: 9, piece: 'N', cooldown: 4,
     desc: 'Cavalier peut sauter en (3,1) ou (3,2) — cases intermédiaire et finale libres.',
   },
-  // Cavalier — 2e actif : alternatif de Ruée (cd 4)
+  // Cavalier — 2e actif : repousse une pièce adverse sur une case d'attaque
   'cavalerie': {
     id: 'cavalerie', nom: 'Cavalerie', cat: 'A', cout: 9, piece: 'N', cooldown: 4,
-    desc: 'Actif : capture un ennemi à distance de cavalier sans bouger.',
+    desc: "Actif : choisit une pièce adverse à distance de cavalier et la repousse d'une case en arrière sur une case d'attaque.",
   },
-  // Fou — 2e déplacement : reculer en diagonale
+  // Fou — 2e déplacement : pour la prochaine attaque, le fou se déplace comme une dame
   'reprise': {
-    id: 'reprise', nom: 'Reprise', cat: 'D', cout: 5, piece: 'B',
-    desc: "Le fou peut aussi reculer en diagonale (au lieu d'avancer seulement).",
+    id: 'reprise', nom: 'Folie', cat: 'D', cout: 5, piece: 'B',
+    desc: "Usage unique : pour la prochaine attaque, le fou se déplace comme une dame.",
   },
-  // Fou — 2e actif : alternatif de Rayon (cd 4)
+  // Fou — 2e actif : les pièces ennemies (hors roi/reine) ne peuvent plus bouger
+  // dans un rayon de 3 cases autour du fou pendant 2 tours.
   'hypnose': {
     id: 'hypnose', nom: 'Hypnose', cat: 'A', cout: 10, piece: 'B', cooldown: 4,
-    desc: "Actif, capture à distance la 1re pièce adverse sur une diagonale, sans bouger.",
+    desc: "Actif : les pièces ennemies (hors roi et reine) ne peuvent pas se déplacer dans un rayon de 3 cases autour du fou pendant 2 tours.",
   },
   // Tour — 2e déplacement : saut de la 1re pièce
   'enjambeur': {
     id: 'enjambeur', nom: 'Enjambeur', cat: 'D', cout: 6, piece: 'R',
     desc: "La tour peut sauter la première pièce rencontrée sur son glissement (jamais le roi).",
   },
-  // Tour — 2e actif : alternatif de Rempart (cd 5)
+  // Tour — 2e actif : échange de place avec un pion allié dans le champ d'action de la tour
   'echange': {
     id: 'echange', nom: 'Échange', cat: 'A', cout: 9, piece: 'R', cooldown: 5,
-    desc: "La tour se pose ; elle et les alliés orthogonalement adjacents sont blindés (survivent à 1 prise) jusqu'au prochain tour du joueur.",
+    desc: "Actif : la tour échange sa position avec un pion allié situé sur une ligne, colonne ou diagonale de la tour.",
   },
-  // Dame — 2e déplacement : avance de 2 cases tout droit en sautant
+  // Dame — 2e déplacement : pour la prochaine attaque, la dame se déplace comme n'importe quelle pièce
   'feinte': {
     id: 'feinte', nom: 'Feinte', cat: 'D', cout: 12, piece: 'Q', cooldown: 5,
-    desc: "La dame peut avancer de 2 cases tout droit en sautant la première case, sans capture.",
+    desc: "Usage unique : pour la prochaine attaque, la dame peut se déplacer comme n'importe quelle pièce (cavalier, fou ou tour).",
   },
-  // Dame — 2e actif : alternatif de Double coup (once)
+  // Dame — 2e actif : empêche le roi adverse d'utiliser ses améliorations pendant 2 tours
   'sht': {
     id: 'sht', nom: 'S.H.T.', cat: 'A', cout: 15, piece: 'Q', once: true,
-    desc: 'Usage unique : rejoue un 2e coup (ne consomme pas le tour).',
+    desc: "Usage unique : le roi adverse ne peut utiliser aucune de ses améliorations pendant les 2 prochains tours.",
   },
   // Roi — 2e déplacement : fuite de 3 cases
   'haute-fuite': {
     id: 'haute-fuite', nom: 'Haute fuite', cat: 'D', cout: 10, piece: 'K',
     desc: 'Le roi peut fuir de 3 cases tout droit (ortho/diag) — cases libres, sans capture.',
   },
-  // Roi — 1re stat : 1 point au départage à la valeur au lieu de 0
+  // Roi — 1re stat : survit à la première tentative de capture
   'majeste': {
     id: 'majeste', nom: 'Majesté royale', cat: 'S', cout: 8, piece: 'K',
-    desc: 'Le roi vaut **1 point** au départage à la valeur au lieu de 0.',
+    desc: 'Le roi absorbe la première capture subie (survit une fois).',
   },
 };
 
@@ -162,7 +164,7 @@ for (const u of Object.values(UPGRADES)) {
   (UPGRADES_PAR_TYPE[u.piece] ||= []).push(u.id);
 }
 
-export const MAX_UPGRADES_PAR_PIECE = 2; // GDD §5.3
+export const MAX_UPGRADES_PAR_PIECE = 3; // GDD §5.3 —  amélioration par catégorie (D/A/S)
 
 // --- PvP en ligne : cadences proposées (spec-pvp-online §6) ---
 // Temps initial par joueur, en secondes. SANS incrément (décision utilisateur 12/07,
@@ -182,6 +184,11 @@ export function cadenceLabel(s) {
 
 // Couleurs de catégorie (GDD §5.3 / DA §9) : Info Déplacement / Actif / Stat, pastel.
 export const COULEUR_CAT = { D: '#8FB8E0', A: '#F0B15E', S: '#9BCB8C' };
+// Phase 6 — accent PRIMARY bleu du sélecteur de deck (5 tabs multi-deck). Distinct du
+// COULEUR_CAT.D (catégorie D = feu des pièces, bleu pâle pastille) pour ne pas confondre
+// la signalétique « deck actif » (CTA principal, saturé) avec le signal « feu cat D »
+// (HUD cosmétique). Choix ≈ bleu design-system iOS/Material card-list, ≈ #3F7CB0.
+export const DECK_ACCENT = '#3F7CB0';
 
 // --- Timings feedback (GDD §7) ---
 export const DUREE_ANIM = 150;   // glissement

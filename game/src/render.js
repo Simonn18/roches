@@ -13,7 +13,7 @@ import {
   DUREE_ANIM, DUREE_FLASH, DUREE_POPUP, DUREE_GOLD,
   C_BRUME, C_CARTE, C_ENCRE, C_SAUGE, C_IVOIRE_BOIS,
   C_ENCRE_DOUX, C_ENCRE_PALE, C_CARTE_BORD, C_OMBRE,
-  C_AMBRE, C_AMBRE_FONCE, C_TERRACOTTA, C_SAUGE_FONCE, C_AMBRE_CLAIR,
+  C_AMBRE, C_AMBRE_FONCE, C_TERRACOTTA, C_SAUGE_FONCE, C_AMBRE_CLAIR, DECK_ACCENT,
   REMPLI_PIECE,C_ENCRE_sub,
   PVW_CADENCES, cadenceLabel,
 } from './constants.js';
@@ -26,7 +26,7 @@ import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal
 // Deck editor UI (recovery 29/07 [23:30]) : couche DONNÉES pure — loadDecks/getActiveDeck/
 // setSlot sont utilisés par main.js (handlers) et render.js (lecture seule du deck actif
 // pour l'affichage). Aucune dépendance inverse.
-import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot } from './decks.js';
+import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -558,6 +558,29 @@ function dessineFeu(ctx, x, y, now, r, col1, col2, pulsed) {
   ctx.restore();
 }
 
+// Dessine une flèche directionnelle de (x1,y1) à (x2,y2) avec une tête triangulaire.
+// Utilisée pour indiquer la direction de poussée de la Cavalerie (Phase 2).
+function dessineFleche(ctx, x1, y1, x2, y2, color) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const angle = Math.atan2(dy, dx);
+  const headLen = 10; // longueur de la pointe de la flèche
+  // Tige
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  // Pointe triangulaire
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - headLen * Math.cos(angle - 0.4), y2 - headLen * Math.sin(angle - 0.4));
+  ctx.lineTo(x2 - headLen * Math.cos(angle + 0.4), y2 - headLen * Math.sin(angle + 0.4));
+  ctx.closePath();
+  ctx.fill();
+}
+
 function dessineEchiquier(ctx, state, now) {
   // Cadre / socle du plateau (anneau Ivoire Bois) puis fond Brume : les gouttières
   // entre les tuiles laissent apparaître ce fond Brume (DA §4).
@@ -640,14 +663,34 @@ function dessineEchiquier(ctx, state, now) {
     }
   }
 
-  // Cibles en ciblage : Ruée / Rayon (anneau ambre) ou Décret (anneau sauge sur allié).
-  if (state.phase === 'ruee-target' || state.phase === 'rayon-target' || state.phase === 'decret-target') {
-    const couleur = state.phase === 'decret-target' ? '#7FB069' : C_RUEE;
+  // Cibles en ciblage : Ruée / Rayon / Cavalerie (anneau ambre), Décret (anneau sauge
+  // sur allié), Échange (anneau vert clair sur pions alliés), Cavalerie push
+  // (anneau cyan vif sur les destinations choisies).
+  if (state.phase === 'ruee-target' || state.phase === 'rayon-target'
+   || state.phase === 'decret-target' || state.phase === 'cavalerie-target'
+   || state.phase === 'echange-target'
+   || state.phase === 'cavalerie-push') {
+    const couleur = state.phase === 'decret-target' ? '#7FB069'
+      : state.phase === 'echange-target' ? '#7FB069'
+      : state.phase === 'cavalerie-push' ? '#5BC0EB' // cyan vif pour les destinations
+      : C_RUEE;
     for (const t of state.ruTargets) {
       const { x, y } = cellCenterVue(state, t.r, t.c);
       ctx.beginPath(); ctx.arc(x, y, __CELL_SIZE / 2 - 3, 0, Math.PI * 2);
       ctx.lineWidth = 4; ctx.strokeStyle = couleur; ctx.stroke();
     }
+  }
+
+  // Flèches directionnelles pour la Cavalerie (Phase 2) : de l'ennemi
+  // vers les deux cases de destination. Cyan vif semi-transparent.
+  if (state.phase === 'cavalerie-push' && state._cavEnemyCell) {
+    const from = cellCenterVue(state, state._cavEnemyCell.r, state._cavEnemyCell.c);
+    ctx.globalAlpha = 0.55;
+    for (const t of state.ruTargets) {
+      const to = cellCenterVue(state, t.r, t.c);
+      dessineFleche(ctx, from.x, from.y, to.x, to.y, '#5BC0EB');
+    }
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -849,10 +892,14 @@ function dessinePanneau(ctx, state, now) {
     ctx.fillText(`${nomType(sel.type)} — valeur ${valeur}`, x + 10, y + 13);
     y += 34;
 
+    // S.H.T. : les améliorations d'une pièce sont silencées si le roi adverse
+    // (ou cette pièce elle-même) est sous le debuff S.H.T.
+    const powersBlocked = sel.debuffs && sel.debuffs.sht > 0;
+
     // Pouvoir actif : Ruée (cavalier).
     if (sel.type === 'N' && sel.upgrades.includes('ruee')) {
       const cd = sel.cooldowns.ruee || 0;
-      const pret = cd === 0 && state.phase === 'play'
+      const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'ruee' });
       bouton(state, ctx, x, y, w, 34, 'Ruée', { kind: 'ruee' },
         { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'capture à distance' });
@@ -865,7 +912,7 @@ function dessinePanneau(ctx, state, now) {
     // Pouvoir actif : Rempart (tour).
     if (sel.type === 'R' && sel.upgrades.includes('rempart')) {
       const cd = sel.cooldowns.rempart || 0;
-      const pret = cd === 0 && state.phase === 'play'
+      const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'rempart' });
       bouton(state, ctx, x, y, w, 34, 'Rempart', { kind: 'rempart' },
         { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'blinde la tour et les alliés' });
@@ -875,27 +922,27 @@ function dessinePanneau(ctx, state, now) {
     // Pouvoir actif : Rayon sacré (fou).
     if (sel.type === 'B' && sel.upgrades.includes('Rayon')) {
       const cd = sel.cooldowns.Rayon || 0;
-      const pret = cd === 0 && state.phase === 'play'
+      const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'rayon' });
       bouton(state, ctx, x, y, w, 34, 'Rayon sacré', { kind: 'rayon' },
         { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'capture à distance' });
       y += 42;
     }
 
-    // Pouvoir actif : Sacrifice (roi).
+    // Pouvoir actif : Mariage stratégique (roi).
     if (sel.type === 'K' && sel.upgrades.includes('sacrifice')) {
       const cd = sel.cooldowns.sacrifice || 0;
-      const pret = cd === 0 && !sel.sacrificeArmed && state.phase === 'play'
+      const pret = !powersBlocked && cd === 0 && !sel.sacrificeArmed && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'sacrifice' });
-      bouton(state, ctx, x, y, w, 34, 'Sacrifice', { kind: 'sacrifice' },
+      bouton(state, ctx, x, y, w, 34, 'Mariage strat.', { kind: 'sacrifice' },
         { enabled: pret, color: C_AMBRE, textColor: '#2B1D06',
-          sub: sel.sacrificeArmed ? 'armé' : (cd > 0 ? `recharge ${cd}` : 'protège le roi (consomme le tour)') });
+          sub: sel.sacrificeArmed ? 'armé' : (cd > 0 ? `recharge ${cd}` : 'immobilise la reine adverse') });
       y += 42;
     }
 
     // Pouvoir actif : Décret (roi, usage unique).
     if (sel.type === 'K' && sel.upgrades.includes('decret')) {
-      const pret = !sel.decretUsed && state.phase === 'play'
+      const pret = !powersBlocked && !sel.decretUsed && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'decret' });
       bouton(state, ctx, x, y, w, 34, 'Décret', { kind: 'decret' },
         { enabled: pret, color: C_AMBRE, textColor: '#2B1D06',
@@ -903,11 +950,52 @@ function dessinePanneau(ctx, state, now) {
       y += 42;
     }
 
-    // Bouton Améliorer (si des cartes existent pour ce type et plafond non atteint).
+    // Pouvoir actif : Cavalerie (cavalier).
+    if (sel.type === 'N' && sel.upgrades.includes('cavalerie')) {
+      const cd = sel.cooldowns.cavalerie || 0;
+      const pret = !powersBlocked && cd === 0 && state.phase === 'play'
+        && tutorielPermet(state, { type: 'power', kind: 'cavalerie' });
+      bouton(state, ctx, x, y, w, 34, 'Cavalerie', { kind: 'cavalerie' },
+        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'repousse un ennemi' });
+      y += 42;
+    }
+
+    // Pouvoir actif : Échange (tour).
+    if (sel.type === 'R' && sel.upgrades.includes('echange')) {
+      const cd = sel.cooldowns.echange || 0;
+      const pret = !powersBlocked && cd === 0 && state.phase === 'play'
+        && tutorielPermet(state, { type: 'power', kind: 'echange' });
+      bouton(state, ctx, x, y, w, 34, 'Échange', { kind: 'echange' },
+        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'swap avec un pion' });
+      y += 42;
+    }
+
+    // Pouvoir actif : Hypnose (fou).
+    if (sel.type === 'B' && sel.upgrades.includes('hypnose')) {
+      const cd = sel.cooldowns.hypnose || 0;
+      const pret = !powersBlocked && cd === 0 && state.phase === 'play'
+        && tutorielPermet(state, { type: 'power', kind: 'hypnose' });
+      bouton(state, ctx, x, y, w, 34, 'Hypnose', { kind: 'hypnose' },
+        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'aura de gel' });
+      y += 42;
+    }
+
+    // Pouvoir actif : S.H.T. (dame, usage unique).
+    if (sel.type === 'Q' && sel.upgrades.includes('sht')) {
+      const pret = !powersBlocked && !sel.shtUsed && state.phase === 'play'
+        && tutorielPermet(state, { type: 'power', kind: 'sht' });
+      bouton(state, ctx, x, y, w, 34, 'S.H.T.', { kind: 'sht' },
+        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06',
+          sub: sel.shtUsed ? 'déjà utilisé' : 'silence le roi adverse' });
+      y += 42;
+    }
+
+    // Bouton Améliorer (si des cartes existent pour ce type, plafond non atteint,
+    // et pièce pas sous S.H.T.).
     const cartes = UPGRADES_PAR_TYPE[sel.type] || [];
     if (!state.panelPiece && cartes.length && sel.upgrades.length < MAX_UPGRADES_PAR_PIECE) {
       bouton(state, ctx, x, y, w, 32, 'Améliorer  (clic droit)', { kind: 'ameliorer' },
-        { enabled: tutorielPermet(state, { type: 'panel', piece: sel }) });
+        { enabled: !powersBlocked && tutorielPermet(state, { type: 'panel', piece: sel }) });
       y += 40;
     }
   }
@@ -968,7 +1056,7 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
   const solde = state.ecus[state.turn];
   const trembler = now - state.buzz < 300;
   const hintTuto = state.mode === 'tutorial' ? tutorielHint(state) : null;
-  for (const id of (UPGRADES_PAR_TYPE[p.type] || [])) {
+  for (const id of upgradesForPiece(state.activeDeck, p.type, UPGRADES_PAR_TYPE[p.type])) {
     const u = UPGRADES[id];
     const bientot = !!u.nonImplemente; // effet pas encore codé (GDD) : carte grisée neutre
     // Tutoriel : les cartes hors étape sont verrouillées (grisées + cadenas).
@@ -1221,7 +1309,7 @@ function dessineGameOver(ctx, state, now) {
   const pw = 380;
   let ph = 210;
   if (showTrophy || pendingTrophy || voided) ph += 60;
-  if (hasReplay) ph += 52;
+  /* replay button moved to bottom-right of canvas — no extra panel height needed */
   if (pvw && !voided) ph += 56;                         // bouton Revanche
   if (pvw) ph += 56;                                    // bouton Nouvelle partie (aussi si voided)
   const px = cx - pw / 2, py = cy - ph / 2;
@@ -1314,12 +1402,12 @@ function dessineGameOver(ctx, state, now) {
     }
   }
 
-  // Bouton replay : téléchargement du .md (Blob + download). Au-dessus des CTA.
+  // Bouton replay : ancré en bas à droite du canvas (indépendant de la taille du plateau).
   if (hasReplay) {
-    btnY -= 52;
-    bouton(state, ctx, cx - 160, btnY, 320, 42, '📥 Télécharger le replay (.md)',
+    const rpx = CANVAS_W - 210, rpy = CANVAS_H - 48;
+    bouton(state, ctx, rpx, rpy, 195, 34, '📥 Replay (.md)',
       { kind: 'downloadReplay' },
-      { color: C_CARTE, textColor: C_ENCRE, sub: 'pour analyse ou futur tutoriel' });
+      { color: C_CARTE, textColor: C_ENCRE });
   }
 }
 
@@ -1487,13 +1575,13 @@ function dessineMenu(ctx, state) {
   // [V2] Constantes (palette + typo, mêmes que v5.10).
   const F_V2 = 'ui-rounded, "SF Pro Rounded", "Segoe UI Rounded", "Baloo 2", system-ui, sans-serif';
   const V2 = {
-    bg:       '#EFEAF6', card:    '#FFFFFF',
-    ink:      '#2B2440', inkSoft: '#6B6280',
-    purple:   '#8B6BB5', purpleD: '#6E4FA0',
+    bg:       '#fffafa', card:    '#FFFAFA',
+    ink:      '#3d4024', inkSoft: '#2B2B2B',
+    purple:   '#8e8c29', purpleD: '#2B2B2B',
     green:    '#3F5B4C', greenD:  '#33493D',
     rose:     '#E7B9AC', roseD:   '#D99A88',
-    panelL:   '#F1EAFA', panelO:  '#F4F2FB', panelC: '#FBEEE9',
-    field:    '#E6E1F2', fldInk:  '#4A4460', border: '#E3DCF4',
+    panelL:   '#FCF8F3', panelO:  '#FCF8F3', panelC: '#FCF8F3', // crème chaud (idem cartes jeu)
+    field:    '#E6E1F2', fldInk:  '#4A4460', border: '#2B2B2B',
   };
   const R_LG = 22, R_MD = 16, R_SM = 12, R_XS = 8;
 
@@ -1535,13 +1623,13 @@ function dessineMenu(ctx, state) {
     const enabled = opts.enabled !== false;
     state.ui.buttons.push({ x, y, w, h, action, enabled });
     if (enabled) {
-      ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = V2.purpleD;
+      ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = '#C4A035';
       roundRect(ctx, x, y + 3, w, h, R_LG); ctx.fill(); ctx.restore();
     }
     ctx.fillStyle = enabled ? color : V2.field;
     roundRect(ctx, x, y, w, h, R_LG); ctx.fill();
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = enabled ? V2.purpleD : 'rgba(43,36,64,0.18)';
+    ctx.strokeStyle = enabled ? '#C4A035' : 'rgba(43,36,64,0.18)';
     roundRect(ctx, x, y, w, h, R_LG); ctx.stroke();
     ctx.fillStyle = enabled ? '#FFFFFF' : V2.inkSoft;
     ctx.font = `bold 15px ${F_V2}`;
@@ -1555,11 +1643,11 @@ function dessineMenu(ctx, state) {
   }
   function friendBtn(x, y, w, h, label, action) {
     state.ui.buttons.push({ x, y, w, h, action, enabled: true });
-    ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = V2.purpleD;
+    ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = '#C4A035';
     roundRect(ctx, x, y + 3, w, h, R_LG); ctx.fill(); ctx.restore();
     ctx.fillStyle = V2.rose;
     roundRect(ctx, x, y, w, h, R_LG); ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = V2.purpleD;
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#C4A035';
     roundRect(ctx, x, y, w, h, R_LG); ctx.stroke();
     ctx.fillStyle = V2.ink; ctx.font = `bold 13px ${F_V2}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1573,7 +1661,9 @@ function dessineMenu(ctx, state) {
   const varCbt = (state.menu && state.menu.combat) || 'standard';
   const cbtLabel = (COMBATS.find((c) => c.id === varCbt) || {}).label || varCbt;
   const ecoLabel = (ECONOMIES.find((e) => e.id === varEco) || {}).label || varEco;
-  const varStatus = `${varOpen ? '▼' : '▶'}  VARIANTES  ·  ${ecoLabel} × ${cbtLabel}`;
+  const varTail = (state.menu && state.menu.taille) || 'std';
+  const tailleLabel = (TAILLES[varTail] || TAILLES.std).label;
+  const varStatus = `${varOpen ? '▼' : '▶'}  VARIANTES  ·  ${ecoLabel} * ${cbtLabel} * ${tailleLabel}`;
 
   // === Fond lavande ===
   ctx.fillStyle = V2.bg;
@@ -1639,7 +1729,7 @@ function dessineMenu(ctx, state) {
     accY += ecoChipH + 16;
     ctx.fillStyle = V2.inkSoft; ctx.font = `10px ${F_V2}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText("MODE COMBAT — les déplacements n'apportent pas d'écus", cx, accY + 4);
+    ctx.fillText("ELIM. x2 — les déplacements n'apportent pas d'écus", cx, accY + 4);
     accY += 14;
     const cbtChipW = 142, cbtChipH = 26;
     const cbtTotal = 2 * cbtChipW + 1 * 8;
@@ -1665,19 +1755,17 @@ function dessineMenu(ctx, state) {
     // auto-future-proof si Phase A.5 v3 ajoute une taille (l11, big...). Std = vert,
     // l15 = violet pour contraste visuel. Le silent fallback std pour modes hors
     // scope (PvAI / PvP en ligne standard-only) est appliqué côté commencerPartie.
-    ctx.fillStyle = V2.inkSoft; ctx.font = `10px ${F_V2}`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText('TAILLE DE PLATEAU — 8 × 8 (standard) ou 8 × 15', cx, accY + 4);
-    accY += 14;
     {
       const tailChipW = 142, tailChipH = 26;
       const tailArray = Object.values(TAILLES);
       const tailTotal = tailArray.length * tailChipW + (tailArray.length - 1) * 8;
-      const varTail = (state.menu && state.menu.taille) || 'std';
       // Header text dynamique derived from TAILLES (DRY — si Phase A.5 v3 ajoute
       // une taille, le label suit automatiquement).
       const sizesHeader = tailArray.map((t) => t.label).join(' ou ');
-      ctx.fillText(`TAILLE DE PLATEAU — ${sizesHeader}`.toUpperCase(), cx, accY - 10);
+      ctx.fillStyle = V2.inkSoft; ctx.font = `10px ${F_V2}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillText(`TAILLE DE PLATEAU — ${sizesHeader}`.toUpperCase(), cx, accY + 4);
+      accY += 14;
       for (let i = 0; i < tailArray.length; i++) {
         const t = tailArray[i];
         const txx = cx - tailTotal / 2 + i * (tailChipW + 8);
@@ -1715,7 +1803,7 @@ function dessineMenu(ctx, state) {
   // — LOCAL panel (panel-local bg) : 1J VS 2J field + status + Lancer CTA
   panelBg(P_X0, panelsY, PANEL_W, panelsH, V2.panelL);
   panelLabel(P_X0 + PANEL_PAD, panelsY + PANEL_PAD, IN_W, 'LOCAL');
-  field(P_X0 + PANEL_PAD, panelsY + PANEL_PAD + 42, IN_W, 50, '1J VS 2J',
+  field(P_X0 + PANEL_PAD, panelsY + PANEL_PAD + 42, IN_W, 50, 'J1 VS J2',
     { kind: 'pickMode', mode: 'pvp' },
     { sub: 'même écran, chacun son tour' });
   // Status display (read-only) : config de partie actuelle
@@ -1727,12 +1815,14 @@ function dessineMenu(ctx, state) {
   ctx.fillStyle = V2.fldInk; ctx.font = `bold 11px ${F_V2}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('CONFIGURATION PARTIE', P_X0 + PANEL_PAD + IN_W / 2, statusY + 18);
-  ctx.font = `13px ${F_V2}`;
-  ctx.fillText(`${ecoLabel} × ${cbtLabel}`, P_X0 + PANEL_PAD + IN_W / 2, statusY + 42);
+  ctx.font = `13px ${F_V2}`; ctx.fillStyle = V2.fldInk;
+  ctx.fillText(`${ecoLabel} × ${cbtLabel}`, P_X0 + PANEL_PAD + IN_W / 2, statusY + 38);
+  ctx.font = `11px ${F_V2}`; ctx.fillStyle = V2.inkSoft;
+  ctx.fillText(`${tailleLabel}`, P_X0 + PANEL_PAD + IN_W / 2, statusY + 56);
   // Primary CTA (PvP local)
   cta(P_X0 + PANEL_PAD, panelsY + panelsH - 60, IN_W, 52, 'Lancer une partie',
     { kind: 'pickMode', mode: 'pvp' }, V2.green,
-    { sub: 'PvP 1J VS 2J local' });
+    { sub: 'J1 VS J2' });
 
   // — EN LIGNE panel (panel-online bg) : status + 2 CTAs (recherche + ami)
   panelBg(P_X1, panelsY, PANEL_W, panelsH, V2.panelO);
@@ -1745,15 +1835,13 @@ function dessineMenu(ctx, state) {
   ctx.fillStyle = V2.fldInk; ctx.font = `bold 11px ${F_V2}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('CONFIGURATION PARTIE', P_X1 + PANEL_PAD + IN_W / 2, statusY2 + 18);
-  ctx.font = `13px ${F_V2}`;
-  ctx.fillText(`${ecoLabel} × ${cbtLabel}`, P_X1 + PANEL_PAD + IN_W / 2, statusY2 + 42);
-  // 2 CTAs en cta-row (verte + rose)
-  const ctaPriW = Math.round((IN_W - 10) * 0.62);
-  const ctaFriW = IN_W - 10 - ctaPriW;
-  cta(P_X1 + PANEL_PAD, panelsY + panelsH - 60, ctaPriW, 52,
-    'Lancer une recherche', { kind: 'startSearch' }, V2.green);
-  friendBtn(P_X1 + PANEL_PAD + ctaPriW + 10, panelsY + panelsH - 60, ctaFriW, 52,
-    'Jouer avec un ami', { kind: 'createPrivateMatch' });
+  ctx.font = `13px ${F_V2}`; ctx.fillStyle = V2.fldInk;
+  ctx.fillText(`${ecoLabel} × ${cbtLabel}`, P_X1 + PANEL_PAD + IN_W / 2, statusY2 + 38);
+  ctx.font = `11px ${F_V2}`; ctx.fillStyle = V2.inkSoft;
+  ctx.fillText(`${tailleLabel}`, P_X1 + PANEL_PAD + IN_W / 2, statusY2 + 56);
+  // CTA recherche publique (pleine largeur du panneau).
+  cta(P_X1 + PANEL_PAD, panelsY + panelsH - 60, IN_W, 52,
+    'Jouer en ligne', { kind: 'startSearch' }, V2.green);
 
   // — ORDINATEUR panel (panel-cpu bg) : MODE DE JEU + 3 difficulty chips + SPECTATEUR + CTA
   panelBg(P_X2, panelsY, PANEL_W, panelsH, V2.panelC);
@@ -1761,7 +1849,7 @@ function dessineMenu(ctx, state) {
   // MODE DE JEU : field déclenche `toggleVariant` (même état que la bar globale du haut).
   field(P_X2 + PANEL_PAD, panelsY + PANEL_PAD + 42, IN_W, 50, 'MODE DE JEU',
     { kind: 'toggleVariant' },
-    { sub: `${ecoLabel} × ${cbtLabel}` });
+    { sub: `${ecoLabel} * ${cbtLabel} * ${tailleLabel}` });
   const chipW = (IN_W - 14) / 3;
   const chipH = 38;
   const chipY = panelsY + PANEL_PAD + 102;  // shift +60 to make room for MODE DE JEU above
@@ -1792,19 +1880,26 @@ function dessineMenu(ctx, state) {
       sub: diffSelected ? "l'IA joue Joueur 2" : '↑ choisissez une difficulté' });
 
   // === Boutons DECKS + REPLAYS (recovery 29/07 [23:40]) ===
-  // Sous les 3 panels (LOCAL / EN LIGNE / ORDINATEUR). 2 boutons côte à côte centrés :
-  // largeur 240 + gap 20 = 500 px → startX = (1000-500)/2 = 250.
-  // Vertical : y = panelsY + panelsH + 24 (gap 24 sous les panels, lequel finit à
-  // VS ORDINATEUR bottom = panelsY + panelsH - 60 + 52 = panelsY + panelsH - 8).
-  // hit-test auto via bouton() → push state.ui.buttons (main.js hit-test).
+  // Sous les 3 panels (LOCAL / EN LIGNE / ORDINATEUR). 2 boutons côte à côte,
+  // même largeur que la barre TUTORIEL (CANVAS_W - 64). Chaque bouton = demi-largeur.
   const drY = panelsY + panelsH + 24;
-  const drW = 240, drGap = 20;
-  const drTotalW = drW * 2 + drGap;
-  const drX0 = (CANVAS_W - drTotalW) / 2;
-  bouton(state, ctx, drX0, drY, drW, 40, '🗂️  Decks',
-    { kind: 'ouvrirDecks' });
-  bouton(state, ctx, drX0 + drW + drGap, drY, drW, 40, '🎬  Replays',
-    { kind: 'ouvrirReplays' });
+  const drGap = 20, drH = 56;
+  const drW = (CANVAS_W - 64 - drGap) / 2; // 458 px (moitié de la largeur tuto)
+  const drX0 = 32; // aligné avec le bord gauche du tutoriel
+  function menuPanelBtn(x, y, w, h, iconLabel, sub, action) {
+    state.ui.buttons.push({ x, y, w, h, action, enabled: true });
+    ctx.fillStyle = V2.panelO;
+    roundRect(ctx, x, y, w, h, R_MD); ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = V2.border;
+    roundRect(ctx, x, y, w, h, R_MD); ctx.stroke();
+    ctx.fillStyle = V2.purpleD; ctx.font = `bold 18px ${F_V2}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(iconLabel, x + w / 2, y + 22);
+    ctx.font = `12px ${F_V2}`; ctx.fillStyle = V2.fldInk;
+    ctx.fillText(sub, x + w / 2, y + 42);
+  }
+  menuPanelBtn(drX0, drY, drW, drH, 'DECKS', 'éditer vos decks', { kind: 'ouvrirDecks' });
+  menuPanelBtn(drX0 + drW + drGap, drY, drW, drH, 'REPLAYS', 'revoir vos parties', { kind: 'ouvrirReplays' });
 
   // === Bandeau compte (top-right corner — peut overlap le tagline « Choisis
   //     ton mode », connu : suivre §8.1 follow-up UX) ===
@@ -2143,11 +2238,10 @@ function dessineReplays(ctx, state) {
 // SPEC vault [21:40-21:45] : TAB_W=50 / TAB_H=38 / 5 cases 282 px centré sur CANVAS_W=1000
 // (tabsX0 = (1000 - 5*50 - 4*8) / 2 = 359). gridY=295 (laisse 47 px pour les onglets + titre).
 // === Deck Editor UI — redesign PDF 0030.pdf (Phase 6, 2026-07-30) ===
-// Layout : 5 tabs centrés en haut, 3 lignes × 2 cards (P/T, C/F, Q/R); chaque
-// card = piece_box blanc à gauche (lettre pièce GROS, style marker via Archivo
-// Black) + 3 pills empilés D/A/S à droite, couleurs issues de COULEUR_CAT (DRY
-// avec le feu des game pieces). Contenu pill = UPGRADES[id].nom du slot du deck
-// actif en CAPS, ou "—" si slot vide.
+// Layout : 5 tabs centrés en haut, puis 3 lignes × 2 cards (P/T, C/F, Q/R).
+// Chaque card = piece_box blanc à gauche (lettre pièce GROS, style marker via
+// Archivo Black) + 3 pills empilés D/A/S à droite, couleurs issues de COULEUR_CAT.
+// Contenu pill = UPGRADES[id].nom du slot du deck actif en CAPS, ou "—" si vide.
 const DECK_TAB_W = 50;
 const DECK_TAB_H = 50;
 const DECK_TAB_GAP = 14;
@@ -2157,7 +2251,21 @@ const DECK_TABS_X0 = (CANVAS_W - DECK_TABS_TOTAL) / 2;            // 347 sur CAN
 const DECK_TABS_Y = 86;
 
 const DECK_CATS = ['D', 'A', 'S'];
-const DECK_ROWS = [['P', 'T'], ['C', 'F'], ['Q', 'R']];
+// IMPORTANT (fix 2026-07-30) : ces codes doivent matcher PIECE_TYPES de decks.js
+// (= 'P','N','B','R','Q','K'), sinon sanitizeDeck/setSlot ignore le slot mis à jour
+// (le bug original utilisait ['P','T'], ['C','F'], ['Q','R'] = codes français qui
+// ne matchaient pas le data model anglais). On garde l'affichage FR via DECK_LETTRE_FR.
+// Layout 3×2 (6 types) :
+//   Row 0 : Pion (P) + Tour (R)
+//   Row 1 : Cavalier (N) + Fou (B)
+//   Row 2 : Reine (Q) + Roi (K)
+const DECK_ROWS = [['P', 'R'], ['N', 'B'], ['Q', 'K']];
+// Affichage Français pour les piece_box du deck editor (cf. design log [12:30]
+// « P/T, C/F, Q/R »). Override de `LETTRE` (constants.js) qui mappe N → 'N' (Knight
+// en notation internationale) pour forcer 'C' (Cavalier en tradition échecs FR).
+const DECK_LETTRE_FR = { P: 'P', R: 'T', N: 'C', B: 'F', Q: 'D', K: 'R' };
+// Label canonique des catégories pour le titre du picker.
+const DECK_CAT_LABEL = { D: 'Déplacement', A: 'Actif', S: 'Stat' };
 const DECK_X_MARGIN = 60;
 const DECK_CARD_GAP_X = 20;
 const DECK_CARD_W = (CANVAS_W - 2 * DECK_X_MARGIN - DECK_CARD_GAP_X) / 2;
@@ -2174,10 +2282,25 @@ const DECK_RET_X = (CANVAS_W - DECK_RET_W) / 2;
 const DECK_RET_Y = 720;
 
 function dessineDecks(ctx, state) {
+  // Fond blanc derrière le deck editor (user request).
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
   const root = state.decksRoot || sanitizeRoot(loadDecks());
   state.decksRoot = root;
   const ids = Object.keys(root.decks);
   const activeDeck = root.decks[root.active];
+
+  // === Barre de gestion deck — y=86, MÊME ligne que les tabs ===
+  // User request 30/07 : minimalisme visuel — uniquement les 5 tabs (1-5) pour
+  // sélectionner / créer un deck. Pas de boutons latéraux : le renommage et la
+  // suppression des decks sont accessibles via long-press / clic-droit sur l'onglet
+  // (case 'renameDeck' / 'deleteDeck' toujours câblés dans actionBouton, juste plus
+  // exposés en CTA visible). Pas de bandeau nom du deck / compteur en dessous — les
+  // carrés 1-5 SUFFISENT comme signal (le nombre affiché DANS le carré actif est
+  // l'index 1-indexé du deck actif ; les autres chiffres sont les indexes des autres
+  // decks ou les slots vides à cliquer-pour-créer). Le nom seul reste consultable via
+  // l'info « active deck » exposée plus bas si besoin (placeholder pour extension).
 
   for (let i = 0; i < DECK_TAB_COUNT; i++) {
     const tabX = DECK_TABS_X0 + i * (DECK_TAB_W + DECK_TAB_GAP);
@@ -2187,10 +2310,10 @@ function dessineDecks(ctx, state) {
     roundRect(ctx, tabX, DECK_TABS_Y + 3, DECK_TAB_W, DECK_TAB_H, 9); ctx.fill();
     ctx.fillStyle = '#FFFFFF';
     roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 9); ctx.fill();
-    ctx.strokeStyle = isActive ? COULEUR_CAT.D : (hasDeck ? C_ENCRE : C_ENCRE_PALE);
+    ctx.strokeStyle = isActive ? DECK_ACCENT : (hasDeck ? C_ENCRE : C_ENCRE_PALE);
     ctx.lineWidth = isActive ? 3 : 2;
     roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 9); ctx.stroke();
-    ctx.fillStyle = isActive ? COULEUR_CAT.D : C_ENCRE;
+    ctx.fillStyle = isActive ? DECK_ACCENT : C_ENCRE;
     ctx.font = `24px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(i + 1), tabX + DECK_TAB_W / 2, DECK_TABS_Y + DECK_TAB_H / 2);
@@ -2211,16 +2334,42 @@ function dessineDecks(ctx, state) {
       const slots = (activeDeck && activeDeck.slots && activeDeck.slots[type]) || {};
 
       const pbX = cardX, pbY = cardY;
+      // Encadré style « cadre photo » : ombre plate décalée, fond blanc,
+      // bordure épaisse Encre + ligne intérieure pâle pour effet museum frame.
+      // Sépare visuellement chaque pièce des 3 pills adjacentes (D/A/S).
       ctx.fillStyle = ombreBouton('#FFFFFF');
-      roundRect(ctx, pbX, pbY + 3, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.fill();
+      roundRect(ctx, pbX, pbY + 4, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.fill();
       ctx.fillStyle = '#FFFFFF';
       roundRect(ctx, pbX, pbY, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.fill();
-      ctx.strokeStyle = C_ENCRE; ctx.lineWidth = 2;
+      // Bordure extérieure épaisse (2.5 px) — silhouette de l'encadré.
+      ctx.strokeStyle = C_ENCRE; ctx.lineWidth = 2.5;
       roundRect(ctx, pbX, pbY, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.stroke();
-      ctx.fillStyle = C_ENCRE;
-      ctx.font = `${DECK_LETTER_SIZE}px ${F_DISPLAY}`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(type, pbX + DECK_PIECE_BOX_W / 2, pbY + DECK_CARD_H / 2 + 3);
+      // Bordure intérieur pâle (1.5 px, inset 5 px) — finesse du cadre.
+      // Alpha bumpée de C_CARTE_BORD (0.10) à 0.30 pour rester visible à taille
+      // normale tout en gardant le côté « finesse » du cadre intérieur.
+      ctx.strokeStyle = 'rgba(26,20,15,0.30)'; ctx.lineWidth = 1.5;
+      roundRect(ctx, pbX + 5, pbY + 5,
+        DECK_PIECE_BOX_W - 10, DECK_CARD_H - 10, 7); ctx.stroke();
+      // Sprite de la pièce (camp 0 = bleu) centré dans le piece_box. Fallback lettre
+      // FR si le sprite n'est pas encore chargé (canplay race 1re frame). Le deck est
+      // neutre — on montre toujours la version bleue peu importe le camp actif.
+      // Sprite shrinké à 72 px sur card 100 → 14 px de respiration totale (5 inset + 9 marge)
+      // pour respirer face à l'encadré épais.
+      const pieceImg = spritePret(0, type);
+      const pieceCx = pbX + DECK_PIECE_BOX_W / 2;
+      const pieceCy = pbY + DECK_CARD_H / 2;
+      const targetH = DECK_CARD_H - 28; // 72 px sur card 100, marge intérieure 14 px
+      if (pieceImg) {
+        const ratio = pieceImg.naturalWidth / pieceImg.naturalHeight;
+        const w = targetH * ratio;
+        ctx.drawImage(pieceImg, pieceCx - w / 2, pieceCy - targetH / 2, w, targetH);
+      } else {
+        // Fallback lettre FR si sprite pas encore chargé (canplay race 1re frame).
+        ctx.fillStyle = C_ENCRE;
+        ctx.font = `${DECK_LETTER_SIZE}px ${F_DISPLAY}`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(DECK_LETTRE_FR[type] || type, pieceCx, pieceCy + 1);
+      }
 
       const pillX = cardX + DECK_PIECE_BOX_W + DECK_PIECE_INNER_GAP;
       const pillTopPad = (DECK_CARD_H -
@@ -2272,9 +2421,9 @@ function dessineDeckPicker(ctx, state) {
   // incomplet entre frames) — on wrappe chaque lookup avec un fallback chain.
   // Le pattern defense-in-depth protege contre ANY collision future avec un
   // mode degrade silencieux (jamais de throw) au lieu d'un crash picker.
-  const typeStr   = (LETTRE && LETTRE[type]) || type || '?';
-  const typeNom   = ((typeof nomType === 'function' ? nomType(type) : null) || typeStr).toUpperCase();
-  const catLabel  = (DECK_CAT_LABEL && DECK_CAT_LABEL[cat]) || cat || '—';
+  const typeStr   = LETTRE[type] || type || '?';
+  const typeNom   = (typeof nomType === 'function' ? nomType(type) : typeStr).toUpperCase();
+  const catLabel  = DECK_CAT_LABEL[cat] || cat || '—';
   ctx.fillText(`${typeStr} — ${typeNom} · ${catLabel.toUpperCase()}`,
     CANVAS_W / 2, 80);
   ctx.fillStyle = C_CARTE; ctx.font = `12px ${F_TEXTE}`;
@@ -2399,18 +2548,31 @@ export function render(ctx, state, now) {
   ctx.font = `14px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   const prefixe = state.mode === 'spectator' ? 'IA ' : '';
-  const banniere = state.phase === 'ruee-target'
-    ? 'Ruée : choisissez une cible'
-    : (state.phase === 'rayon-target' ? 'Rayon sacré : choisissez une cible'
-      : (state.phase === 'decret-target' ? 'Décret : choisissez un allié adjacent'
-        : (state.phase === 'promotion' ? 'Promotion : choisissez une pièce'
-          : (state.mode === 'tutorial' ? 'TUTORIEL'
-            : (state.phase === 'gameover' ? 'Partie terminée'
-              : ((state.ai && state.ai.thinking) ? 'L\'IA RÉFLÉCHIT…'
-                : (state.mode === 'pvw' && state.pvw
-                  ? (state.turn === state.pvw.side ? 'À toi de jouer'
-                    : `Au tour de ${state.pvw.oppPseudo || 'l\'adversaire'}`)
-                  : `Au tour de ${prefixe}${NOM_JOUEUR[state.turn]}`)))))));
+  let banniere;
+  switch (state.phase) {
+    case 'ruee-target': banniere = 'Ruée : choisissez une cible'; break;
+    case 'rayon-target': banniere = 'Rayon sacré : choisissez une cible'; break;
+    case 'decret-target': banniere = 'Décret : choisissez un allié adjacent'; break;
+    case 'cavalerie-target': banniere = 'Cavalerie : choisissez un ennemi à repousser'; break;
+    case 'cavalerie-push': banniere = 'Cavalerie : choisissez la destination'; break;
+    case 'echange-target': banniere = 'Échange : choisissez un pion allié'; break;
+    case 'promotion': banniere = 'Promotion : choisissez une pièce'; break;
+    default: {
+      if (state.mode === 'tutorial') {
+        banniere = 'TUTORIEL';
+      } else if (state.phase === 'gameover') {
+        banniere = 'Partie terminée';
+      } else if (state.ai && state.ai.thinking) {
+        banniere = "L'IA RÉFLÉCHIT…";
+      } else if (state.mode === 'pvw' && state.pvw) {
+        banniere = state.turn === state.pvw.side
+          ? 'À toi de jouer'
+          : `Au tour de ${state.pvw.oppPseudo || "l'adversaire"}`;
+      } else {
+        banniere = `Au tour de ${prefixe}${NOM_JOUEUR[state.turn]}`;
+      }
+    }
+  }
   ctx.fillText(banniere.toUpperCase(), OX + 32, chY);
 
   // PvP en ligne : bannière de désync (hash discordant, §3.4) — détection W2, annulation W3.

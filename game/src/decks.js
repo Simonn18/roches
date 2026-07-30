@@ -23,7 +23,8 @@
 
 const STORAGE_KEY = 'roychec_decks_v1';
 // v3.3 r12 (13/07 demandeur) : barre horizontale 1..5 -> cap dur a 5.
-const DECK_LIMIT = 5;                        // cap dur UI (= nb d'onglets visibles)
+// v3.3 r12 (13/07 demandeur) : barre horizontale 1..5 -> cap dur a 5.
+export const DECK_LIMIT = 5;                // cap dur UI (= nb d'onglets visibles)
 const PIECE_TYPES = ['P', 'N', 'B', 'R', 'Q', 'K'];
 // Schéma de migration cumulatif : on bumpe `_schemaVersion` à chaque migration one-shot.
 // Les migrations CUMULATIVES idempotentes (Sacrifice↔Décret inversions cat, Bouclier↔Vétéran
@@ -130,7 +131,7 @@ export function sanitizeDeck(deck) {
 // Assainit un decksRoot complet. Garantit qu'il existe au moins un deck 'default'.
 // Si l'id actif n'existe plus (deck supprimé), bascule sur 'default'.
 export function sanitizeRoot(root) {
-  const decks = {};
+  let decks = {};
   if (root && root.decks && typeof root.decks === 'object') {
     for (const [id, deck] of Object.entries(root.decks)) {
       if (!/^d_[a-z0-9]{4,12}$/.test(id) && id !== 'default') continue; // ids légitimes uniquement
@@ -142,14 +143,14 @@ export function sanitizeRoot(root) {
   }
   // v3.3 r12 : cap dur a 5 decks (UI tab bar). On tronque silencieusement les
   // excedents d'un vieux localStorage (r10/r11 acceptait jusqu'a 8). Si
-  // l""actif" est dans la liste tombee, on bascule sur le 1er restant.
+  // l'actif est dans la liste tombée, on bascule sur le 1er restant.
   if (Object.keys(decks).length > DECK_LIMIT) {
     const keeps = Object.keys(decks).slice(0, DECK_LIMIT);
     const dropped = Object.keys(decks).filter((k) => !keeps.includes(k));
     const out = {};
     for (const k of keeps) out[k] = decks[k];
     decks = out;
-    console.warn("[decks] troncature r12: " + dropped.length + " deck(s) abandonne(s) (cap 5). Recliquer sur les onglets concernes.");
+    console.warn("[decks] troncature r12: " + dropped.length + " deck(s) abandonné(s) (cap 5). Recliquer sur les onglets concernés.");
   }
   let active = typeof root?.active === 'string' ? root.active : 'default';
   if (!decks[active]) active = Object.keys(decks)[0];
@@ -173,23 +174,23 @@ export function sanitizeRoot(root) {
         fou.A = 'hypnose';
       }
     }
+    // v4.5 — Cavalerie (N cat A) / Echange (R cat A) / SHT (Q cat A) remplacent leurs
+    // defaults pré-catalogue-étendu (`ruee` / `rempart` / `double-coup`). Cumulatif
+    // sur le bloc v4.4 Hypnose : si `schemaVersion < 5`, les 2 blocs s'exécutent en
+    // séquence (legacy decks `_schemaVersion = 0` → 5 directement). Idempotence :
+    // exact-match only — un user qui a customisé N.A avec un autre id ou `null`
+    // n'est PAS écrasé (le swap ne déclenche que sur la valeur par défaut historique).
+    // Même contrat que v4.4 : après bump à 5, NE SE RÉ-EXÉCUTE JAMAIS — l'utilisateur
+    // peut remettre 'ruee' via le deck editor sans risquer un overwrite silencieux
+    // au rechargement (cf. leçon §8.1 idempotence hole CA-2026-07-15-24:35).
+    for (const id of Object.keys(decks)) {
+      const slots = decks[id] && decks[id].slots;
+      if (!slots) continue;
+      if (slots.N && slots.N.A === 'ruee') slots.N.A = 'cavalerie';
+      if (slots.R && slots.R.A === 'rempart') slots.R.A = 'echange';
+      if (slots.Q && slots.Q.A === 'double-coup') slots.Q.A = 'sht';
+    }
     schemaVersion = SCHEMA_VERSION;
-  }
-  // v4.5 — Cavalerie (N cat A) / Echange (R cat A) / SHT (Q cat A) remplacent leurs
-  // defaults pré-catalogue-étendu (`ruee` / `rempart` / `double-coup`). Cumulatif
-  // sur le bloc v4.4 Hypnose : si `schemaVersion < 5`, les 2 blocs s'exécutent en
-  // séquence (legacy decks `_schemaVersion = 0` → 5 directement). Idempotence :
-  // exact-match only — un user qui a customisé N.A avec un autre id ou `null`
-  // n'est PAS écrasé (le swap ne déclenche que sur la valeur par défaut historique).
-  // Même contrat que v4.4 : après bump à 5, NE SE RÉ-EXÉCUTE JAMAIS — l'utilisateur
-  // peut remettre 'ruee' via le deck editor sans risquer un overwrite silencieux
-  // au rechargement (cf. leçon §8.1 idempotence hole CA-2026-07-15-24:35).
-  for (const id of Object.keys(decks)) {
-    const slots = decks[id] && decks[id].slots;
-    if (!slots) continue;
-    if (slots.N && slots.N.A === 'ruee') slots.N.A = 'cavalerie';
-    if (slots.R && slots.R.A === 'rempart') slots.R.A = 'echange';
-    if (slots.Q && slots.Q.A === 'double-coup') slots.Q.A = 'sht';
   }
   // Note : on garde le préfixe `_schemaVersion` (pas `schemaVersion`) sur l'objet serialized
   // pour signaler aux lecteurs d'API que ce champ est MÉTADONNÉE (pas un slot utilisateur).
@@ -267,16 +268,24 @@ export function getActiveDeck(root) {
 // déjà-équipés et la limite MAX_UPGRADES_PAR_PIECE côté gameplay.
 // `allForType` = liste brute fournie par le caller (UPGRADES_PAR_TYPE[type]).
 export function upgradesForPiece(deck, type, allForType) {
-  if (!deck || !allForType) return [];
+  if (!allForType) return [];
+  if (!deck || !deck.slots || !deck.slots[type]) {
+    // Fallback sur le catalogue complet si aucun deck actif ou slot non configuré.
+    // Cela garantit que le jeu reste jouable même si le deck est vide/corrompu,
+    // et que le rendu et la logique d'achat restent cohérents.
+    return allForType.slice();
+  }
   const slot = deck.slots[type];
-  if (!slot) return [];
   const ids = [];
   for (const v of Object.values(slot)) {
     if (typeof v === 'string') ids.push(v);
   }
   // Filtre par appartenance au catalogue (un slot pourri ne fait pas planter).
   const allowed = new Set(allForType);
-  return ids.filter((id) => allowed.has(id));
+  const result = ids.filter((id) => allowed.has(id));
+  // Si le deck n'a aucune upgrade valide pour ce type, on fallback sur le
+  // catalogue complet pour éviter un shop vide/non-jouable.
+  return result.length ? result : allForType.slice();
 }
 
 // Vrai si l'upgrade est dans le deck actif (= sera visible dans le shop).

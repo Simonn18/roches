@@ -3,6 +3,9 @@
 // Sortie : markdown téléchargeable + localStorage (max 20 parties).
 import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP } from './constants.js';
 import { VARIANT_PRESETS, ECONOMIES, COMBATS, DEFAULT_VARIANT } from './variants.js';
+// Phase A.5 v2 : toAlgebraic doit connaître la hauteur du plateau pour encoder
+// correctement les rangées sous forme algébrique (8 - r sur plateau 8×N).
+import { DEFAULT_TAILLE, getBoardH } from './tailles.js';
 
 // ---------------------------------------------------------------------------
 // Helpers d'affichage
@@ -11,7 +14,13 @@ import { VARIANT_PRESETS, ECONOMIES, COMBATS, DEFAULT_VARIANT } from './variants
 const PIECE_EMOJI = { P: '♟', N: '♞', B: '♝', R: '♜', Q: '♛', K: '♚' };
 const PIECE_NOM = { P: 'Pion', N: 'Cavalier', B: 'Fou', R: 'Tour', Q: 'Dame', K: 'Roi' };
 
-function toAlgebraic(r, c) { return 'abcdefgh'[c] + (8 - r); }
+// Encode une case (r, c) en notation algébrique. Supporte jusqu'à 15 colonnes
+// (a-o) et toute hauteur de plateau via boardOrRows (board avec .rows ou nombre).
+function toAlgebraic(r, c, boardOrRows) {
+  const rows = (boardOrRows && boardOrRows.rows) || boardOrRows || 8;
+  const file = String.fromCharCode(97 + c);
+  return file + (rows - r);
+}
 
 function formatTime(ts) {
   const d = new Date(ts);
@@ -40,6 +49,9 @@ export function initReplay(state) {
     // la variante standard (DEFAULT_VARIANT) — la snapshot ne capture rien d'autre.
     variant: (state && state.variant && state.variant.id) || DEFAULT_VARIANT,
     startTime: Date.now(),
+    // Phase A.5 v2 : la taille du plateau est nécessaire pour recréer un board
+    // fidèle dans l'opening book (hash dynamique) et pour décoder les replays.
+    taille: state.taille || DEFAULT_TAILLE,
     events: [],
     stats: {
       purchases: { 0: [], 1: [] },
@@ -70,8 +82,8 @@ export function recordMove(state, piece, from, to, capturedType, bonus, mv, gain
     type: 'move',
     owner: piece.owner,
     piece: piece.type,
-    from: toAlgebraic(from.r, from.c),
-    to: toAlgebraic(to.r, to.c),
+    from: toAlgebraic(from.r, from.c, state.board),
+    to: toAlgebraic(to.r, to.c, state.board),
     captured: capturedType || null,
     bonus: bonus || 0,
     // gain effectif (fidéle à la variante utilisée). Null = replay pré-v3.
@@ -79,8 +91,8 @@ export function recordMove(state, piece, from, to, capturedType, bonus, mv, gain
     chain: !!state.chain,
     promo: mv && mv.promotion ? piece.type : null,
     castle: mv && mv.castle
-      ? { rookFrom: toAlgebraic(mv.castle.rookFrom.r, mv.castle.rookFrom.c),
-          rookTo: toAlgebraic(mv.castle.rookTo.r, mv.castle.rookTo.c) }
+      ? { rookFrom: toAlgebraic(mv.castle.rookFrom.r, mv.castle.rookFrom.c, state.board),
+          rookTo: toAlgebraic(mv.castle.rookTo.r, mv.castle.rookTo.c, state.board) }
       : null,
   });
 }
@@ -96,7 +108,7 @@ export function recordPurchase(state, piece, upgradeId, cost) {
     type: 'purchase',
     owner: piece.owner,
     piece: piece.type,
-    pos: toAlgebraic(piece.r, piece.c),
+    pos: toAlgebraic(piece.r, piece.c, state.board),
     upgrade: upgradeId,
     cost,
   });
@@ -139,6 +151,7 @@ export function finalizeReplay(state) {
 // ---------------------------------------------------------------------------
 
 export function toMarkdown(state) {
+  const boardRows = getBoardH(state.taille || DEFAULT_TAILLE);
   const r = state.replay;
   if (!r || !r.result) return '';
   const win = r.result.winner;
@@ -179,7 +192,7 @@ export function toMarkdown(state) {
     } else if (e.type === 'purchase') {
       md += `| ${e.idx + 1} | ${joueur} | 🛒 Achat | ${PIECE_NOM[e.piece]} en ${e.pos} : ${e.upgrade} (−${e.cost} écus) |\n`;
     } else if (e.type === 'power') {
-      const target = e.target ? ` → ${toAlgebraic(e.target.r, e.target.c)}` : '';
+      const target = e.target ? ` → ${toAlgebraic(e.target.r, e.target.c, boardRows)}` : '';
       md += `| ${e.idx + 1} | ${joueur} | ⚡ ${e.power} | ${PIECE_NOM[e.piece]}${target} (consomme le tour) |\n`;
     }
   }

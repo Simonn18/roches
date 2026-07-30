@@ -16,9 +16,9 @@ import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, leave as 
   sendRematch, rematch as onlineRematch, inboxHasGap } from './online.js';
 // Deck editor (recovery 29/07 [23:30]) : API complète de decks.js (couche DONNÉES).
 // loadDecks/saveDecks étaient déjà importés ; on ajoute les helpers d'id/active/clone.
-import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot } from './decks.js';
+import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js';
 import {
-  UPGRADES, VALEUR_PIECE, REVENU_PAR_COUP,
+  UPGRADES, UPGRADES_PAR_TYPE, VALEUR_PIECE, REVENU_PAR_COUP,
   MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT,
 } from './constants.js';
 import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js';
@@ -81,6 +81,7 @@ function menuState() {
     anim: null,
     popups: [],
     flashes: [],
+    _cavEnemyCell: null,
     buzz: 0,
     ecus: [0, 0],
     replay: null,
@@ -119,6 +120,7 @@ function commencerPartie(mode, difficultyOrOptions) {
     // passe opts.taille si fourni (privé), sinon std (public).
     const tailleOnline = opts.taille || DEFAULT_TAILLE;
     state = creerEtat({ mode: 'pvw', difficulty: 1, variantId: opts.variant || DEFAULT_VARIANT, taille: tailleOnline });
+    state.activeDeck = getActiveDeck(loadDecks());
     state.pvw = {
       side: opts.side != null ? opts.side : 0,   // 0 = Bleu = trait, 1 = Corail
       matchId: opts.matchId || null,
@@ -167,11 +169,13 @@ function commencerPartie(mode, difficultyOrOptions) {
     ? (tailleInput || DEFAULT_TAILLE)
     : DEFAULT_TAILLE;
   state = creerEtat({ mode, difficulty: (difficultyOrOptions && difficultyOrOptions.difficulty) || 1, variantId, taille: tailleEffective });
+  state.activeDeck = getActiveDeck(loadDecks());
   initReplay(state);
   if (mode === 'spectator') planifierCoupIA();
 }
 
 function retourMenu() {
+  state._cavEnemyCell = null;
   // Nettoie le timer replay si on quitte pendant une lecture.
   if (state._replayTimer) { clearTimeout(state._replayTimer); state._replayTimer = null; }
   // Nettoie le matchmaking en cours (canal Realtime, timers, Presence).
@@ -183,15 +187,21 @@ function retourMenu() {
 
 const REPLAY_SPEEDS = [0, 1200, 600, 200]; // index 0 inutilisé, 1=lent, 2=normal, 3=rapide
 
-function fromAlgebraic(s) {
-  return { r: 8 - parseInt(s[1]), c: s.charCodeAt(0) - 97 };
+// Décode une notation algébrique (ex. 'a1', 'o8', 'a10') en indices board.
+// boardOrRows permet d'adapter la rangée à la hauteur réelle du plateau.
+function fromAlgebraic(s, boardOrRows) {
+  if (typeof s !== 'string' || !s.length) return null;
+  const rows = (boardOrRows && boardOrRows.rows) || boardOrRows || 8;
+  return { r: rows - parseInt(s.slice(1)), c: s.charCodeAt(0) - 97 };
 }
 
 function commencerReplay(replayData) {
+  const taille = replayData.taille || DEFAULT_TAILLE;
   state = {
     phase: 'replay',
     mode: 'replay',
-    board: creerPlateau(), // standard initial position
+    board: creerPlateau(taille),
+    taille,
     turn: 0,
     ecus: [0, 0],
     winner: null,
@@ -236,8 +246,9 @@ function avancerReplay() {
 
 function executerEvenementReplay(e) {
   if (e.type === 'move') {
-    const from = fromAlgebraic(e.from);
-    const to = fromAlgebraic(e.to);
+    const from = fromAlgebraic(e.from, state.board);
+    const to = fromAlgebraic(e.to, state.board);
+    if (!from || !to) return;
     const piece = state.board[from.r][from.c];
     if (!piece) return;
     // Capture
@@ -251,7 +262,8 @@ function executerEvenementReplay(e) {
     state.board[to.r][to.c] = piece;
     // Roque (GDD §5.1.b) : rejoue aussi le déplacement de la tour.
     if (e.castle) {
-      const rf = fromAlgebraic(e.castle.rookFrom), rt = fromAlgebraic(e.castle.rookTo);
+      const rf = fromAlgebraic(e.castle.rookFrom, state.board), rt = fromAlgebraic(e.castle.rookTo, state.board);
+      if (!rf || !rt) return;
       const rook = state.board[rf.r][rf.c];
       if (rook) {
         state.board[rf.r][rf.c] = null;
@@ -273,17 +285,19 @@ function executerEvenementReplay(e) {
     const { x, y } = centreVue(to.r, to.c);
     state.popups.push({ text: `+${credite}`, x, y: y - 20, t0: performance.now(), color: '#f6cc54' });
   } else if (e.type === 'purchase') {
-    const pos = fromAlgebraic(e.pos);
+    const pos = fromAlgebraic(e.pos, state.board);
+    if (!pos) return;
     const piece = state.board[pos.r][pos.c];
     if (!piece) return;
     piece.upgrades.push(e.upgrade);
-    if (['forteresse', 'bouclier', 'monture', 'couronne'].includes(e.upgrade)) piece.shield = true;
+    if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(e.upgrade)) piece.shield = true;
     piece._goldT = performance.now();
     state.ecus[e.owner] -= e.cost;
   } else if (e.type === 'power') {
     // Feedback visuel uniquement (flash cyan sur la pièce si trouvable).
-    for (let r = 0; r < 8; r++) {
-      for (let c = 0; c < 8; c++) {
+    const mr = state.board.length, mc = state.board[0].length;
+    for (let r = 0; r < mr; r++) {
+      for (let c = 0; c < mc; c++) {
         const p = state.board[r][c];
         if (p && p.type === e.piece && p.owner === e.owner) {
           state.flashes.push({ r, c, t0: performance.now(), color: 'cyan' });
@@ -312,7 +326,7 @@ function finPartie(winner) {
     finalizeReplay(state);
     // updateBook n'a de sens qu'avec un vainqueur (une nulle pvw passe winner=null).
     if (state.replay && state.replay.events && winner != null) {
-      updateBook(state.replay.events, winner);
+      updateBook(state.replay.events, winner, state.replay.taille);
     }
     // PvP en ligne (CYCLE W3, spec §3.5/§8) : SEULE source de trophées du jeu. Chaque
     // client rapporte son résultat ; l'Elo K=32 n'est écrit côté serveur que si les deux
@@ -359,7 +373,12 @@ function reporterResultatPvP() {
 // Directions orthogonales (pour Rempart : blindage des alliés adjacents).
 const ORTHO = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 // Phases de ciblage d'un pouvoir actif (clic = choix d'une cible).
-const PHASES_CIBLAGE = ['ruee-target', 'rayon-target', 'decret-target'];
+const PHASES_CIBLAGE = ['ruee-target', 'rayon-target', 'decret-target', 'cavalerie-target', 'cavalerie-push', 'echange-target'];
+
+// Vrai si la pièce est sous S.H.T. et ne peut utiliser aucune amélioration.
+function ameliorationsBloquees(p) {
+  return !!(p.debuffs && p.debuffs.sht > 0);
+}
 
 // ---------- Sélection ----------
 // Coups légaux d'une pièce, filtrés par l'étape du tutoriel : les coups
@@ -445,6 +464,7 @@ function finDeTour() {
   state.legalMoves = [];
   state.panelPiece = null;
   state.ruTargets = [];
+  state._cavEnemyCell = null;
   state.phase = 'play';
   // Début du tour du nouveau joueur actif (GDD §5.4).
   for (const row of state.board) {
@@ -455,6 +475,11 @@ function finDeTour() {
         // Décrément des cooldowns.
         for (const k of Object.keys(p.cooldowns)) {
           if (p.cooldowns[k] > 0) p.cooldowns[k]--;
+        }
+        // Décrément des debuffs.
+        for (const k of Object.keys(p.debuffs)) {
+          if (p.debuffs[k] > 0) p.debuffs[k]--;
+          if (p.debuffs[k] <= 0) delete p.debuffs[k];
         }
       }
     }
@@ -556,8 +581,7 @@ function estTourIA() {
 // estTourIA() couvre à la fois le PvAI (tour du bot) et le mode spectateur.
 function resoudreApresCoup(piece, canChain, wasCapture) {
   // Double coup (dame) : usage unique, rejoue immédiatement, ne consomme pas le tour (GDD §6).
-  // Accepte l'ID alternatif 'sht' (cat A, once=true, même comportement) introduit [20:00].
-  if (piece.type === 'Q' && (piece.upgrades.includes('double-coup') || piece.upgrades.includes('sht')) && !piece.doubleCoupUsed) {
+  if (piece.type === 'Q' && piece.upgrades.includes('double-coup') && !piece.doubleCoupUsed) {
     if (state.chain && state.chain.piece === piece && state.chain.type === 'double-coup') {
       // C'était le 2e coup : Double coup consommé.
       piece.doubleCoupUsed = true;
@@ -666,6 +690,11 @@ function jouerCoup(piece, mv) {
   // l'écart de state.ecus (revenu + bonus + éventuel filet), ce que recordMove()
   // stocke pour la fidélité du replay sous variantes élim.×2.
   const wasCapture = bonus > 0;
+  // Consommation des améliorations d'attaque unique (Folie / Feinte) lors d'une capture.
+  if (wasCapture) {
+    if (piece.type === 'B' && piece.upgrades.includes('reprise')) piece.folieUsed = true;
+    if (piece.type === 'Q' && piece.upgrades.includes('feinte')) piece.feinteUsed = true;
+  }
   const credite = crediterCoup(state.turn, REVENU_PAR_COUP,
     bonus, { r: mv.r, c: mv.c }, wasCapture);
   // Enregistrement replay : après crédit des écus et stagnation_tick (état à jour).
@@ -698,8 +727,7 @@ function demarrerAnim(piece, from, to, onDone) {
 // ---------- Pouvoirs actifs ----------
 function activerRuee() {
   const kn = state.selected;
-  // Accepte l'ID alternatif 'cavalerie' (cat A, cd 4) introduit [20:00] — même mécanique.
-  if (!kn || kn.type !== 'N' || !(kn.upgrades.includes('ruee') || kn.upgrades.includes('cavalerie'))) return;
+  if (!kn || kn.type !== 'N' || !kn.upgrades.includes('ruee')) return;
   if ((kn.cooldowns.ruee || 0) > 0) return;
   const cibles = ciblesRuee(state.board, kn);
   if (!cibles.length) return; // rien à charger
@@ -750,8 +778,7 @@ function executerRuee(cell) {
 // sans bouger. Même modèle que la Ruée du cavalier (GDD §6).
 function activerRayon() {
   const fou = state.selected;
-  // Accepte l'ID alternatif 'hypnose' (cat A, cd 4) introduit [20:00] — même mécanique.
-  if (!fou || fou.type !== 'B' || !(fou.upgrades.includes('Rayon') || fou.upgrades.includes('hypnose'))) return;
+  if (!fou || fou.type !== 'B' || !fou.upgrades.includes('Rayon')) return;
   if ((fou.cooldowns.Rayon || 0) > 0) return;
   const cibles = ciblesRayon(state.board, fou);
   if (!cibles.length) return; // rien à viser
@@ -802,8 +829,7 @@ function executerRayon(cell) {
 // jusqu'au prochain tour du joueur (GDD §6). Actif, cooldown 5, consomme le tour.
 function activerRempart() {
   const tour = state.selected;
-  // Accepte l'ID alternatif 'echange' (cat A, cd 5) introduit [20:00] — même mécanique.
-  if (!tour || tour.type !== 'R' || !(tour.upgrades.includes('rempart') || tour.upgrades.includes('echange'))) return;
+  if (!tour || tour.type !== 'R' || !tour.upgrades.includes('rempart')) return;
   if ((tour.cooldowns.rempart || 0) > 0) return;
   tour.cooldowns.rempart = UPGRADES['rempart'].cooldown;
   const proteges = [tour];
@@ -823,18 +849,65 @@ function activerRempart() {
   finDeTour(); // Rempart consomme le tour
 }
 
-// Sacrifice (roi) : arme le roi. À la prochaine capture, une pièce meurt à sa place et le
-// roi s'évade (GDD §6). Actif, cooldown 6, l'armement consomme le tour.
+// Sacrifice (roi) : si la reine adverse est à 2 cases ou moins, elle ne peut plus bouger
+// pendant les 2 prochains tours (GDD §6). Actif, cooldown 6, consomme le tour.
 function activerSacrifice() {
   const roi = state.selected;
   if (!roi || roi.type !== 'K' || !roi.upgrades.includes('sacrifice')) return;
-  if ((roi.cooldowns.sacrifice || 0) > 0 || roi.sacrificeArmed) return;
-  roi.sacrificeArmed = true;
+  if ((roi.cooldowns.sacrifice || 0) > 0) return;
+  // Cherche la reine adverse la plus proche.
+  let cible = null;
+  for (const row of state.board) {
+    for (const q of row) {
+      if (q && q.type === 'Q' && q.owner !== roi.owner) {
+        const d = Math.max(Math.abs(q.r - roi.r), Math.abs(q.c - roi.c));
+        if (d <= 2 && (!cible || d < cible.d)) cible = { q, d };
+      }
+    }
+  }
+  if (!cible) return; // aucune reine adverse dans le rayon
   roi.cooldowns.sacrifice = UPGRADES['sacrifice'].cooldown;
+  cible.q.debuffs.root = 3; // 2 tours complets de gel (+1 car finDeTour décrémente immédiatement)
   roi._goldT = performance.now();
-  recordPower(state, roi, 'Sacrifice');
-  pvwEmitPower(roi, 'Sacrifice', null);
-  finDeTour(); // l'armement consomme le tour
+  recordPower(state, roi, 'Mariage stratégique', { r: cible.q.r, c: cible.q.c });
+  pvwEmitPower(roi, 'Mariage stratégique', { r: cible.q.r, c: cible.q.c });
+  finDeTour(); // consomme le tour
+}
+
+// S.H.T. (dame) : le roi adverse ne peut utiliser aucune amélioration pendant 2 tours.
+function activerSHT() {
+  const dame = state.selected;
+  if (!dame || dame.type !== 'Q' || !dame.upgrades.includes('sht')) return;
+  if (dame.shtUsed) return;
+  // Trouve le roi adverse.
+  let roi = null;
+  for (const row of state.board) {
+    for (const q of row) {
+      if (q && q.type === 'K' && q.owner !== dame.owner) { roi = q; break; }
+    }
+    if (roi) break;
+  }
+  if (!roi) return;
+  roi.debuffs.sht = 3; // 2 tours complets sans améliorations (+1 car finDeTour décrémente immédiatement)
+  dame.shtUsed = true; // usage unique
+  dame._goldT = performance.now();
+  recordPower(state, dame, 'S.H.T.');
+  pvwEmitPower(dame, 'S.H.T.', null);
+  finDeTour(); // consomme le tour
+}
+
+// Hypnose (fou) : les pièces ennemies (hors roi/reine) ne peuvent se déplacer dans un
+// rayon de 3 cases autour du fou pendant 2 tours.
+function activerHypnose() {
+  const fou = state.selected;
+  if (!fou || fou.type !== 'B' || !fou.upgrades.includes('hypnose')) return;
+  if ((fou.cooldowns.hypnose || 0) > 0) return;
+  fou.cooldowns.hypnose = UPGRADES['hypnose'].cooldown;
+  fou.debuffs.hypnoseAura = 2; // 2 tours complets d'aura autour du fou (sur le lanceur, pas décrémenté au premier finDeTour)
+  fou._goldT = performance.now();
+  recordPower(state, fou, 'Hypnose');
+  pvwEmitPower(fou, 'Hypnose', null);
+  finDeTour(); // consomme le tour
 }
 
 function dist(a, b) { return Math.max(Math.abs(a.r - b.r), Math.abs(a.c - b.c)); }
@@ -923,6 +996,138 @@ function executerDecret(cell) {
   finDeTour(); // Décret consomme le tour
 }
 
+// Cavalerie (cavalier) : le cavalier choisit un ennemi adjacent (orthogonal ou diagonal)
+// et le repousse sur l'une des 2 cases à distance de cavalier situées derrière lui.
+// Phase 1 : choix de l'ennemi → Phase 2 : choix de la destination. Consomme le tour.
+function ciblesCavalerie(board, p) {
+  const t = [];
+  for (const [dr, dc] of [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]) {
+    const r = p.r + dr, c = p.c + dc;
+    const q = caseAt(board, r, c);
+    if (!q || q.owner === p.owner) continue;
+    // Vérifie qu'au moins une destination (distance cavalier) est libre
+    const dests = ciblesPousseeCavalerie(board, p, { r, c });
+    if (!dests.length) continue;
+    t.push({ r, c });
+  }
+  return t;
+}
+
+// Calcule les 2 cases à distance de cavalier derrière un ennemi adjacent.
+// Renvoie uniquement les cases dans le plateau et libres.
+function ciblesPousseeCavalerie(board, p, enemyCell) {
+  const dr = enemyCell.r - p.r, dc = enemyCell.c - p.c;
+  const candidates = [];
+  if (dr === 0) {
+    // Ennemi à gauche/droite → les 2 cases derrière sont (p.r±1, p.c+dc*2)
+    candidates.push({ r: p.r + 1, c: p.c + dc * 2 });
+    candidates.push({ r: p.r - 1, c: p.c + dc * 2 });
+  } else if (dc === 0) {
+    // Ennemi au-dessus/en-dessous → les 2 cases derrière sont (p.r+dr*2, p.c±1)
+    candidates.push({ r: p.r + dr * 2, c: p.c + 1 });
+    candidates.push({ r: p.r + dr * 2, c: p.c - 1 });
+  } else {
+    // Ennemi en diagonale → les 2 cases derrière sont (dr*2, dc) et (dr, dc*2)
+    candidates.push({ r: p.r + dr * 2, c: p.c + dc });
+    candidates.push({ r: p.r + dr, c: p.c + dc * 2 });
+  }
+  return candidates.filter(c => inB(board, c.r, c.c) && board[c.r][c.c] === null);
+}
+
+function activerCavalerie() {
+  const kn = state.selected;
+  if (!kn || kn.type !== 'N' || !kn.upgrades.includes('cavalerie')) return;
+  if ((kn.cooldowns.cavalerie || 0) > 0) return;
+  const cibles = ciblesCavalerie(state.board, kn);
+  if (!cibles.length) return;
+  state.ruTargets = cibles;
+  state.phase = 'cavalerie-target';
+}
+
+// Phase 1 : l'utilisateur a cliqué sur un ennemi adjacent
+// → on passe en Phase 2 en montrant les 2 destinations possibles.
+function executerCavalerie(cell) {
+  const kn = state.selected;
+  const cible = state.board[cell.r][cell.c];
+  if (!cible) { state.phase = 'play'; state.ruTargets = []; return; }
+  const dests = ciblesPousseeCavalerie(state.board, kn, { r: cell.r, c: cell.c });
+  if (!dests.length) { state.phase = 'play'; state.ruTargets = []; return; }
+  state._cavEnemyCell = { r: cell.r, c: cell.c }; // mémorise l'ennemi pour la phase 2
+  state.ruTargets = dests;
+  state.phase = 'cavalerie-push';
+}
+
+// Phase 2 : l'utilisateur choisit la case de destination
+// → l'ennemi est repoussé sur cette case, le tour est consommé.
+function executerPousseeCavalerie(cell) {
+  const kn = state.selected;
+  const enemyPos = state._cavEnemyCell;
+  if (!enemyPos) { state.phase = 'play'; state.ruTargets = []; return; }
+  const cible = state.board[enemyPos.r][enemyPos.c];
+  if (!kn || !cible) { state.phase = 'play'; state.ruTargets = []; return; }
+  // Vérifie que la destination est libre (devrait toujours être le cas)
+  if (state.board[cell.r][cell.c] !== null) { state.phase = 'play'; state.ruTargets = []; return; }
+  kn.cooldowns.cavalerie = UPGRADES['cavalerie'].cooldown;
+  state.board[enemyPos.r][enemyPos.c] = null;
+  cible.r = cell.r; cible.c = cell.c;
+  state.board[cell.r][cell.c] = cible;
+  addFlash(cell.r, cell.c, 'cyan');
+  state.ruTargets = [];
+  state._cavEnemyCell = null;
+  recordPower(state, kn, 'Cavalerie', { r: cell.r, c: cell.c });
+  pvwEmitPower(kn, 'Cavalerie', { r: cell.r, c: cell.c });
+  finDeTour();
+}
+
+// Échange (tour) : échange la position de la tour avec un pion allié situé sur une
+// ligne, colonne ou diagonale de la tour, sans pièce intermédiaire. Consomme le tour.
+function ciblesEchange(board, p) {
+  const t = [];
+  for (const [dr, dc] of [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]) {
+    let r = p.r + dr, c = p.c + dc;
+    while (inB(board, r, c)) {
+      const q = board[r][c];
+      if (q) {
+        if (q.owner === p.owner && q.type === 'P') t.push({ r, c });
+        break;
+      }
+      r += dr; c += dc;
+    }
+  }
+  return t;
+}
+
+function activerEchange() {
+  const tour = state.selected;
+  if (!tour || tour.type !== 'R' || !tour.upgrades.includes('echange')) return;
+  if ((tour.cooldowns.echange || 0) > 0) return;
+  const cibles = ciblesEchange(state.board, tour);
+  if (!cibles.length) return;
+  state.ruTargets = cibles;
+  state.phase = 'echange-target';
+}
+
+function executerEchange(cell) {
+  const tour = state.selected;
+  const pion = state.board[cell.r][cell.c];
+  if (!tour || !pion || pion.type !== 'P' || pion.owner !== tour.owner) {
+    state.phase = 'play'; state.ruTargets = []; return;
+  }
+  tour.cooldowns.echange = UPGRADES['echange'].cooldown;
+  const tr = tour.r, tc = tour.c, pr = pion.r, pc = pion.c;
+  tour.r = pr; tour.c = pc;
+  pion.r = tr; pion.c = tc;
+  state.board[pr][pc] = tour;
+  state.board[tr][tc] = pion;
+  tour.aBouge = true;
+  addFlash(tr, tc, 'cyan');
+  addFlash(pr, pc, 'cyan');
+  state.ruTargets = [];
+  recordPower(state, tour, 'Échange', cell);
+  pvwEmitPower(tour, 'Échange', cell);
+  finDeTour();
+}
+
 // ---------- Achat ----------
 function ouvrirPanneau(piece) {
   state.selected = piece;
@@ -931,11 +1136,26 @@ function ouvrirPanneau(piece) {
   if (state.phase !== 'gameover' && state.phase !== 'animating') state.phase = 'play';
 }
 
+// Renvoie les ids d'améliorations du deck actif pour un type de pièce.
+// Fallback sur le catalogue complet si aucun deck n'est actif.
+function deckUpgrades(type) {
+  return upgradesForPiece(state.activeDeck, type, UPGRADES_PAR_TYPE[type]);
+}
+
 function acheter(id) {
   const p = state.panelPiece;
-  if (!p) return;
+  if (!p) { console.warn('[acheter] no panelPiece'); return; }
+  if (ameliorationsBloquees(p)) return; // S.H.T. : la pièce ne peut rien acheter
   const u = UPGRADES[id];
-  if (!u || u.piece !== p.type) return;
+  if (!u || u.piece !== p.type) { console.warn('[acheter] unknown/invalid upgrade', id, p.type); return; }
+  // Le deck actif est la source de vérité : on ne peut acheter que les upgrades
+  // sélectionnées pour ce type de pièce (GDD §5.3.c / demande utilisateur).
+  const allowed = deckUpgrades(p.type);
+  if (!allowed.includes(id)) {
+    console.warn('[acheter] upgrade not in active deck', id, 'type', p.type, 'allowed', allowed, 'activeDeck', state.activeDeck);
+    state.buzz = performance.now(); state.buzzId = id;
+    return;
+  }
   if (p.upgrades.includes(id) || p.upgrades.length >= MAX_UPGRADES_PAR_PIECE
       || state.ecus[state.turn] < u.cout) {
     state.buzz = performance.now(); state.buzzId = id; // refus : tremblement
@@ -944,7 +1164,7 @@ function acheter(id) {
   state.ecus[state.turn] -= u.cout;
   p.upgrades.push(id);
   // Cartes « absorbe la 1re capture » : blindage posé dès l'achat (GDD §5.5).
-  if (['forteresse', 'bouclier', 'monture', 'couronne'].includes(id)) p.shield = true;
+  if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(id)) p.shield = true;
   p._goldT = performance.now();             // flash doré
   recalculerCoups();                         // Marche arrière / Pas de côté ajoutent des coups
   recordPurchase(state, p, id, u.cout);      // replay : après achat réussi
@@ -1184,7 +1404,8 @@ function applyRemoteAction(msg) {
   p._pendingHash = null;
   try {
     if (msg.kind === 'move') {
-      const from = fromAlgebraic(msg.from), to = fromAlgebraic(msg.to);
+      const from = fromAlgebraic(msg.from, state.board), to = fromAlgebraic(msg.to, state.board);
+      if (!from || !to) { console.warn('[online] malformed move coords', msg); p.applyingRemote = false; return; }
       const piece = state.board[from.r][from.c];
       if (!piece || piece.owner !== opp) { console.warn('[online] illegal — pièce introuvable', msg); p.applyingRemote = false; return; }
       // Contrôle de légalité (§3.2 étape 3) via le propre rules.js du récepteur.
@@ -1197,7 +1418,8 @@ function applyRemoteAction(msg) {
       if (!state.chain) selectionner(piece);
       jouerCoup(piece, mv); // le hash est capté dans pvwHook (avant l'anim/finDeTour)
     } else if (msg.kind === 'purchase') {
-      const pos = fromAlgebraic(msg.pos);
+      const pos = fromAlgebraic(msg.pos, state.board);
+      if (!pos) { console.warn('[online] malformed purchase coords', msg); p.applyingRemote = false; return; }
       const piece = state.board[pos.r][pos.c];
       if (!piece || piece.owner !== opp) { console.warn('[online] illegal — achat pièce introuvable', msg); p.applyingRemote = false; return; }
       const before = piece.upgrades.length;
@@ -1220,7 +1442,7 @@ function applyRemoteAction(msg) {
 }
 
 function applyRemotePower(msg, opp) {
-  const target = msg.target ? fromAlgebraic(msg.target) : null;
+  const target = msg.target ? fromAlgebraic(msg.target, state.board) : null;
   // Décret déplace le roi : on le localise par owner+type (une seule pièce K), pas par pos
   // (qui vaut la position POST-échange chez l'émetteur). target = case de l'allié à échanger.
   if (msg.power === 'Décret') {
@@ -1231,7 +1453,8 @@ function applyRemotePower(msg, opp) {
     executerDecret(target);
     return;
   }
-  const pos = fromAlgebraic(msg.pos);
+  const pos = fromAlgebraic(msg.pos, state.board);
+  if (!pos) { console.warn('[online] malformed power coords', msg); return; }
   const piece = state.board[pos.r][pos.c];
   if (!piece || piece.owner !== opp) { console.warn('[online] illegal — pièce de pouvoir introuvable', msg); return; }
   state.selected = piece;
@@ -1239,7 +1462,7 @@ function applyRemotePower(msg, opp) {
     case 'Ruée': executerRuee(target); break;
     case 'Rayon sacré': executerRayon(target); break;
     case 'Rempart': activerRempart(); break;
-    case 'Sacrifice': activerSacrifice(); break;
+    case 'Mariage stratégique': activerSacrifice(); break;
     default: console.warn('[online] pouvoir inconnu', msg.power);
   }
 }
@@ -1508,9 +1731,15 @@ function peutChoisirVariante() {
 }
 
 function actionBouton(action) {
+  // S.H.T. : aucune amélioration (pouvoirs actifs) ne peut être utilisée par une
+  // pièce sous le debuff du roi pendant 2 tours.
+  if (['ruee', 'rayon', 'rempart', 'sacrifice', 'decret', 'sht', 'hypnose', 'cavalerie', 'echange'].includes(action.kind)) {
+    if (state.selected && ameliorationsBloquees(state.selected)) return;
+  }
   switch (action.kind) {
     case 'ameliorer':
-      if (state.selected && tutorielPermet(state, { type: 'panel', piece: state.selected })) {
+      if (state.selected && !ameliorationsBloquees(state.selected)
+          && tutorielPermet(state, { type: 'panel', piece: state.selected })) {
         ouvrirPanneau(state.selected);
       }
       break;
@@ -1543,6 +1772,10 @@ function actionBouton(action) {
     case 'rempart': if (tutorielPermet(state, { type: 'power', kind: 'rempart' })) activerRempart(); break;
     case 'sacrifice': if (tutorielPermet(state, { type: 'power', kind: 'sacrifice' })) activerSacrifice(); break;
     case 'decret': if (tutorielPermet(state, { type: 'power', kind: 'decret' })) activerDecret(); break;
+    case 'sht': if (tutorielPermet(state, { type: 'power', kind: 'sht' })) activerSHT(); break;
+    case 'hypnose': if (tutorielPermet(state, { type: 'power', kind: 'hypnose' })) activerHypnose(); break;
+    case 'cavalerie': if (tutorielPermet(state, { type: 'power', kind: 'cavalerie' })) activerCavalerie(); break;
+    case 'echange': if (tutorielPermet(state, { type: 'power', kind: 'echange' })) activerEchange(); break;
     // Décliner un enchaînement (Double coup / Second galop) : pas de cooldown posé.
     case 'downloadReplay': downloadReplayMD(state); break;
     // Écran REPLAYS dédié (plein écran, comme le lobby en ligne) — remplace
@@ -1565,23 +1798,33 @@ function actionBouton(action) {
       }
       break;
     case 'fermerDecks':
+      // Ferme la modal de rename si elle était ouverte (safety cleanup).
+      hideRenameModal();
       if (state.phase === 'decks') { state._deckEditor = null; retourMenu(); }
       break;
     case 'switchDeck': {
       // Bascule l'actif (idx < ids.length) OU crée un nouveau deck si l'onglet est vide.
-      // Cap DECK_LIMIT=5 dans decks.js — createDeck clone l'actif et retourne un newId.
+      // Cap DECK_LIMIT=5 dans decks.js — createDeck clone l'actif et retourne {root, newId}.
+      // NOTE bug-fix 30/07 : createDeck retourne {root, newId}, pas juste newId — l'ancien
+      // code passait l'objet entier à setActiveDeck, qui ne trouvait pas de clé
+      // decks[objet] → active restait inchangé → le tab cliqué ne devenait JAMAIS bleu.
       if (state.phase === 'decks' && Number.isInteger(action.value)) {
         const root = state.decksRoot || sanitizeRoot(loadDecks());
         const ids = Object.keys(root.decks);
         const idx = action.value;
         if (idx < ids.length) {
-          setActiveDeck(root, ids[idx]);
-        } else if (ids.length < 5) {
-          const newId = createDeck(root);
-          setActiveDeck(root, newId);
+          // Deck existant à cet index → on bascule l'actif (sanitize retourne un NOUVEAU root).
+          const next = setActiveDeck(root, ids[idx]);
+          saveDecks(next);
+          state.decksRoot = next;
+        } else if (ids.length < DECK_LIMIT) {
+          // Slot vide → on crée un clone et l'active (createDeck rend un NOUVEAU root).
+          const created = createDeck(root);
+          if (created && created.newId) {
+            saveDecks(created.root);
+            state.decksRoot = created.root;
+          }
         }
-        saveDecks(root);
-        state.decksRoot = root;
       }
       break;
     }
@@ -1607,6 +1850,31 @@ function actionBouton(action) {
       if (state.phase === 'deck-picker') {
         state._deckEditor = null;
         state.phase = 'decks';
+      }
+      break;
+    case 'renameDeck':
+      // Ouvre la modal DOM de rename (deck editor). Le nouveau nom est validé côté
+      // DOM (Enter / bouton Valider) puis dispatché via confirmerRename() qui appelle
+      // renameDeck(root, id, name) → saveDecks(root) → re-render.
+      if (state.phase === 'decks' && action.id) {
+        const root = state.decksRoot || sanitizeRoot(loadDecks());
+        if (root.decks[action.id]) {
+          state._renamingDeckId = action.id;
+          showRenameModal(root.decks[action.id].name || '');
+        }
+      }
+      break;
+    case 'deleteDeck':
+      // Confirmation native (browser confirm) puis deleteDeck(root, id) qui protège
+      // déjà contre la suppression du dernier deck. saveDecks persiste immédiatement.
+      if (state.phase === 'decks' && action.id) {
+        const root = state.decksRoot || sanitizeRoot(loadDecks());
+        const dName = (root.decks[action.id] && root.decks[action.id].name) || 'Sans nom';
+        if (window.confirm(`Supprimer le deck "${dName}" ?\nCette action est irréversible.`)) {
+          const next = deleteDeck(root, action.id);
+          saveDecks(next);
+          state.decksRoot = next;
+        }
       }
       break;
     // Mode replay — contrôles
@@ -1885,6 +2153,18 @@ canvas.addEventListener('mousedown', (e) => {
     if (surCible) executerDecret(cell); else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
+  if (state.phase === 'cavalerie-target') {
+    if (surCible) executerCavalerie(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    return;
+  }
+  if (state.phase === 'cavalerie-push') {
+    if (surCible) executerPousseeCavalerie(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    return;
+  }
+  if (state.phase === 'echange-target') {
+    if (surCible) executerEchange(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    return;
+  }
 
   const cliquee = state.board[cell.r][cell.c];
 
@@ -1931,7 +2211,7 @@ canvas.addEventListener('contextmenu', (e) => {
   const cell = caseDepuisPixel(x, y);
   if (cell) {
     const p = state.board[cell.r][cell.c];
-    if (p && p.owner === state.turn) {
+    if (p && p.owner === state.turn && !ameliorationsBloquees(p)) {
       // Tutoriel : le panneau ne s'ouvre que sur la pièce prévue par l'étape.
       if (!tutorielPermet(state, { type: 'panel', piece: p })) { refusTutoriel(cell); return; }
       ouvrirPanneau(p); return;
@@ -1943,7 +2223,10 @@ canvas.addEventListener('contextmenu', (e) => {
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (state.phase === 'replays') { retourMenu(); return; }
-    if (PHASES_CIBLAGE.includes(state.phase)) { state.phase = 'play'; state.ruTargets = []; }
+    if (PHASES_CIBLAGE.includes(state.phase)) {
+      state.phase = 'play'; state.ruTargets = [];
+      if (state._cavEnemyCell) state._cavEnemyCell = null;
+    }
     else if (state.panelPiece && state.mode !== 'tutorial') state.panelPiece = null;
     else if (state.mode !== 'tutorial') deselectionner();
   } else if (e.key === ' ' && state.chain) {
@@ -2085,6 +2368,77 @@ function cablerCallbacksOnline() {
 // bloquant : en cas d'échec, on reste invité et le jeu tourne (garde-fou CLAUDE.md §7.2).
 initAccount();
 cablerCallbacksOnline(); // posé tôt pour que les callbacks soient prêts
+
+// ---------- Modal DOM de rename deck (deck editor) ----------
+// Pattern analogue à l'auth-overlay : DOM en superposition du canvas pour profiter
+// du clavier système (focus, IME, copy-paste) plutôt que de dégrader en canvas text.
+// La modal est montée UNE fois au boot, les boutons Valider/Annuler/Enter/Esc sont
+// câblés sur l'input. state._renamingDeckId mémorise le deck en cours d'édition
+// entre show → confirm.
+// Timestamp d'ouverture : sert de garde pour le bug « même clic qui ouvre ET ferme ».
+// Quand l'utilisateur clique sur le bouton Renommer (canvas mousedown → showRenameModal
+// → modal.hidden=false), le modal devient immédiatement la cible mouseup/click (z-index 55
+// > canvas, position:fixed inset:0 = full viewport). Le click event se retrouve donc
+// avec e.target === modal, ce qui déclenche le handler de fermeture si on ne l'inhibe pas
+// pour le premier clic (les navigateurs varient sur la règle exacte : common ancestor
+// vs descendant — on est robust avec un timestamp plutôt que de compter sur une règle).
+let _modalOpenTime = 0;
+(function cablerRenameModal() {
+  const modal = document.getElementById('deck-rename-modal');
+  const input = document.getElementById('deck-rename-input');
+  const validate = document.getElementById('deck-rename-validate');
+  const cancel = document.getElementById('deck-rename-cancel');
+  if (!modal || !input || !validate || !cancel) return;
+  validate.addEventListener('click', (e) => { e.preventDefault(); confirmerRename(); });
+  cancel.addEventListener('click', (e) => { e.preventDefault(); hideRenameModal(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); confirmerRename(); }
+    if (e.key === 'Escape') { e.preventDefault(); hideRenameModal(); }
+  });
+  // Click sur le backdrop (zone autour de la card) annule aussi, MAIS on ignore le
+  // premier click s'il survient dans les 300 ms après l'ouverture (= même clic qui
+  // a déclenché l'ouverture — bug observé : la modal s'ouvrait et se fermait instantanément).
+  modal.addEventListener('click', (e) => {
+    if (e.target !== modal) return;
+    if (performance.now() - _modalOpenTime < 300) return;
+    hideRenameModal();
+  });
+})();
+
+function showRenameModal(initialValue) {
+  const modal = document.getElementById('deck-rename-modal');
+  const input = document.getElementById('deck-rename-input');
+  if (!modal || !input) return;
+  input.value = (initialValue || '').slice(0, 24);
+  // Belt-and-braces : on pose le timestamp AVANT de retirer l'attribut `hidden`, comme
+  // ça le click handler (s'il est appelé par le même clic d'ouverture) voit un delta
+  // nul et laisse passer l'ouverture.
+  _modalOpenTime = performance.now();
+  modal.hidden = false;
+  // setTimeout 0 pour passer après le focus du canvas (qui capture les events avant).
+  // On RE-bloque le backdrop pendant les 300 premières frames via le timestamp ci-dessus.
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+
+function hideRenameModal() {
+  const modal = document.getElementById('deck-rename-modal');
+  if (modal) modal.hidden = true;
+  state._renamingDeckId = null;
+}
+
+function confirmerRename() {
+  const input = document.getElementById('deck-rename-input');
+  if (!input) return;
+  const newName = (input.value || '').trim();
+  if (!newName) return; // chaînes vides rejetées côté UI (no-op silencieux)
+  const root = state.decksRoot || sanitizeRoot(loadDecks());
+  const id = state._renamingDeckId;
+  if (!id || !root.decks[id]) { hideRenameModal(); return; }
+  const next = renameDeck(root, id, newName); // trim 24 chars enforced côté decks.js
+  saveDecks(next);
+  state.decksRoot = next;
+  hideRenameModal();
+}
 requestAnimationFrame(loop);
 
 // Exposé pour le débogage / tests automatisés.

@@ -29,12 +29,16 @@ export function creerPiece(type, owner, r, c) {
     owner,           // 0 = Joueur 1 (bas), 1 = Joueur 2 (haut)
     r, c,            // position, tenue synchro avec le plateau
     upgrades: [],    // ids d'améliorations achetées
-    shield: false,   // absorbe la prochaine capture (Forteresse, Bouclier, Monture, Couronne)
+    shield: false,   // absorbe la prochaine capture (Forteresse, Bouclier, Monture, Couronne, Parade, Majesté)
     cooldowns: {},   // { ruee, Rayon, Tele, second, sacrifice } en tours du joueur
+    debuffs: {},     // { sht, root, hypnoseAura } en tours restants
     doubleCoupUsed: false,  // Double coup (usage unique) consommé
     decretUsed: false,      // Décret (usage unique) consommé
     sacrificeArmed: false,  // Sacrifice armé : protège le roi à la prochaine capture
     rempartGranted: false,  // blindage temporaire reçu d'un Rempart (expire au prochain tour)
+    folieUsed: false,       // Folie (fou D) : usage unique consommé après la prochaine capture
+    feinteUsed: false,      // Feinte (dame D) : usage unique consommé après la prochaine capture
+    shtUsed: false,         // S.H.T. (dame A) : usage unique consommé après utilisation
     aBouge: false,          // a déjà bougé (condition du roque, GDD §5.1.b) — posé par jouerCoup/Décret
   };
 }
@@ -58,6 +62,8 @@ export function creerPlateau(taille = DEFAULT_TAILLE) {
   const h = getBoardH(taille);
   const w = getBoardW(taille);
   const board = Array.from({ length: h }, () => Array(w).fill(null));
+  Object.defineProperty(board, 'rows', { value: h, enumerable: false, writable: false });
+  Object.defineProperty(board, 'cols', { value: w, enumerable: false, writable: false });
   // Phase A.5 v2 : board.cols / board.rows attachés en NON-ENUMERABLE pour ne
   // PAS polluer les loops `for (const row of state.board)` ni `Object.keys(board)`.
   // ATTENTION : un code de debug qui ferait `JSON.stringify(state.board)` ou

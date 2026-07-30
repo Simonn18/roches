@@ -2,6 +2,7 @@
 // Apprend les ouvertures gagnantes au fil des parties.
 // Persisté dans localStorage. Consulté par l'IA (ai.js) comme bonus de score.
 import { creerPlateau } from './board.js';
+import { DEFAULT_TAILLE } from './tailles.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -19,8 +20,8 @@ const MIN_PLAYS_FOR_CONFIDENCE = 3;  // nb de parties mini pour qu'un move soit 
 
 function hashPosition(board) {
   let h = '';
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
+  for (let r = 0; r < board.rows; r++) {
+    for (let c = 0; c < board.cols; c++) {
       const p = board[r][c];
       h += p ? p.type + p.owner : '__';
     }
@@ -32,8 +33,12 @@ function hashPosition(board) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function fromAlgebraic(s) {
-  return { r: 8 - parseInt(s[1]), c: s.charCodeAt(0) - 97 };
+// Décode une notation algébrique (ex. 'a1', 'o8') en indices board.
+// boardOrRows permet d'adapter la rangée à la hauteur réelle du plateau.
+function fromAlgebraic(s, boardOrRows) {
+  if (typeof s !== 'string' || !s.length) return null;
+  const rows = (boardOrRows && boardOrRows.rows) || boardOrRows || 8;
+  return { r: rows - parseInt(s.slice(1)), c: s.charCodeAt(0) - 97 };
 }
 
 function moveKey(fromR, fromC, toR, toC) {
@@ -56,17 +61,18 @@ function parseMoveKey(mk) {
 // Met à jour le book à partir du replay d'une partie terminée.
 // replayEvents : replayData.events (array de {type, owner, from, to, ...}).
 // winner : 0 (J1) ou 1 (J2), le vainqueur de la partie.
-export function updateBook(replayEvents, winner) {
+export function updateBook(replayEvents, winner, taille = DEFAULT_TAILLE) {
   const book = loadBook();
-  const board = creerPlateau();
+  const board = creerPlateau(taille);
   let ply = 0;
 
   for (const e of replayEvents) {
     if (e.type !== 'move') continue;
     if (ply >= MAX_OPENING_PLY) break;
 
-    const from = fromAlgebraic(e.from);
-    const to = fromAlgebraic(e.to);
+    const from = fromAlgebraic(e.from, board);
+    const to = fromAlgebraic(e.to, board);
+    if (!from || !to) continue;
 
     // Enregistre ce coup pour la position actuelle.
     const hash = hashPosition(board);

@@ -29,6 +29,20 @@ function glisse(m, board, p, dirs) {
   }
 }
 
+// Glissement capture uniquement : ajoute la première pièce adverse rencontrée dans
+// chaque direction (utilisé par Folie et Feinte pour les coups d'attaque uniques).
+function glisseCapture(m, board, p, dirs) {
+  for (const [dr, dc] of dirs) {
+    let r = p.r + dr, c = p.c + dc;
+    while (inB(board, r, c)) {
+      const t = board[r][c];
+      if (t === null) { r += dr; c += dc; continue; }
+      if (t.owner !== p.owner) m.push({ r, c, capture: true });
+      break;
+    }
+  }
+}
+
 function coupsPion(board, p) {
   const m = [];
   const dir = p.owner === 0 ? -1 : 1;               // Joueur 1 monte, Joueur 2 descend
@@ -72,6 +86,11 @@ function coupsFou(board, p) {
   if (p.upgrades.includes('pas-de-cote')) {      // + ajout indépendant
     for (const [dr, dc] of ORTHO) pousse(m, board, p, p.r + dr, p.c + dc);
   }
+  // Folie [D] : usage unique, la prochaine attaque se déplace comme une dame.
+  // On ajoute tous les déplacements (capture + vides) dans les 8 directions.
+  if (p.upgrades.includes('reprise') && !p.folieUsed) {
+    glisse(m, board, p, DIRS8);
+  }
   return m;
 }
 
@@ -82,12 +101,47 @@ function coupsTour(board, p) {
   if (p.upgrades.includes('pivot')) {
     for (const [dr, dc] of DIAG) pousse(m, board, p, p.r + dr, p.c + dc);
   }
+  // Enjambeur [D] : la tour saute la première pièce rencontrée sur son glissement
+  // (jamais le roi) et atterrit sur la première case libre derrière elle.
+  if (p.upgrades.includes('enjambeur')) {
+    for (const [dr, dc] of ORTHO) {
+      let r = p.r + dr, c = p.c + dc;
+      // Glisser jusqu'à trouver une pièce
+      while (inB(board, r, c)) {
+        const t = board[r][c];
+        if (t !== null) {
+          // Si c'est un roi (allié ou adverse), on ne saute jamais par-dessus
+          if (t.type === 'K') break;
+          // Regarder la case juste derrière
+          const br = r + dr, bc = c + dc;
+          if (inB(board, br, bc) && board[br][bc] === null) {
+            m.push({ r: br, c: bc, capture: false });
+          }
+          break;
+        }
+        r += dr; c += dc;
+      }
+    }
+  }
   return m;
 }
 
 function coupsDame(board, p) {
   const m = [];
   glisse(m, board, p, DIRS8); // coup de base
+
+  // Feinte [D] : usage unique, la prochaine attaque se déplace comme toutes les
+  // pièces. On ajoute les déplacements à la façon du cavalier (cases vides + captures).
+  if (p.upgrades.includes('feinte') && !p.feinteUsed) {
+    for (const [dr, dc] of KNIGHT) {
+      const r = p.r + dr, c = p.c + dc;
+      if (inB(board, r, c)) {
+        const t = board[r][c];
+        if (t === null) m.push({ r, c, capture: false });
+        else if (t.owner !== p.owner) m.push({ r, c, capture: true });
+      }
+    }
+  }
 
   // Téléportation courte [D] : cases VIDES à distance de Chebyshev ≤ 3, obstacles
   // ignorés. Disponible seulement hors cooldown. On marque tele:true et on exclut
@@ -143,17 +197,21 @@ function coupsRoi(board, p) {
   return m;
 }
 
-// Cases interdites par une Zone de contrôle adverse : les 8 cases autour de
-// chaque fou adverse équipé de 'Zone'. Renvoie un Set de clés "r,c".
+// Cases interdites par l'aura d'Hypnose adverse : les pièces faibles (P/N/B)
+// ne peuvent pas se déplacer dans un rayon de 3 cases autour d'un fou adverse
+// équipé de l'aura Hypnose (debuffs.hypnoseAura > 0). Renvoie un Set de clés "r,c".
 export function zonesInterdites(board, owner) {
   const s = new Set();
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       const q = board[r][c];
-      if (!q || q.owner === owner || q.type !== 'B' || !q.upgrades.includes('Zone')) continue;
-      for (const [dr, dc] of DIRS8) {
-        const nr = r + dr, nc = c + dc;
-        if (inB(board, nr, nc)) s.add(nr + ',' + nc);
+      if (!q || q.owner === owner || q.type !== 'B' || !(q.debuffs && q.debuffs.hypnoseAura > 0)) continue;
+      for (let dr = -3; dr <= 3; dr++) {
+        for (let dc = -3; dc <= 3; dc++) {
+          if (Math.abs(dr) + Math.abs(dc) === 0) continue;
+          const nr = r + dr, nc = c + dc;
+          if (inB(board, nr, nc)) s.add(nr + ',' + nc);
+        }
       }
     }
   }
@@ -163,6 +221,8 @@ export function zonesInterdites(board, owner) {
 // Coups légaux d'une pièce (améliorations de déplacement incluses).
 export function coupsLegaux(board, p) {
   let m;
+  // Gel complet (Sacrifice du roi) : la pièce ne peut plus bouger.
+  if (p.debuffs && p.debuffs.root > 0) return [];
   switch (p.type) {
     case 'P': m = coupsPion(board, p); break;
     case 'N': m = coupsCavalier(board, p); break;
