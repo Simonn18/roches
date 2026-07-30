@@ -2142,130 +2142,113 @@ function dessineReplays(ctx, state) {
 // `ouvrirDecks`), pas à chaque frame — évite le cost sanitizeRoot + loadDecks redondant.
 // SPEC vault [21:40-21:45] : TAB_W=50 / TAB_H=38 / 5 cases 282 px centré sur CANVAS_W=1000
 // (tabsX0 = (1000 - 5*50 - 4*8) / 2 = 359). gridY=295 (laisse 47 px pour les onglets + titre).
-const DECK_TYPES = ['P', 'N', 'B', 'R', 'Q', 'K'];
-const DECK_CATS = ['D', 'A', 'S'];
-const DECK_CAT_LABEL = { D: 'Déplacement', A: 'Actif', S: 'Stat' };
+// === Deck Editor UI — redesign PDF 0030.pdf (Phase 6, 2026-07-30) ===
+// Layout : 5 tabs centrés en haut, 3 lignes × 2 cards (P/T, C/F, Q/R); chaque
+// card = piece_box blanc à gauche (lettre pièce GROS, style marker via Archivo
+// Black) + 3 pills empilés D/A/S à droite, couleurs issues de COULEUR_CAT (DRY
+// avec le feu des game pieces). Contenu pill = UPGRADES[id].nom du slot du deck
+// actif en CAPS, ou "—" si slot vide.
 const DECK_TAB_W = 50;
-const DECK_TAB_H = 38;
-const DECK_TAB_GAP = 8;
+const DECK_TAB_H = 50;
+const DECK_TAB_GAP = 14;
 const DECK_TAB_COUNT = 5;
 const DECK_TABS_TOTAL = DECK_TAB_COUNT * DECK_TAB_W + (DECK_TAB_COUNT - 1) * DECK_TAB_GAP;
-const DECK_TABS_X0 = (CANVAS_W - DECK_TABS_TOTAL) / 2; // 359
-const DECK_TABS_Y = 215;
-const DECK_GRID_Y = 295;
-const DECK_GRID_X0 = 80;
-const DECK_GRID_X1 = 520;
-const DECK_SLOT_W = 220;
-const DECK_SLOT_H = 100;
-const DECK_SLOT_GAP = 10;
+const DECK_TABS_X0 = (CANVAS_W - DECK_TABS_TOTAL) / 2;            // 347 sur CANVAS_W=1000
+const DECK_TABS_Y = 86;
+
+const DECK_CATS = ['D', 'A', 'S'];
+const DECK_ROWS = [['P', 'T'], ['C', 'F'], ['Q', 'R']];
+const DECK_X_MARGIN = 60;
+const DECK_CARD_GAP_X = 20;
+const DECK_CARD_W = (CANVAS_W - 2 * DECK_X_MARGIN - DECK_CARD_GAP_X) / 2;
+const DECK_CARD_H = 100;
+const DECK_ROW_Y = [180, 300, 420];
+const DECK_PIECE_BOX_W = 120;
+const DECK_PIECE_INNER_GAP = 16;
+const DECK_PILL_W = DECK_CARD_W - DECK_PIECE_BOX_W - DECK_PIECE_INNER_GAP;
+const DECK_PILL_H = 26;
+const DECK_PILL_INNER_GAP = 4;
+const DECK_LETTER_SIZE = 64;
+const DECK_RET_W = 220, DECK_RET_H = 44;
+const DECK_RET_X = (CANVAS_W - DECK_RET_W) / 2;
+const DECK_RET_Y = 720;
 
 function dessineDecks(ctx, state) {
-  // Assure un decksRoot valide (pas de crash si localStorage corrompu).
-  if (!state.decksRoot) state.decksRoot = sanitizeRoot(loadDecks());
-  const root = state.decksRoot;
+  const root = state.decksRoot || sanitizeRoot(loadDecks());
+  state.decksRoot = root;
   const ids = Object.keys(root.decks);
-  const activeId = root.active;
-  const activeDeck = root.decks[activeId];
+  const activeDeck = root.decks[root.active];
 
-  // Fond cream unifié.
-  ctx.fillStyle = C_BRUME; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
-  // Wordmark + bouton retour ✕.
-  ctx.fillStyle = C_ENCRE; ctx.font = `22px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('♞ ROYCHEC', 40, 60);
-  bouton(state, ctx, CANVAS_W - 110, 30, 90, 36, '✕  Retour', { kind: 'fermerDecks' });
-
-  // Titre + sous-titre.
-  ctx.fillStyle = C_ENCRE; ctx.font = `28px ${F_DISPLAY}`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('MES DECKS', CANVAS_W / 2, 130);
-  ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `14px ${F_TEXTE}`;
-  ctx.fillText('5 slots par pièce (Déplacement · Actif · Stat)', CANVAS_W / 2, 158);
-  // Nom du deck actif sous le sous-titre.
-  if (activeDeck) {
-    ctx.fillStyle = C_AMBRE_FONCE; ctx.font = `600 16px ${F_TEXTE}`;
-    ctx.fillText(`« ${activeDeck.name} »`, CANVAS_W / 2, 184);
-  }
-
-  // Barre 5 onglets (1..5) — TAB_W=50, TAB_H=38, gap=8, total 282 px centré.
   for (let i = 0; i < DECK_TAB_COUNT; i++) {
     const tabX = DECK_TABS_X0 + i * (DECK_TAB_W + DECK_TAB_GAP);
     const hasDeck = i < ids.length;
-    const isActive = hasDeck && ids[i] === activeId;
-    let fill, stroke, strokeW;
-    if (isActive) { fill = C_AMBRE_CLAIR; stroke = C_AMBRE; strokeW = 2.5; }
-    else if (hasDeck) { fill = '#FFFFFF'; stroke = C_ENCRE; strokeW = 1.5; }
-    else { fill = C_CARTE; stroke = C_ENCRE_PALE; strokeW = 1; }
-    carte(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 7, fill, { shadow: hasDeck, stroke });
-    if (strokeW !== 1) { ctx.lineWidth = strokeW; ctx.strokeStyle = stroke; roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 7); ctx.stroke(); }
-    // Chiffre centré.
-    ctx.fillStyle = isActive ? C_AMBRE_FONCE : C_ENCRE;
-    ctx.font = `bold 22px ${F_DISPLAY}`;
+    const isActive = hasDeck && ids[i] === root.active;
+    ctx.fillStyle = ombreBouton('#FFFFFF');
+    roundRect(ctx, tabX, DECK_TABS_Y + 3, DECK_TAB_W, DECK_TAB_H, 9); ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 9); ctx.fill();
+    ctx.strokeStyle = isActive ? COULEUR_CAT.D : (hasDeck ? C_ENCRE : C_ENCRE_PALE);
+    ctx.lineWidth = isActive ? 3 : 2;
+    roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 9); ctx.stroke();
+    ctx.fillStyle = isActive ? COULEUR_CAT.D : C_ENCRE;
+    ctx.font = `24px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(i + 1), tabX + DECK_TAB_W / 2, DECK_TABS_Y + DECK_TAB_H / 2);
-    // Hit-test cliquable.
-    state.ui.buttons.push({ x: tabX, y: DECK_TABS_Y, w: DECK_TAB_W, h: DECK_TAB_H,
-      action: { kind: 'switchDeck', value: i }, enabled: true });
+    state.ui.buttons.push({
+      x: tabX, y: DECK_TABS_Y, w: DECK_TAB_W, h: DECK_TAB_H,
+      action: { kind: 'switchDeck', value: i }, enabled: true,
+    });
   }
 
-  // Grille 2×3 : 3 lignes (P/N/B puis R/Q/K), chaque ligne a 2 colonnes (D/A/S row).
-  // Layout : col1 (D+A+S côte à côte) à gauche, col2 (D+A+S) à droite, séparateur.
-  for (let row = 0; row < 3; row++) {
+  for (let rowIdx = 0; rowIdx < DECK_ROWS.length; rowIdx++) {
+    const [typeL, typeR] = DECK_ROWS[rowIdx];
+    const cardY = DECK_ROW_Y[rowIdx];
+    const cardXL = DECK_X_MARGIN;
+    const cardXR = DECK_X_MARGIN + DECK_CARD_W + DECK_CARD_GAP_X;
     for (let col = 0; col < 2; col++) {
-      const idx = row * 2 + col;
-      const type = DECK_TYPES[idx];
-      const yPiece = DECK_GRID_Y + row * (DECK_SLOT_H + 30);
-      const xPiece = col === 0 ? DECK_GRID_X0 : DECK_GRID_X1;
-      // Nom de la pièce + lettre stylée.
-      ctx.fillStyle = C_ENCRE; ctx.font = `600 16px ${F_DISPLAY}`;
-      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-      ctx.fillText(`${LETTRE[type]} — ${nomType(type)}`, xPiece, yPiece + 14);
-      // 3 slots D/A/S côte à côte.
-      const slotValue = activeDeck ? activeDeck.slots[type] : { D: null, A: null, S: null };
-      for (let s = 0; s < 3; s++) {
+      const type = col === 0 ? typeL : typeR;
+      const cardX = col === 0 ? cardXL : cardXR;
+      const slots = (activeDeck && activeDeck.slots && activeDeck.slots[type]) || {};
+
+      const pbX = cardX, pbY = cardY;
+      ctx.fillStyle = ombreBouton('#FFFFFF');
+      roundRect(ctx, pbX, pbY + 3, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      roundRect(ctx, pbX, pbY, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.fill();
+      ctx.strokeStyle = C_ENCRE; ctx.lineWidth = 2;
+      roundRect(ctx, pbX, pbY, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.stroke();
+      ctx.fillStyle = C_ENCRE;
+      ctx.font = `${DECK_LETTER_SIZE}px ${F_DISPLAY}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(type, pbX + DECK_PIECE_BOX_W / 2, pbY + DECK_CARD_H / 2 + 3);
+
+      const pillX = cardX + DECK_PIECE_BOX_W + DECK_PIECE_INNER_GAP;
+      const pillTopPad = (DECK_CARD_H -
+        (DECK_PILL_H * DECK_CATS.length + DECK_PILL_INNER_GAP * (DECK_CATS.length - 1))) / 2;
+      for (let s = 0; s < DECK_CATS.length; s++) {
         const cat = DECK_CATS[s];
-        const slotX = xPiece + s * (DECK_SLOT_W + DECK_SLOT_GAP);
-        const slotY = yPiece + 24;
-        const idInSlot = slotValue ? slotValue[cat] : null;
-        const upg = idInSlot ? UPGRADES[idInSlot] : null;
-        // Carte slot.
-        carte(ctx, slotX, slotY, DECK_SLOT_W, DECK_SLOT_H, 8, upg ? '#FFFFFF' : C_CARTE, { shadow: !!upg });
-        // Badge catégorie (dot coloré en haut à gauche).
+        const pillY = cardY + pillTopPad + s * (DECK_PILL_H + DECK_PILL_INNER_GAP);
         ctx.fillStyle = COULEUR_CAT[cat];
-        ctx.beginPath(); ctx.arc(slotX + 14, slotY + 14, 7, 0, Math.PI * 2); ctx.fill();
-        ctx.lineWidth = 1.5; ctx.strokeStyle = C_ENCRE; ctx.stroke();
-        // Label cat à droite du badge.
-        ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `600 10px ${F_DISPLAY}`;
-        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.fillText(DECK_CAT_LABEL[cat].toUpperCase(), slotX + 26, slotY + 14);
-        if (upg) {
-          // Nom upgrade.
-          ctx.fillStyle = C_ENCRE; ctx.font = `600 13px ${F_TEXTE}`;
-          ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-          ctx.fillText(upg.nom, slotX + 10, slotY + 30);
-          // Coût ★ en bas à droite.
-          ctx.fillStyle = C_AMBRE_FONCE; ctx.font = `600 13px ${F_DISPLAY}`;
-          ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
-          ctx.fillText(`★ ${upg.cout}`, slotX + DECK_SLOT_W - 10, slotY + DECK_SLOT_H - 8);
-          // Cooldown / once si applicable.
-          if (upg.cooldown || upg.once) {
-            ctx.fillStyle = C_ENCRE_PALE; ctx.font = `600 10px ${F_TEXTE}`;
-            ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-            ctx.fillText(upg.once ? 'usage unique' : `cd ${upg.cooldown}`, slotX + 10, slotY + DECK_SLOT_H - 8);
-          }
-        } else {
-          // Slot vide.
-          ctx.fillStyle = C_ENCRE_PALE; ctx.font = `italic 13px ${F_TEXTE}`;
-          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText('+ vide', slotX + DECK_SLOT_W / 2, slotY + DECK_SLOT_H / 2);
-        }
-        // Hit-test slot cliquable.
-        state.ui.buttons.push({ x: slotX, y: slotY, w: DECK_SLOT_W, h: DECK_SLOT_H,
-          action: { kind: 'editSlot', type, cat }, enabled: true });
+        roundRect(ctx, pillX, pillY, DECK_PILL_W, DECK_PILL_H, DECK_PILL_H / 2); ctx.fill();
+        ctx.strokeStyle = C_ENCRE; ctx.lineWidth = 2;
+        roundRect(ctx, pillX, pillY, DECK_PILL_W, DECK_PILL_H, DECK_PILL_H / 2); ctx.stroke();
+        const upgId = slots[cat];
+        const upg = upgId && UPGRADES[upgId];
+        const label = upg ? upg.nom.toUpperCase() : '—';
+        ctx.fillStyle = C_ENCRE;
+        ctx.font = `600 13px ${F_DISPLAY}`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, pillX + DECK_PILL_W / 2, pillY + DECK_PILL_H / 2 + 1);
+        state.ui.buttons.push({
+          x: pillX, y: pillY, w: DECK_PILL_W, h: DECK_PILL_H,
+          action: { kind: 'editSlot', type, cat }, enabled: true,
+        });
       }
     }
   }
+
+  bouton(state, ctx, DECK_RET_X, DECK_RET_Y, DECK_RET_W, DECK_RET_H,
+    'Retour au menu', { kind: 'fermerDecks' });
 }
 
 function dessineDeckPicker(ctx, state) {
