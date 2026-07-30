@@ -1,0 +1,2105 @@
+// roychec — point d'entrée : boucle de jeu, entrées souris/clavier, logique de tour.
+// MVP (GDD §9) : hot-seat 2 joueurs, économie d'écus, 1 amélioration par type de pièce.
+// Cycle 1 IA (design/spec-ia.md) : menu d'accueil, mode PvAI optionnel, hook bot dummy.
+import { creerEtat, creerPlateau, inB, caseAt } from './board.js';
+import { coupsLegaux, ciblesRuee, ciblesRayon, DIRS8 } from './rules.js';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js';
+import { iaDecideTour } from './ai.js';
+import { initReplay, recordMove, recordPurchase, recordPower, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js';
+import { updateBook } from './opening.js';
+import { demarrerTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
+  rejouerEtape, tutorielPermet } from './tutorial.js';
+import { initAccount, startAuth, logout, getAccount, getSupabaseClient } from './account.js';
+import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, leave as onlineLeave, getOnline, on as onOnline,
+  sendAction, startPlaying, takeNextAction, __debugEnqueue,
+  report as onlineReport, requestResync, sendResync, setSeq as onlineSetSeq, clearInbox as onlineClearInbox,
+  sendRematch, rematch as onlineRematch, inboxHasGap } from './online.js';
+// Deck editor (recovery 29/07 [23:30]) : API complète de decks.js (couche DONNÉES).
+// loadDecks/saveDecks étaient déjà importés ; on ajoute les helpers d'id/active/clone.
+import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot } from './decks.js';
+import {
+  UPGRADES, VALEUR_PIECE, REVENU_PAR_COUP,
+  MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT,
+} from './constants.js';
+import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js';
+// Phase A.5 v2 Phase 3 : import des TAILLES_DE_PLATEAU depuis la maison canonique
+// (zero-dep, cf. tailles.js + commit ba30d273). `TAILLES` n'est pas directement utilisé
+// ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
+// au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
+import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js';
+
+const canvas = document.getElementById('jeu');
+canvas.width = CANVAS_W;
+canvas.height = CANVAS_H;
+const ctx = canvas.getContext('2d');
+
+// PvP en ligne (spec-pvp-online §6) : cadence au choix (1 min / 5 min / 1 h / 1 jour,
+// catalogue PVW_CADENCES de constants.js), SANS incrément (décision utilisateur 12/07,
+// spec §6.1 v3.1 — un incrément vidait le timer de son sens). 5 min = défaut/fallback.
+const PVW_TEMPS_INITIAL = 300;   // secondes par joueur (fallback si cadence absente)
+const PVW_RECO_WINDOW = 30;      // fenêtre de reconnexion (s) avant victoire par abandon (§7.2)
+const PVW_GAP_RESYNC_MS = 2000;  // trou de seq persistant → demande de resync (§5.6/§7.3)
+
+// État initial : menu d'accueil (SPEC §1.4). Pas de plateau tant que
+// l'utilisateur n'a pas choisi un mode (PvP / PvAI + difficulté).
+let state = menuState();
+// Phase A.5 v2 Phase 3 : expose la sélection actuelle au menu pour le tracé
+// (state.menu.taille defaut 'std'). Au clic sur un chip TAILLE → actionBouton.
+
+// --- Ponts avec la transformation de VUE (« moi en bas » en PvP en ligne) ---
+// La rotation 180° vit uniquement dans vueCase (render.js). Ici on l'applique aux
+// deux frontières RENDU/ENTRÉE côté main.js, sans jamais toucher state.board ni le
+// réseau (qui restent ABSOLUS). vueCase est une involution : la même formule sert à
+// convertir pixel-affiché→case-absolue et case-absolue→pixel-affiché.
+// Case ABSOLUE (index de state.board) depuis un pixel écran cliqué.
+function caseDepuisPixel(x, y) {
+  const cell = pixelVersCase(x, y);
+  return cell ? vueCase(state, cell.r, cell.c) : null;
+}
+// Centre pixel AFFICHÉ d'une case absolue (anim/popups suivent la vue retournée).
+function centreVue(r, c) {
+  const v = vueCase(state, r, c);
+  return cellCenter(v.r, v.c);
+}
+
+function menuState() {
+  return {
+    phase: 'menu',
+    mode: null,
+    ai: null,
+    board: null,
+    turn: null,
+    winner: null,
+    // Champs requis par update() (filter popups/flashes) et par le reste du
+    // code : manquants en v1, ils faisaient crasher la boucle de rendu dès la
+    // première frame et le menu restait vide (rapport cycle 1 v0).
+    selected: null,
+    legalMoves: [],
+    panelPiece: null,
+    ruTargets: [],
+    chain: null,
+    anim: null,
+    popups: [],
+    flashes: [],
+    buzz: 0,
+    ecus: [0, 0],
+    replay: null,
+    _replayTimer: null,
+    _replayList: [],
+    _hasReplays: false,
+    menu: { difficulty: null,
+             // Variantes locales (GDD §7.2 v3) : TROIS axes orthogonaux combinés
+             // librement (3 économie × 2 combat × 2 taille = 12). Phase A.5 v2
+             // Phase 3 ajoute l'axe TAILLE (std 8×8 / l15 8×15) avec silent
+             // fallback std côté engine pour modes hors scope hot-seat (§7.2).
+             // Le toggle « showVariant » déplie l'accordéon au menu d'accueil.
+             showVariant: false,
+             economie: 'standard',
+             combat: 'standard',
+             taille: DEFAULT_TAILLE,   // 'std' par défaut (legacy MVP v2 byte-équivalent)
+           },
+    ui: { buttons: [] },
+  };
+}
+
+function commencerPartie(mode, difficultyOrOptions) {
+  if (mode === 'pvw') {
+    // Mode PvP en ligne (spec-pvp-online). difficultyOrOptions = { side, matchId, oppPseudo, oppTrophies, cadence, variant }.
+    const opts = difficultyOrOptions || {};
+    const tempsInitial = (opts.cadence | 0) || PVW_TEMPS_INITIAL;
+    // Variante (GDD §7.2 v3.1) : uniquement les parties PRIVÉES (« Jouer avec un ami »)
+    // — le créateur impose, le rejoignant hérite via pvp_join_code, la revanche la copie.
+    // La file publique passe toujours DEFAULT_VARIANT (online.js force 'pvp_standard').
+    // Les DEUX clients reçoivent le même id serveur → économies identiques → hash §5.4 OK.
+    // Phase A.5 v2 Phase 3 : taille du plateau en ligne. PUBLIC STANDARD-ONLY
+    // (GDD §7.2 strict file publique = 8×8 pour le Elo) ; PRIVÉ accepte la taille
+    // sélectionnée par le créateur (cf. schemas `pvp_create_private` size param).
+    // Le lockstep online FORCE côté serveur : cross-taille hash discordant →
+    // match voided (§3.4 dégradation gracieuse). Pour l'instant Phase 3 : on
+    // passe opts.taille si fourni (privé), sinon std (public).
+    const tailleOnline = opts.taille || DEFAULT_TAILLE;
+    state = creerEtat({ mode: 'pvw', difficulty: 1, variantId: opts.variant || DEFAULT_VARIANT, taille: tailleOnline });
+    state.pvw = {
+      side: opts.side != null ? opts.side : 0,   // 0 = Bleu = trait, 1 = Corail
+      matchId: opts.matchId || null,
+      oppPseudo: opts.oppPseudo || 'Adversaire',
+      oppTrophies: opts.oppTrophies || 0,
+      // --- Horloge (§6) : cadence choisie, sans incrément (v3.1) ---      cadence: tempsInitial,          // temps initial par joueur (s) — sert à « Nouvelle partie » (même cadence)
+          variant: state.variant.id,      // variante effective (privé) — affichage HUD/fin de partie
+          taille: state.taille,           // Phase A.5 v2 : taille plateau miroir du state.taille (lockstep cross-client)
+      clocks: [tempsInitial, tempsInitial], // secondes restantes par camp
+      activeClock: 0,                 // horloge qui tourne (side 0 a le trait)
+      clockT0: performance.now(),     // instant de départ de l'horloge active
+      clockDisplay: [tempsInitial, tempsInitial], // valeurs live pour le rendu
+      // --- Lockstep ---
+      applyingRemote: false,          // true pendant l'application d'une action réseau (suppression d'émission)
+      _pendingHash: null,             // hash local capté au point d'émission (vérif §5.4)
+      _lastTurn: 0,                   // suivi de bascule de tour pour l'horloge
+      desync: false,                  // hash discordant détecté (§3.4)
+      ended: false,                   // partie terminée (fige horloge + file)
+      endReason: null,                // 'time' | 'resign' | 'abandon' | null (capture du roi)
+      draw: false,                    // départage nul (§6.3)
+      // --- CYCLE W3 : robustesse ---
+      oppDisconnected: false,         // fenêtre de reconnexion 30 s ouverte (§7.2)
+      oppDcT0: 0,                     // instant d'ouverture de la fenêtre (performance.now)
+      _gapT0: 0,                      // instant de détection d'un trou de seq (resync si persistant)
+      voided: false,                  // match annulé (désync confirmée) — aucun trophée (§3.4)
+      rematch: null,                  // { offeredByMe, offeredByOpp, declined } — revanche (§9.4)
+    };
+    initReplay(state);
+    startPlaying();                   // online.js : passage en partie, remise seq/inbox à 0
+    return;
+  }
+  // Variantes locales (GDD §7.2) : variantePourMode force le fallback 'pvp_standard'
+  // pour TOUT mode hors 'pvp' (= PvAI, spectateur ; le PvP en ligne PRIVÉ passe par la
+  // branche pvw ci-dessus avec opts.variant, jamais par ici — v3.1) —
+  // journalise un warning si l'utilisateur a sélectionné une variante (qui ne
+  // s'appliquera donc pas). La sélection reste conservée en state.menu.
+  const variantId = variantePourMode(mode, (difficultyOrOptions && difficultyOrOptions.variantId) || DEFAULT_VARIANT);
+  // Phase A.5 v2 Phase 3 : plumb taille du plateau depuis state.menu.taille.
+  // [00:10] Élargit le scope : l15 désormais autorisé pour 'pvp' (hot-seat), 'pvai'
+  // (Ordinateur) et 'spectator'. Le scope 'pvw' (PvP en ligne) est géré séparément
+  // dans la branche pvw ci-dessus (opts.taille du serveur : public = std forcé,
+  // private = taille imposée par le créateur via createPrivate).
+  // Modes locaux : on prend state.menu.taille directement.
+  const tailleInput = state.menu && state.menu.taille;
+  const tailleEffective = (mode === 'pvp' || mode === 'pvai' || mode === 'spectator')
+    ? (tailleInput || DEFAULT_TAILLE)
+    : DEFAULT_TAILLE;
+  state = creerEtat({ mode, difficulty: (difficultyOrOptions && difficultyOrOptions.difficulty) || 1, variantId, taille: tailleEffective });
+  initReplay(state);
+  if (mode === 'spectator') planifierCoupIA();
+}
+
+function retourMenu() {
+  // Nettoie le timer replay si on quitte pendant une lecture.
+  if (state._replayTimer) { clearTimeout(state._replayTimer); state._replayTimer = null; }
+  // Nettoie le matchmaking en cours (canal Realtime, timers, Presence).
+  if (state.phase === 'matchmaking' || state.mode === 'pvw') onlineLeave();
+  state = menuState();
+}
+
+// ---------- Mode Replay (lecture d'une partie enregistrée) ----------
+
+const REPLAY_SPEEDS = [0, 1200, 600, 200]; // index 0 inutilisé, 1=lent, 2=normal, 3=rapide
+
+function fromAlgebraic(s) {
+  return { r: 8 - parseInt(s[1]), c: s.charCodeAt(0) - 97 };
+}
+
+function commencerReplay(replayData) {
+  state = {
+    phase: 'replay',
+    mode: 'replay',
+    board: creerPlateau(), // standard initial position
+    turn: 0,
+    ecus: [0, 0],
+    winner: null,
+    ai: null,
+    selected: null,
+    legalMoves: [],
+    panelPiece: null,
+    ruTargets: [],
+    chain: null,
+    anim: null,
+    popups: [],
+    flashes: [],
+    buzz: 0,
+    replay: null,
+    replayData,
+    replayIndex: -1,
+    replayPlaying: true,
+    replaySpeed: 2,
+    _replayTimer: null,
+    menu: null,
+    ui: { buttons: [] },
+  };
+  avancerReplay();
+}
+
+function avancerReplay() {
+  if (state.phase !== 'replay' || !state.replayPlaying) return;
+  const data = state.replayData;
+  state.replayIndex++;
+  if (state.replayIndex >= data.events.length) {
+    // Fin du replay.
+    state.replayPlaying = false;
+    return;
+  }
+  const e = data.events[state.replayIndex];
+  executerEvenementReplay(e);
+  // Planifier le prochain événement.
+  const delay = REPLAY_SPEEDS[state.replaySpeed] || 600;
+  clearTimeout(state._replayTimer);
+  state._replayTimer = setTimeout(() => avancerReplay(), delay);
+}
+
+function executerEvenementReplay(e) {
+  if (e.type === 'move') {
+    const from = fromAlgebraic(e.from);
+    const to = fromAlgebraic(e.to);
+    const piece = state.board[from.r][from.c];
+    if (!piece) return;
+    // Capture
+    if (e.captured) {
+      state.board[to.r][to.c] = null;
+      state.flashes.push({ r: to.r, c: to.c, t0: performance.now(), color: 'red' });
+    }
+    // Déplacement
+    state.board[from.r][from.c] = null;
+    piece.r = to.r; piece.c = to.c;
+    state.board[to.r][to.c] = piece;
+    // Roque (GDD §5.1.b) : rejoue aussi le déplacement de la tour.
+    if (e.castle) {
+      const rf = fromAlgebraic(e.castle.rookFrom), rt = fromAlgebraic(e.castle.rookTo);
+      const rook = state.board[rf.r][rf.c];
+      if (rook) {
+        state.board[rf.r][rf.c] = null;
+        rook.r = rt.r; rook.c = rt.c;
+        state.board[rt.r][rt.c] = rook;
+      }
+    }
+    // Promotion (GDD §5.1.b) : le pion change de type, améliorations perdues.
+    if (e.promo) {
+      piece.type = e.promo;
+      piece.upgrades = [];
+      piece.shield = false;
+      piece.cooldowns = {};
+      piece._goldT = performance.now();
+    }
+    state.ecus[e.owner] += e.gain != null ? e.gain : (REVENU_PAR_COUP + (e.bonus || 0));
+    // Popup écus — gain total crédité (inclut revenueBase × REVENU_PAR_COUP + bonus × captureMul).
+    const credite = e.gain != null ? e.gain : (REVENU_PAR_COUP + (e.bonus || 0));
+    const { x, y } = centreVue(to.r, to.c);
+    state.popups.push({ text: `+${credite}`, x, y: y - 20, t0: performance.now(), color: '#f6cc54' });
+  } else if (e.type === 'purchase') {
+    const pos = fromAlgebraic(e.pos);
+    const piece = state.board[pos.r][pos.c];
+    if (!piece) return;
+    piece.upgrades.push(e.upgrade);
+    if (['forteresse', 'bouclier', 'monture', 'couronne'].includes(e.upgrade)) piece.shield = true;
+    piece._goldT = performance.now();
+    state.ecus[e.owner] -= e.cost;
+  } else if (e.type === 'power') {
+    // Feedback visuel uniquement (flash cyan sur la pièce si trouvable).
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (p && p.type === e.piece && p.owner === e.owner) {
+          state.flashes.push({ r, c, t0: performance.now(), color: 'cyan' });
+          break;
+        }
+      }
+    }
+  }
+}
+
+// ---------- Fin de partie (roi capturé) ----------
+// Point d'accroche UNIQUE de la feature trophées (spec-online §5.2/§8) : toutes les
+// captures de roi passent par ici. Le moteur d'échecs n'est pas modifié — on ne fait
+// que centraliser la transition vers 'gameover' pour y brancher un seul hook.
+function finPartie(winner) {
+  state.winner = winner;   // 0 | 1 | null (null = nulle au départage, mode pvw §6.3)
+  state.phase = 'gameover';
+  // PvP en ligne : fige l'horloge et la file d'application (§10).
+  if (state.mode === 'pvw' && state.pvw) {
+    state.pvw.ended = true;
+    state.pvw.draw = (winner === null);
+    state.pvw.oppDisconnected = false; // ferme toute fenêtre de reconnexion en cours
+  }
+  // Tutoriel : pas de replay, pas de trophées.
+  if (state.mode !== 'tutorial') {
+    finalizeReplay(state);
+    // updateBook n'a de sens qu'avec un vainqueur (une nulle pvw passe winner=null).
+    if (state.replay && state.replay.events && winner != null) {
+      updateBook(state.replay.events, winner);
+    }
+    // PvP en ligne (CYCLE W3, spec §3.5/§8) : SEULE source de trophées du jeu. Chaque
+    // client rapporte son résultat ; l'Elo K=32 n'est écrit côté serveur que si les deux
+    // rapports concordent (ou abandon constaté). Le PvAI n'écrit RIEN (hookTrophees
+    // débranché) — QA-PVW-18.
+    if (state.mode === 'pvw' && state.pvw) reporterResultatPvP();
+  }
+}
+
+// Rapporte le résultat PvP au serveur et alimente l'écran de fin (delta Elo animé).
+// state.trophy suit le même contrat que l'ancien bloc PvAI (pending → résolu) pour
+// réutiliser dessineBlocTrophee. Un abandon/déconnexion constaté (endReason 'abandon')
+// autorise le rapport unilatéral du survivant (§8.3).
+function reporterResultatPvP() {
+  const p = state.pvw;
+  const won = state.winner === p.side;
+  const result = state.winner === null ? 'draw' : (won ? 'win' : 'loss');
+  const opponentAbandoned = (p.endReason === 'abandon' && won);
+  const prev = getAccount().trophies || 0;
+  state.trophy = { pending: true, won, prev, delta: 0, total: prev, t0: performance.now() };
+  onlineReport(result, opponentAbandoned).then((res) => {
+    // total serveur si appliqué ; sinon on garde prev (aucun trophée écrit) + note.
+    const total = (res.applied && res.total != null) ? res.total : prev;
+    state.trophy = {
+      pending: false, won, prev,
+      delta: res.applied ? res.delta : 0,
+      total,
+      applied: res.applied,
+      status: res.status,
+      error: !res.applied,          // dessineBlocTrophee affiche « non sauvegardé »
+      disputed: res.status === 'disputed',
+      t0: performance.now(),
+    };
+    if (total !== prev) getAccount().trophies = total; // reflète le menu au retour
+  });
+}
+
+// hookTrophees (PvAI) SUPPRIMÉ (W3, 2026-07-12) — débranché depuis le 09/07 (décision
+// trophées = PvP public only), son successeur réel est reporterResultatPvP() ci-dessus
+// et la RPC apply_match_result qu'il appelait est révoquée côté Supabase
+// (schema-pvp-w3.sql §3). L'écran de victoire PvAI n'affiche aucun bloc trophée
+// (state.trophy n'est posé qu'en pvw).
+
+// Directions orthogonales (pour Rempart : blindage des alliés adjacents).
+const ORTHO = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+// Phases de ciblage d'un pouvoir actif (clic = choix d'une cible).
+const PHASES_CIBLAGE = ['ruee-target', 'rayon-target', 'decret-target'];
+
+// ---------- Sélection ----------
+// Coups légaux d'une pièce, filtrés par l'étape du tutoriel : les coups
+// verrouillés ne sont même pas affichés — le joueur ne voit que le chemin prévu.
+function coupsAutorises(piece) {
+  const ms = coupsLegaux(state.board, piece);
+  if (state.mode !== 'tutorial') return ms;
+  return ms.filter((m) => tutorielPermet(state, { type: 'move', piece, move: m }));
+}
+
+function selectionner(piece) {
+  state.selected = piece;
+  state.legalMoves = coupsAutorises(piece);
+  state.panelPiece = null;
+  if (!PHASES_CIBLAGE.includes(state.phase)) {
+    state.phase = state.phase === 'gameover' ? 'gameover' : 'play';
+  }
+}
+
+function recalculerCoups() {
+  if (state.selected) state.legalMoves = coupsAutorises(state.selected);
+}
+
+function deselectionner() {
+  if (state.chain) return; // enchaînement en cours : la pièce reste sélectionnée
+  state.selected = null;
+  state.legalMoves = [];
+  state.panelPiece = null;
+  if (PHASES_CIBLAGE.includes(state.phase)) state.phase = 'play';
+  state.ruTargets = [];
+}
+
+// ---------- Économie ----------
+function gagnerEcus(joueur, baseRevenue, captureBonus, atCell) {
+  // Crédite un coup joué : applique le revenu de base (revenueBase 0 ou 1 sur
+  // REVENU_PAR_COUP) ET le bonus de capture multiplié par captureMul (GDD §5.2.b +
+  // §7.2 v3). Plafonné par v.plafond (Infinity « Illimité » géré nativement par
+  // Math.min). Renvoie le montant EFFECTIVEMENT crédité — utilisé par crediterCoup()
+  // pour la fidélité du replay sous variantes non-standards (cf. code-review 12/07).
+  const v = state.variant;
+  const montant = (v.revenueBase > 0 ? baseRevenue : 0) + (captureBonus || 0) * v.captureMul;
+  const avant = state.ecus[joueur];
+  state.ecus[joueur] = Math.min(v.plafond, avant + montant);
+  const gagne = state.ecus[joueur] - avant;
+  if (gagne > 0 && atCell) {
+    const { x, y } = centreVue(atCell.r, atCell.c);
+    state.popups.push({ text: `+${gagne}`, x, y: y - 20, t0: performance.now(), color: '#f6cc54' });
+  }
+  return gagne;
+}
+
+// Crédit complet d'un coup joué = revenu de base + bonus de capture + (éventuelle)
+// injection de stagnation. Renvoie le TOTAL crédité, utilisé par recordMove() et
+// recordPower() pour la fidélité du replay (cf. code-review 12/07 — ne PAS appeler
+// gagnerEcus + stagnationTick séparément puis sommer les deux : ce serait équivalent
+// fonctionnellement avec deux variables intermédiaires ; ici on mutualise pour DRY).
+// wasCapture = le coup a-t-il effectivement capturé (true) ou pas (false) — Information
+// consommée par stagnationTick pour incrémenter / reset / injecter.
+function crediterCoup(joueur, baseRevenue, captureBonus, atCell, wasCapture) {
+  const base = gagnerEcus(joueur, baseRevenue, captureBonus, atCell);
+  const stagn = stagnationTick(state, wasCapture);
+  return base + stagn;
+}
+
+function addFlash(r, c, color) {
+  state.flashes.push({ r, c, t0: performance.now(), color });
+}
+
+// Tutoriel : feedback visuel quand l'étape verrouille l'action cliquée.
+function refusTutoriel(cell) {
+  const { x, y } = centreVue(cell.r, cell.c);
+  state.popups.push({ text: '🔒', x, y: y - 10, t0: performance.now(), color: '#786F60' });
+}
+
+// ---------- Fin de tour ----------
+function finDeTour() {
+  // Tutoriel : pas d'adversaire — le tour revient toujours au joueur (les pièces
+  // corail sont un décor piloté par les étapes). Sans ce garde, le tour passerait
+  // au camp 1 que personne ne contrôle et le tutoriel resterait figé.
+  state.turn = state.mode === 'tutorial' ? 0 : 1 - state.turn;
+  state.chain = null;
+  state.selected = null;
+  state.legalMoves = [];
+  state.panelPiece = null;
+  state.ruTargets = [];
+  state.phase = 'play';
+  // Début du tour du nouveau joueur actif (GDD §5.4).
+  for (const row of state.board) {
+    for (const p of row) {
+      if (p && p.owner === state.turn) {
+        // Rempart : le blindage temporaire expire au prochain tour du joueur (GDD §6 Tour).
+        if (p.rempartGranted) { p.rempartGranted = false; if (p.shield) p.shield = false; }
+        // Décrément des cooldowns.
+        for (const k of Object.keys(p.cooldowns)) {
+          if (p.cooldowns[k] > 0) p.cooldowns[k]--;
+        }
+      }
+    }
+  }
+  // Hook IA : si c'est maintenant le tour du bot, planifier son coup.
+  planifierCoupIA();
+}
+
+// Planifie le coup du bot avec un délai humain : 350 ms en PvAI (lisible mais
+// réactif), 800 ms en spectateur (temps d'observer). Cycle 1 = coup aléatoire.
+// Cycle 2 = 1-ply greedy (niv. 2) / 2-ply α-β (niv. 3).
+function planifierCoupIA() {
+  if (!state.ai) return;
+  if (state.phase !== 'play') return;
+  // Spectateur : les deux camps sont IA — on contourne la vérification de player.
+  if (state.mode === 'pvai' && state.turn !== state.ai.player) return;
+  if (state.ai.thinking) return;
+  state.ai.thinking = true;
+  // Spectateur : l'IA joue pour le camp dont c'est le tour.
+  if (state.mode === 'spectator') state.ai.player = state.turn;
+  // Capture le tour prévu AVANT le setTimeout : si l'utilisateur annule la chaîne
+  // (Space) ou si un gameover survient entre-temps, le turn aura changé et on
+  // abandonnera proprement (anti race condition).
+  const intendedTurn = state.turn;
+  // Chaîne : délai raccourci (200ms) pour garder le rythme, les coups
+  // chaînés font partie du même tour logique.
+  const delay = state.chain ? 200 : (state.mode === 'spectator' ? 800 : 350);
+  setTimeout(() => {
+    // Re-vérifie que c'est toujours le tour de l'IA (spectateur : un gameover,
+    // un Spacebar annulant la chaîne ou un retourMenu() a pu survenir entre-temps).
+    if (state.phase !== 'play' || state.turn !== intendedTurn) {
+      if (state.ai) state.ai.thinking = false;
+      // Si le tour a changé mais qu'on est toujours en jeu (ex. Spacebar en
+      // spectateur), relancer pour ne pas laisser le jeu figé.
+      if (state.phase === 'play') planifierCoupIA();
+      return;
+    }
+    try {
+      let tour;
+      // Chaîne en cours (Double coup 1er move / Second galop 1er move) : l'IA
+      // ne passe pas par iaDecideTour() qui génère TOUS les coups de TOUTES les
+      // pièces. On utilise state.selected et state.legalMoves déjà posés par
+      // resoudreApresCoup() (filtrés pour Second galop : pas de capture).
+      if (state.chain && state.selected && state.legalMoves.length) {
+        const mv = state.legalMoves[Math.floor(Math.random() * state.legalMoves.length)];
+        tour = { mouvement: { piece: state.selected, move: mv }, achats: [], pouvoir: null };
+      } else if (state.chain) {
+        // Chaîne sans coup légal (ex. Second galop sans case non-capture) : abandon.
+        if (state.ai) state.ai.thinking = false;
+        state.chain = null;
+        finDeTour();
+        return;
+      } else {
+        tour = iaDecideTour(state);
+      }
+      if (state.ai) state.ai.thinking = false;
+      if (!tour) { finDeTour(); return; }
+
+      // Achats (SPEC §1.3 v2) : phase pré-mouvement, 0 à N cartes exécutées avant le
+      // coup (chaque achat est débité du solde par acheter(), qui enregistre aussi le
+      // replay via recordPurchase). Les cibles peuvent différer de la pièce déplacée ;
+      // seul panelPiece est requis (acheter() n'utilise pas state.selected).
+      if (tour.achats && tour.achats.length) {
+        for (const a of tour.achats) {
+          state.panelPiece = a.target;
+          acheter(a.upgradeId);
+        }
+        state.panelPiece = null;
+      }
+
+      if (tour.mouvement) {
+        // Promotion (GDD §5.1.b) : l'IA choisit toujours la Dame, sans panneau.
+        if (tour.mouvement.move.promotion) tour.mouvement.move = { ...tour.mouvement.move, promo: 'Q' };
+        // Chaîne : state.selected est déjà la pièce chaînée (posé par
+        // resoudreApresCoup). Évite de rappeler selectionner() qui recalculerait
+        // les coups légaux et écraserait le filtrage Second galop.
+        if (!state.chain) selectionner(tour.mouvement.piece);
+        jouerCoup(tour.mouvement.piece, tour.mouvement.move);
+      } else {
+        finDeTour();
+      }
+    } catch (e) {
+      console.warn('[AI]', e);
+      if (state.ai) state.ai.thinking = false;
+      deselectionner();
+    }
+  }, delay);
+}
+
+// Vrai si le joueur dont c'est le tour est contrôlé par l'IA.
+function estTourIA() {
+  if (!state.ai) return false;
+  if (state.mode === 'spectator') return true;
+  return state.turn === state.ai.player;
+}
+
+// Lorsque l'IA initie une chaîne (Double coup / Second galop), resoudreApresCoup
+// ne passe pas par finDeTour() → planifierCoupIA() doit être appelé manuellement.
+// estTourIA() couvre à la fois le PvAI (tour du bot) et le mode spectateur.
+function resoudreApresCoup(piece, canChain, wasCapture) {
+  // Double coup (dame) : usage unique, rejoue immédiatement, ne consomme pas le tour (GDD §6).
+  // Accepte l'ID alternatif 'sht' (cat A, once=true, même comportement) introduit [20:00].
+  if (piece.type === 'Q' && (piece.upgrades.includes('double-coup') || piece.upgrades.includes('sht')) && !piece.doubleCoupUsed) {
+    if (state.chain && state.chain.piece === piece && state.chain.type === 'double-coup') {
+      // C'était le 2e coup : Double coup consommé.
+      piece.doubleCoupUsed = true;
+      finDeTour();
+      return;
+    }
+    if (canChain) {
+      // 1er coup : la dame rejoue immédiatement.
+      state.chain = { piece, type: 'double-coup' };
+      state.phase = 'play';
+      selectionner(piece);
+      if (estTourIA()) planifierCoupIA();
+      return;
+    }
+  }
+  // Second galop (cavalier) : après un saut SANS capture, enchaîne un 2e saut (jamais une
+  // capture), cooldown 3. Déclinable avec Espace/bouton sans poser le cooldown (GDD §6).
+  if (piece.type === 'N' && piece.upgrades.includes('second')) {
+    if (state.chain && state.chain.piece === piece && state.chain.type === 'second-galop') {
+      // C'était le 2e saut : cooldown posé, le tour est consommé.
+      piece.cooldowns.second = UPGRADES['second'].cooldown;
+      finDeTour();
+      return;
+    }
+    if (canChain && !wasCapture && (piece.cooldowns.second || 0) === 0) {
+      state.chain = { piece, type: 'second-galop' };
+      state.phase = 'play';
+      selectionner(piece);
+      state.legalMoves = state.legalMoves.filter((m) => !m.capture); // 2e saut : jamais de capture
+      if (estTourIA()) planifierCoupIA();
+      return;
+    }
+  }
+  finDeTour();
+}
+
+// ---------- Exécution d'un coup ----------
+function jouerCoup(piece, mv) {
+  const from = { r: piece.r, c: piece.c };
+  const cible = state.board[mv.r][mv.c];
+
+  // Cas blindage : la capture est absorbée, l'attaquant reste sur place (GDD §5.5).
+  if (cible && cible.owner !== piece.owner && cible.shield) {
+    cible.shield = false;
+    addFlash(mv.r, mv.c, 'cyan');
+    // Coup joué sans capture effective : bonus = 0 (la capture a été annulée). Le
+    // revenu de base est appliqué via state.variant.revenueBase (0 en élim. ×2).
+    // Pas de recordMove : l'attaquant reste sur place, or rejouer un event move
+    // déplacerait la pièce sur la case du défenseur (executerEvenementReplay).
+    crediterCoup(state.turn, REVENU_PAR_COUP, 0, from, false);
+    resoudreApresCoup(piece, false, true);
+    return;
+  }
+
+  // Cas Sacrifice (roi armé) : une pièce meurt à sa place, le roi s'évade (GDD §6 Roi).
+  if (cible && cible.owner !== piece.owner && cible.type === 'K' && cible.sacrificeArmed
+      && protegerRoiParSacrifice(cible, { r: mv.r, c: mv.c })) {
+    // Attaque déjouée : pas de bonus de capture. idem blindage (pas de recordMove).
+    crediterCoup(state.turn, REVENU_PAR_COUP, 0, from, false);
+    resoudreApresCoup(piece, false, true);
+    return;
+  }
+
+  let bonus = 0, roiPris = false;
+  if (cible && cible.owner !== piece.owner) {
+    bonus = VALEUR_PIECE[cible.type];
+    if (cible.type === 'K') roiPris = true;
+    state.capturesDep[piece.owner] += valeurDepartage(cible); // départage GDD §8.3 (fix W3)
+    state.board[mv.r][mv.c] = null;
+    addFlash(mv.r, mv.c, 'red');
+  }
+
+  // Déplacement logique immédiat, animation purement cosmétique.
+  state.board[from.r][from.c] = null;
+  piece.r = mv.r; piece.c = mv.c;
+  state.board[mv.r][mv.c] = piece;
+  piece.aBouge = true; // condition du roque (GDD §5.1.b)
+  if (mv.tele) piece.cooldowns.Tele = UPGRADES['Tele'].cooldown; // Téléportation : cooldown 5 (GDD §7)
+
+  // Roque (GDD §5.1.b) : la tour accompagne le roi dans le même coup (repositionnée
+  // instantanément, assumé v1 — le roi porte l'animation de glissement).
+  if (mv.castle) {
+    const rook = state.board[mv.castle.rookFrom.r][mv.castle.rookFrom.c];
+    if (rook && rook.type === 'R' && rook.owner === piece.owner) {
+      state.board[mv.castle.rookFrom.r][mv.castle.rookFrom.c] = null;
+      rook.r = mv.castle.rookTo.r; rook.c = mv.castle.rookTo.c;
+      state.board[rook.r][rook.c] = rook;
+      rook.aBouge = true;
+    }
+  }
+
+  // Promotion (GDD §5.1.b) : le pion devient mv.promo (Q/R/B/N ; Q par défaut) AVANT
+  // le crédit/replay/hash — améliorations, blindage et cooldowns du pion sont PERDUS
+  // (les cartes sont liées au type de pièce, un pion promu est une pièce neuve).
+  if (mv.promotion && piece.type === 'P') {
+    piece.type = ['Q', 'R', 'B', 'N'].includes(mv.promo) ? mv.promo : 'Q';
+    piece.upgrades = [];
+    piece.shield = false;
+    piece.rempartGranted = false;
+    piece.cooldowns = {};
+    piece._goldT = performance.now(); // flash doré : feedback de promotion (GDD §5.1.b)
+  }
+
+  // v.captureMul + injection de stagnation absorbés À L'INTÉRIEUR de crediterCoup
+  // (GDD §5.2.b + §7.2 v3) — délégation garantit que `credite` reflète fidèlement
+  // l'écart de state.ecus (revenu + bonus + éventuel filet), ce que recordMove()
+  // stocke pour la fidélité du replay sous variantes élim.×2.
+  const wasCapture = bonus > 0;
+  const credite = crediterCoup(state.turn, REVENU_PAR_COUP,
+    bonus, { r: mv.r, c: mv.c }, wasCapture);
+  // Enregistrement replay : après crédit des écus et stagnation_tick (état à jour).
+  // bonus = valeur BRUTE de la pièce capturée (le multiplicateur captureMul est déjà
+  // absorbé dans `credite`). recordMove() reporte `credite` pour la fidélité du
+  // replay sous variantes non-standards (GDD §7.2 v3).
+  recordMove(state, piece, from, { r: mv.r, c: mv.c }, cible ? cible.type : null, bonus, mv, credite);
+  // PvP en ligne : diffuse l'action (ou capte le hash si on rejoue l'adversaire).
+  pvwEmitMove(piece, from, { r: mv.r, c: mv.c }, cible ? cible.type : null, bonus, mv);
+
+  demarrerAnim(piece, from, { r: mv.r, c: mv.c }, () => {
+    if (roiPris) { finPartie(state.turn); return; }
+    resoudreApresCoup(piece, true, bonus > 0);
+  });
+}
+
+function demarrerAnim(piece, from, to, onDone) {
+  state.phase = 'animating';
+  state.selected = null;
+  state.legalMoves = [];
+  state.anim = {
+    piece,
+    from: centreVue(from.r, from.c),
+    to: centreVue(to.r, to.c),
+    t0: performance.now(),
+    onDone,
+  };
+}
+
+// ---------- Pouvoirs actifs ----------
+function activerRuee() {
+  const kn = state.selected;
+  // Accepte l'ID alternatif 'cavalerie' (cat A, cd 4) introduit [20:00] — même mécanique.
+  if (!kn || kn.type !== 'N' || !(kn.upgrades.includes('ruee') || kn.upgrades.includes('cavalerie'))) return;
+  if ((kn.cooldowns.ruee || 0) > 0) return;
+  const cibles = ciblesRuee(state.board, kn);
+  if (!cibles.length) return; // rien à charger
+  state.ruTargets = cibles;
+  state.phase = 'ruee-target';
+}
+
+function executerRuee(cell) {
+  const kn = state.selected;
+  const cible = state.board[cell.r][cell.c];
+  if (!cible) { state.phase = 'play'; state.ruTargets = []; return; }
+  kn.cooldowns.ruee = UPGRADES['ruee'].cooldown;
+
+  if (cible.shield) {
+    cible.shield = false;
+    addFlash(cell.r, cell.c, 'cyan');
+    // Capture annulée : pas de bonus. Le revenu de base passe par v.revenueBase.
+    const credite = crediterCoup(state.turn, REVENU_PAR_COUP, 0, cell, false);
+    recordPower(state, kn, 'Ruée', cell, credite);
+    pvwEmitPower(kn, 'Ruée', cell);
+    state.ruTargets = [];
+    finDeTour();
+    return;
+  }
+  if (cible.type === 'K' && cible.sacrificeArmed && protegerRoiParSacrifice(cible, cell)) {
+    // Capture déjouée par Sacrifice du roi : pas de bonus de capture.
+    const credite = crediterCoup(state.turn, REVENU_PAR_COUP, 0, cell, false);
+    recordPower(state, kn, 'Ruée', cell, credite);
+    pvwEmitPower(kn, 'Ruée', cell);
+    state.ruTargets = [];
+    finDeTour();
+    return;
+  }
+  const roiPris = cible.type === 'K';
+  const bonus = VALEUR_PIECE[cible.type];
+  state.capturesDep[state.turn] += valeurDepartage(cible); // départage GDD §8.3 (fix W3)
+  state.board[cell.r][cell.c] = null; // le cavalier ne bouge pas
+  addFlash(cell.r, cell.c, 'red');
+  const credite = crediterCoup(state.turn, REVENU_PAR_COUP, bonus, cell, true);
+  recordPower(state, kn, 'Ruée', cell, credite);
+  pvwEmitPower(kn, 'Ruée', cell);
+  state.ruTargets = [];
+  if (roiPris) { finPartie(state.turn); return; }
+  finDeTour(); // Ruée consomme le tour
+}
+
+// Rayon sacré (fou) : capture à distance la 1re pièce adverse sur une diagonale,
+// sans bouger. Même modèle que la Ruée du cavalier (GDD §6).
+function activerRayon() {
+  const fou = state.selected;
+  // Accepte l'ID alternatif 'hypnose' (cat A, cd 4) introduit [20:00] — même mécanique.
+  if (!fou || fou.type !== 'B' || !(fou.upgrades.includes('Rayon') || fou.upgrades.includes('hypnose'))) return;
+  if ((fou.cooldowns.Rayon || 0) > 0) return;
+  const cibles = ciblesRayon(state.board, fou);
+  if (!cibles.length) return; // rien à viser
+  state.ruTargets = cibles;
+  state.phase = 'rayon-target';
+}
+
+function executerRayon(cell) {
+  const fou = state.selected;
+  const cible = state.board[cell.r][cell.c];
+  if (!cible) { state.phase = 'play'; state.ruTargets = []; return; }
+  fou.cooldowns.Rayon = UPGRADES['Rayon'].cooldown;
+
+  if (cible.shield) {
+    cible.shield = false;
+    addFlash(cell.r, cell.c, 'cyan');
+    // Capture annulée : pas de bonus. Revenu de base via v.revenueBase (0 en élim.×2).
+    const credite = crediterCoup(state.turn, REVENU_PAR_COUP, 0, cell, false);
+    recordPower(state, fou, 'Rayon sacré', cell, credite);
+    pvwEmitPower(fou, 'Rayon sacré', cell);
+    state.ruTargets = [];
+    finDeTour();
+    return;
+  }
+  if (cible.type === 'K' && cible.sacrificeArmed && protegerRoiParSacrifice(cible, cell)) {
+    // Capture déjouée par Sacrifice du roi : pas de bonus.
+    const credite = crediterCoup(state.turn, REVENU_PAR_COUP, 0, cell, false);
+    recordPower(state, fou, 'Rayon sacré', cell, credite);
+    pvwEmitPower(fou, 'Rayon sacré', cell);
+    state.ruTargets = [];
+    finDeTour();
+    return;
+  }
+  const roiPris = cible.type === 'K';
+  const bonus = VALEUR_PIECE[cible.type];
+  state.capturesDep[state.turn] += valeurDepartage(cible); // départage GDD §8.3 (fix W3)
+  state.board[cell.r][cell.c] = null; // le fou ne bouge pas
+  addFlash(cell.r, cell.c, 'red');
+  const credite = crediterCoup(state.turn, REVENU_PAR_COUP, bonus, cell, true); // capture effective → reset stagnation
+  recordPower(state, fou, 'Rayon sacré', cell, credite);
+  pvwEmitPower(fou, 'Rayon sacré', cell);
+  state.ruTargets = [];
+  if (roiPris) { finPartie(state.turn); return; }
+  finDeTour(); // Rayon consomme le tour
+}
+
+// Rempart (tour) : la tour et ses alliés orthogonalement adjacents sont blindés
+// jusqu'au prochain tour du joueur (GDD §6). Actif, cooldown 5, consomme le tour.
+function activerRempart() {
+  const tour = state.selected;
+  // Accepte l'ID alternatif 'echange' (cat A, cd 5) introduit [20:00] — même mécanique.
+  if (!tour || tour.type !== 'R' || !(tour.upgrades.includes('rempart') || tour.upgrades.includes('echange'))) return;
+  if ((tour.cooldowns.rempart || 0) > 0) return;
+  tour.cooldowns.rempart = UPGRADES['rempart'].cooldown;
+  const proteges = [tour];
+  for (const [dr, dc] of ORTHO) {
+    const q = caseAt(state.board, tour.r + dr, tour.c + dc);
+    if (q && q.owner === tour.owner) proteges.push(q);
+  }
+  for (const q of proteges) {
+    // On ne pose un blindage temporaire que si la pièce n'en a pas déjà un (ex. Forteresse),
+    // pour ne pas effacer un blindage permanent à l'expiration.
+    if (!q.shield) { q.shield = true; q.rempartGranted = true; }
+    addFlash(q.r, q.c, 'cyan');
+  }
+  tour._goldT = performance.now();
+  recordPower(state, tour, 'Rempart');
+  pvwEmitPower(tour, 'Rempart', null);
+  finDeTour(); // Rempart consomme le tour
+}
+
+// Sacrifice (roi) : arme le roi. À la prochaine capture, une pièce meurt à sa place et le
+// roi s'évade (GDD §6). Actif, cooldown 6, l'armement consomme le tour.
+function activerSacrifice() {
+  const roi = state.selected;
+  if (!roi || roi.type !== 'K' || !roi.upgrades.includes('sacrifice')) return;
+  if ((roi.cooldowns.sacrifice || 0) > 0 || roi.sacrificeArmed) return;
+  roi.sacrificeArmed = true;
+  roi.cooldowns.sacrifice = UPGRADES['sacrifice'].cooldown;
+  roi._goldT = performance.now();
+  recordPower(state, roi, 'Sacrifice');
+  pvwEmitPower(roi, 'Sacrifice', null);
+  finDeTour(); // l'armement consomme le tour
+}
+
+function dist(a, b) { return Math.max(Math.abs(a.r - b.r), Math.abs(a.c - b.c)); }
+
+// Cherche la pièce à sacrifier : un pion en priorité (valeur la plus basse), sinon la
+// pièce de valeur juste supérieure (GDD §6). Départage : la plus proche du roi.
+function trouverVictimeSacrifice(roi) {
+  let best = null;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const q = state.board[r][c];
+      if (!q || q.owner !== roi.owner || q.type === 'K') continue;
+      const v = VALEUR_PIECE[q.type];
+      const d = dist({ r, c }, roi);
+      if (!best || v < best.v || (v === best.v && d < best.d)) best = { r, c, v, d };
+    }
+  }
+  return best;
+}
+
+// Applique la protection du Sacrifice. Renvoie true si le roi a survécu.
+function protegerRoiParSacrifice(roi, attaquantCell) {
+  if (!roi.sacrificeArmed) return false;
+  // Case d'évasion : une case adjacente libre. Sans évasion → le roi meurt (GDD).
+  const evasions = [];
+  for (const [dr, dc] of DIRS8) {
+    const r = roi.r + dr, c = roi.c + dc;
+    if (inB(state.board, r, c) && state.board[r][c] === null) evasions.push({ r, c });
+  }
+  if (!evasions.length) return false;
+  const victime = trouverVictimeSacrifice(roi);
+  if (!victime) return false; // aucune pièce à sacrifier → le roi meurt
+  roi.sacrificeArmed = false;
+  // La victime meurt « à la place du roi » — matériel détruit par l'attaquant :
+  // crédité au départage comme une capture (équivalent de l'ancienne formule
+  // 39 − survivants, qui comptait toute disparition).
+  state.capturesDep[state.turn] += valeurDepartage(victime);
+  state.board[victime.r][victime.c] = null;
+  addFlash(victime.r, victime.c, 'red');
+  // Le roi s'évade sur la case adjacente libre la plus éloignée de l'attaquant.
+  const dest = evasions.reduce((b, e) => (dist(e, attaquantCell) > dist(b, attaquantCell) ? e : b), evasions[0]);
+  state.board[roi.r][roi.c] = null;
+  roi.r = dest.r; roi.c = dest.c;
+  state.board[dest.r][dest.c] = roi;
+  addFlash(dest.r, dest.c, 'cyan');
+  return true;
+}
+
+// Décret (roi) : échange la position du roi avec une pièce alliée adjacente (GDD §6).
+// Usage unique, consomme le tour.
+function activerDecret() {
+  const roi = state.selected;
+  if (!roi || roi.type !== 'K' || !roi.upgrades.includes('decret') || roi.decretUsed) return;
+  const cibles = ciblesDecret(state.board, roi);
+  if (!cibles.length) return;
+  state.ruTargets = cibles;
+  state.phase = 'decret-target';
+}
+
+function ciblesDecret(board, roi) {
+  const t = [];
+  for (const [dr, dc] of DIRS8) {
+    const r = roi.r + dr, c = roi.c + dc;
+    const q = caseAt(board, r, c);
+    if (q && q.owner === roi.owner && q.type !== 'K') t.push({ r, c });
+  }
+  return t;
+}
+
+function executerDecret(cell) {
+  const roi = state.selected;
+  const allie = state.board[cell.r][cell.c];
+  if (!roi || !allie) { state.phase = 'play'; state.ruTargets = []; return; }
+  const rk = roi.r, ck = roi.c, ar = allie.r, ac = allie.c;
+  roi.r = ar; roi.c = ac;
+  allie.r = rk; allie.c = ck;
+  state.board[ar][ac] = roi;
+  state.board[rk][ck] = allie;
+  roi.aBouge = true;   // l'échange compte comme mouvement : plus de roque (GDD §5.1.b)
+  allie.aBouge = true;
+  roi.decretUsed = true;
+  roi._goldT = performance.now();
+  state.ruTargets = [];
+  recordPower(state, roi, 'Décret', cell);
+  pvwEmitPower(roi, 'Décret', cell);
+  finDeTour(); // Décret consomme le tour
+}
+
+// ---------- Achat ----------
+function ouvrirPanneau(piece) {
+  state.selected = piece;
+  state.legalMoves = coupsLegaux(state.board, piece);
+  state.panelPiece = piece;
+  if (state.phase !== 'gameover' && state.phase !== 'animating') state.phase = 'play';
+}
+
+function acheter(id) {
+  const p = state.panelPiece;
+  if (!p) return;
+  const u = UPGRADES[id];
+  if (!u || u.piece !== p.type) return;
+  if (p.upgrades.includes(id) || p.upgrades.length >= MAX_UPGRADES_PAR_PIECE
+      || state.ecus[state.turn] < u.cout) {
+    state.buzz = performance.now(); state.buzzId = id; // refus : tremblement
+    return;
+  }
+  state.ecus[state.turn] -= u.cout;
+  p.upgrades.push(id);
+  // Cartes « absorbe la 1re capture » : blindage posé dès l'achat (GDD §5.5).
+  if (['forteresse', 'bouclier', 'monture', 'couronne'].includes(id)) p.shield = true;
+  p._goldT = performance.now();             // flash doré
+  recalculerCoups();                         // Marche arrière / Pas de côté ajoutent des coups
+  recordPurchase(state, p, id, u.cout);      // replay : après achat réussi
+  pvwEmitPurchase(p, id);                     // PvP en ligne : diffusion / capture du hash
+}
+
+// ---------- Matchmaking PvP en ligne ----------
+
+// EN LIGNE ouvre d'abord un LOBBY 100 % local : aucun appel réseau tant qu'on y reste
+// (pas de findMatch/createPrivate/RPC). Le joueur choisit ensuite recherche publique,
+// partie privée ou rejoindre par code — chacun déclenche le réseau à ce moment-là.
+function entrerMatchmaking() {
+  state.phase = 'matchmaking';
+  state.matchmaking = {
+    mode: 'lobby',
+    oppPseudo: null,
+    oppTrophies: null,
+    privateCode: null,
+    error: null,
+    band: 100,
+    searchStart: Date.now(),
+    // Cadence (spec §6) : choisie sur l'écran 'cadence' AVANT tout réseau. pendingAction
+    // mémorise le bouton d'origine ('search' | 'private') pour router après le choix.
+    cadence: null,
+    pendingAction: null,
+  };
+  state._pvwStarting = false;
+  cablerCallbacksOnline();
+  // Pas de initOnline/findMatch ici : le lobby ne touche pas au serveur.
+}
+
+// Inscription dans la file publique (findMatch). SEUL point qui inscrit dans la file —
+// factorisé pour être partagé par le bouton « Lancer une recherche » du lobby ET le
+// bouton « Nouvelle partie » de l'écran de fin. Suppose l'état déjà en phase matchmaking.
+function lancerRecherchePublique() {
+  if (state.phase !== 'matchmaking') return;
+  // [23:45] Guard supabase client : si le SDK n'est pas chargé (CDN offline ou pas
+  // initialisé), affiche un message visible au lieu de silently no-op.
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    console.error('[matchmaking] lancerRecherchePublique: getSupabaseClient() == null (CDN offline ou import KO?)');
+    state.matchmaking.error = 'Service en ligne indisponible. Réessayez dans quelques secondes.';
+    return;
+  }
+  state.matchmaking.mode = 'search';
+  state.matchmaking.searchStart = Date.now();
+  state.matchmaking.error = null;
+  initOnline(supabase);
+  // [00:10] Passe la taille du plateau sélectionnée au menu (user peut choisir l15
+  // pour l'EN LIGNE aussi, ne reste plus limité à std côté file publique).
+  findMatch(
+    state.matchmaking.cadence || PVW_TEMPS_INITIAL,
+    variantIdFromMenu(state),
+    state.menu && state.menu.taille ? state.menu.taille : DEFAULT_TAILLE
+  );
+}
+
+// Création d'une partie privée (après le choix de cadence). Extrait de l'ancien case
+// 'createPrivateMatch' — le bouton du lobby ouvre désormais l'écran cadence d'abord.
+function lancerPartiePrivee() {
+  if (state.phase !== 'matchmaking') return;
+  // initOnline explicite : le lobby ne l'a pas fait (aucun réseau au lobby).
+  initOnline(getSupabaseClient());
+  state.matchmaking.mode = 'private_create';
+  state.matchmaking.error = null;
+  state.matchmaking.privateCode = null;
+  // Variante (GDD §7.2 v3.1) : le créateur impose celle sélectionnée sur l'écran
+  // cadence (chips ÉCONOMIE/COMBAT, mémorisées en state.menu comme au menu local).
+  // Taille (GDD §7.2 v3.5) : créateur impose l15 si sélectionné — ce delta.
+  createPrivate(
+    state.matchmaking.cadence || PVW_TEMPS_INITIAL,
+    variantIdFromMenu(state),
+    state.menu && state.menu.taille ? state.menu.taille : DEFAULT_TAILLE
+  ).then((code) => {
+    if (code) state.matchmaking.privateCode = code;
+  });
+}
+
+// « 🔍 Nouvelle partie » depuis l'écran de fin PvP : enchaîner une nouvelle recherche
+// publique sans repasser par le menu ni le lobby. Quitte proprement le match courant
+// (désabonnement canal Realtime via onlineLeave, ce qui abandonne aussi toute proposition
+// de revanche locale — l'adversaire qui en avait proposé une verra son timeout 20 s
+// expirer, acceptable §9.4), repart d'un état propre, puis réutilise EXACTEMENT le même
+// chemin que le bouton « Lancer une recherche » du lobby (aucune logique dupliquée).
+function nouvellePartieEnLigne() {
+  const p = state.pvw;
+  // Garde-fou : une revanche en cours de lancement a déjà démarré un nouveau match —
+  // ne pas provoquer un second départ concurrent.
+  if (p && p.rematch && p.rematch.launching) return;
+  const cadence = (p && p.cadence) || PVW_TEMPS_INITIAL; // on rejoue dans la MÊME cadence (pas de re-choix)
+  onlineLeave();          // ferme le canal du match terminé + reset interne online.js
+  state = menuState();    // efface state.pvw / state.mode='pvw' → repart propre
+  entrerMatchmaking();    // phase matchmaking + recâblage des callbacks online
+  state.matchmaking.cadence = cadence;
+  lancerRecherchePublique();
+}
+
+function commencerPartiePvP() {
+  if (state._pvwStarting) return; // anti-double appel
+  state._pvwStarting = true;
+  const ol = getOnline();
+  commencerPartie('pvw', {
+    side: ol.side,
+    matchId: ol.matchId,
+    oppPseudo: ol.oppPseudo,
+    oppTrophies: ol.oppTrophies,
+    cadence: ol.cadence,   // choisie côté file publique / créateur privé, confirmée serveur
+    variant: ol.variant,   // privé : imposée par le créateur (v3.1) ; public : 'pvp_standard'
+    // Phase A.5 v2 Phase 5.A — taille plateau imposée par le serveur (privé : créateur ;
+    // public : std confirmé par online.js pollMatchmaking ou joinByCode). Mirror dans
+    // state.pvw.taille côté main.js. Sans ça, l15 en PvP en ligne retombait en std 8x8.
+    taille: ol.taille,
+  });
+}
+
+// ---------- PvP en ligne — synchro des coups + horloge (CYCLE W2, spec §5/§6) ----------
+// Le réseau remplace le bot : les actions locales sont diffusées aux points où le replay
+// enregistre déjà (recordMove/recordPurchase/recordPower), et les actions adverses sont
+// rejouées via EXACTEMENT les mêmes fonctions moteur (jouerCoup/acheter/executer*) — miroir
+// de planifierCoupIA. Aucune modification de rules.js/board.js.
+
+function toAlg(r, c) { return 'abcdefgh'[c] + (8 - r); }
+
+// Hash d'état 32 bits (FNV-1a) sur une chaîne canonique (§5.4). N'utilise JAMAIS piece.id
+// (le compteur PROCHAIN_ID de board.js diverge entre clients ayant joué un nombre de parties
+// différent) : la chaîne en cours est identifiée par position+type, déterministe cross-client.
+// Exclut tout le cosmétique (anim/popups/flashes/_goldT/ui).
+function hashState(s) {
+  let str = '';
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = s.board[r][c];
+      if (!p) { str += '.'; continue; }
+      const cds = Object.keys(p.cooldowns).filter((k) => p.cooldowns[k] > 0)
+        .sort().map((k) => k + p.cooldowns[k]).join(',');
+      const up = [...p.upgrades].sort().join(',');
+      str += `${p.owner}${p.type}${p.shield ? 1 : 0}${p.sacrificeArmed ? 1 : 0}`
+        + `${p.decretUsed ? 1 : 0}${p.doubleCoupUsed ? 1 : 0}${p.rempartGranted ? 1 : 0}`
+        + `${p.aBouge ? 1 : 0}` // condition du roque (GDD §5.1.b) — divergence = coups légaux divergents
+        + `[${cds}][${up}]`;
+    }
+  }
+  str += `|${s.ecus[0]}|${s.ecus[1]}|${s.turn}|`;
+  str += s.chain ? `${s.chain.piece.r}${s.chain.piece.c}${s.chain.type}` : '-';
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16);
+}
+
+// --- Horloge (§6) : décompte local réconcilié par message (§6.2) ---
+function pvwClockRunning() {
+  return state.mode === 'pvw' && state.pvw && !state.pvw.ended
+    && (state.phase === 'play' || state.phase === 'animating' || state.phase === 'promotion'
+        || PHASES_CIBLAGE.includes(state.phase));
+}
+function pvwLiveClock(side) {
+  const p = state.pvw;
+  if (!p) return 0;
+  if (side === p.activeClock && pvwClockRunning()) {
+    return Math.max(0, p.clocks[side] - (performance.now() - p.clockT0) / 1000);
+  }
+  return Math.max(0, p.clocks[side]);
+}
+function pvwCommitActive() {
+  const p = state.pvw;
+  if (!p) return;
+  const el = (performance.now() - p.clockT0) / 1000;
+  p.clocks[p.activeClock] = Math.max(0, p.clocks[p.activeClock] - el);
+  p.clockT0 = performance.now();
+}
+
+// --- Émission des actions locales (§5.3) ---
+// pvwHook calcule le hash au POINT D'ÉMISSION (juste après record*, avant finDeTour) — le
+// même point de cycle de vie côté récepteur, ce qui garantit un hash comparable pour tous les
+// kinds. En origine locale on diffuse ; en application distante on stocke le hash pour vérif.
+function pvwHook(evt) {
+  if (state.mode !== 'pvw' || !state.pvw) return;
+  const h = hashState(state);
+  if (state.pvw.applyingRemote) { state.pvw._pendingHash = h; return; }
+  evt.hash = h;
+  evt.clock = { 0: pvwLiveClock(0), 1: pvwLiveClock(1) };
+  sendAction(evt);
+}
+function pvwEmitMove(piece, from, to, capturedType, bonus, mv) {
+  if (state.mode !== 'pvw' || !state.pvw) return;
+  pvwHook({
+    kind: 'move', owner: piece.owner, piece: piece.type,
+    from: toAlg(from.r, from.c), to: toAlg(to.r, to.c),
+    captured: capturedType || null, bonus: bonus || 0, chain: !!state.chain,
+    // Promotion (GDD §5.1.b) : au point d'émission piece.type EST déjà le type promu.
+    promo: mv && mv.promotion ? piece.type : null,
+  });
+}
+function pvwEmitPurchase(piece, id) {
+  if (state.mode !== 'pvw' || !state.pvw) return;
+  pvwHook({ kind: 'purchase', owner: piece.owner, upgrade: id, pos: toAlg(piece.r, piece.c) });
+}
+function pvwEmitPower(piece, powerType, cell) {
+  if (state.mode !== 'pvw' || !state.pvw) return;
+  pvwHook({
+    kind: 'power', owner: piece.owner, piece: piece.type, power: powerType,
+    pos: toAlg(piece.r, piece.c), target: cell ? toAlg(cell.r, cell.c) : null,
+  });
+}
+// Déclin d'enchaînement (§5.5) : le récepteur obtient le même state.chain mais ne peut pas
+// deviner un déclin — on le lui signale explicitement. Hash capté avant la résolution.
+function pvwEmitEndChain() {
+  if (state.mode !== 'pvw' || !state.pvw) return;
+  const h = hashState(state);
+  if (state.pvw.applyingRemote) { state.pvw._pendingHash = h; return; }
+  sendAction({ kind: 'endchain', hash: h, clock: { 0: pvwLiveClock(0), 1: pvwLiveClock(1) } });
+}
+
+// --- Application des actions adverses (§3.2, miroir de planifierCoupIA) ---
+function pvwVerifierHash(msg) {
+  const p = state.pvw;
+  if (msg.hash && p._pendingHash && msg.hash !== p._pendingHash) {
+    console.error('[online] desync — hash discordant', { recu: msg.hash, local: p._pendingHash, seq: msg.seq, kind: msg.kind });
+    p.desync = true;
+  }
+}
+function applyRemoteAction(msg) {
+  const p = state.pvw;
+  if (!p || p.ended) return;
+  const opp = 1 - p.side;
+  // Réconciliation d'horloge : l'émetteur fait autorité sur SA propre horloge (§6.2).
+  if (msg.clock) {
+    p.clocks[opp] = msg.clock[opp];
+    if (p.activeClock === opp) p.clockT0 = performance.now();
+  }
+  // Contrôle de tour (§3.2 étape 2).
+  if (state.turn !== opp) { console.warn('[online] action hors-tour rejetée', msg); return; }
+  // Contrôle d'appartenance (§3.2 étape 1).
+  if (msg.owner != null && msg.owner !== opp) { console.warn('[online] owner illégal rejeté', msg); return; }
+
+  p.applyingRemote = true;
+  p._pendingHash = null;
+  try {
+    if (msg.kind === 'move') {
+      const from = fromAlgebraic(msg.from), to = fromAlgebraic(msg.to);
+      const piece = state.board[from.r][from.c];
+      if (!piece || piece.owner !== opp) { console.warn('[online] illegal — pièce introuvable', msg); p.applyingRemote = false; return; }
+      // Contrôle de légalité (§3.2 étape 3) via le propre rules.js du récepteur.
+      const cands = state.chain ? state.legalMoves : coupsLegaux(state.board, piece);
+      let mv = cands.find((m) => m.r === to.r && m.c === to.c);
+      if (!mv) { console.warn('[online] illegal — coup non légal rejeté', msg); p.applyingRemote = false; return; }
+      // Promotion (GDD §5.1.b) : le choix de l'émetteur voyage dans msg.promo ;
+      // revalidé ici (Q/R/B/N), Dame par défaut si absent/invalide.
+      if (mv.promotion) mv = { ...mv, promo: ['Q', 'R', 'B', 'N'].includes(msg.promo) ? msg.promo : 'Q' };
+      if (!state.chain) selectionner(piece);
+      jouerCoup(piece, mv); // le hash est capté dans pvwHook (avant l'anim/finDeTour)
+    } else if (msg.kind === 'purchase') {
+      const pos = fromAlgebraic(msg.pos);
+      const piece = state.board[pos.r][pos.c];
+      if (!piece || piece.owner !== opp) { console.warn('[online] illegal — achat pièce introuvable', msg); p.applyingRemote = false; return; }
+      const before = piece.upgrades.length;
+      state.panelPiece = piece;
+      acheter(msg.upgrade); // acheter() re-valide solde recalculé + catalogue + plafond
+      state.panelPiece = null;
+      if (piece.upgrades.length === before) console.warn('[online] achat refusé par le moteur (illégal)', msg);
+    } else if (msg.kind === 'power') {
+      applyRemotePower(msg, opp);
+    } else if (msg.kind === 'endchain') {
+      // Hash pris avant résolution (comme l'émetteur), puis on résout.
+      p._pendingHash = hashState(state);
+      if (state.chain) { state.chain = null; finDeTour(); }
+    }
+  } catch (e) {
+    console.warn('[online] apply error', e);
+  }
+  p.applyingRemote = false;
+  pvwVerifierHash(msg);
+}
+
+function applyRemotePower(msg, opp) {
+  const target = msg.target ? fromAlgebraic(msg.target) : null;
+  // Décret déplace le roi : on le localise par owner+type (une seule pièce K), pas par pos
+  // (qui vaut la position POST-échange chez l'émetteur). target = case de l'allié à échanger.
+  if (msg.power === 'Décret') {
+    let king = null;
+    for (const row of state.board) for (const q of row) if (q && q.owner === opp && q.type === 'K') king = q;
+    if (!king) { console.warn('[online] illegal — roi introuvable (Décret)', msg); return; }
+    state.selected = king;
+    executerDecret(target);
+    return;
+  }
+  const pos = fromAlgebraic(msg.pos);
+  const piece = state.board[pos.r][pos.c];
+  if (!piece || piece.owner !== opp) { console.warn('[online] illegal — pièce de pouvoir introuvable', msg); return; }
+  state.selected = piece;
+  switch (msg.power) {
+    case 'Ruée': executerRuee(target); break;
+    case 'Rayon sacré': executerRayon(target); break;
+    case 'Rempart': activerRempart(); break;
+    case 'Sacrifice': activerSacrifice(); break;
+    default: console.warn('[online] pouvoir inconnu', msg.power);
+  }
+}
+
+// Vidange de la file d'application (appelée dans loop()) : n'applique une action adverse que
+// quand ce n'est pas mon tour et que le moteur est au repos (pas d'anim/ciblage en cours).
+function pumpPvw() {
+  const p = state.pvw;
+  if (!p || p.ended) return;
+  if (state.turn === p.side) return;   // mon tour : entrées locales actives, aucune application
+  if (state.phase !== 'play') return;  // moteur occupé (animation / ciblage) : on attend
+  const msg = takeNextAction();
+  if (!msg) return;
+  applyRemoteAction(msg);
+}
+
+// Départage à la valeur (GDD §8 / §6.3) : valeur du matériel capturé par chaque camp,
+// ACCUMULÉE à la capture (state.capturesDep, fix W3 — remplace l'ancienne formule
+// « 39 − survivants » qui ignorait les bonus [S] des pièces déjà capturées et se
+// faussait sur promotion). Déterministe et identique sur les deux clients (chaque
+// client applique tous les coups). Renvoie 0, 1, ou null (nulle).
+// ⚠ Les 2 clients doivent être ≥ ?v=20 (sinon départages divergents → rapports
+// discordants → match 'disputed', aucun trophée — dégradation sûre).
+function pvwDepartageWinner() {
+  const cap = state.capturesDep;
+  if (cap[0] > cap[1]) return 0;
+  if (cap[1] > cap[0]) return 1;
+  return null;
+}
+function valeurDepartage(p) {
+  if (p.type === 'P' && p.upgrades.includes('vet')) return 3;       // Vétéran (GDD §6)
+  if (p.type === 'R' && p.upgrades.includes('forteresse')) return 8; // Forteresse (GDD §6)
+  return VALEUR_PIECE[p.type];
+}
+
+// Chute de drapeau (§6.3) : fige l'horloge, calcule le départage, en informe l'adversaire.
+function pvwEndByTime(broadcast) {
+  const p = state.pvw;
+  if (!p || p.ended) return;
+  pvwCommitActive();
+  const winner = pvwDepartageWinner();
+  p.endReason = 'time';
+  if (broadcast) sendAction({ kind: 'flag' });
+  finPartie(winner);
+}
+
+// ---------- CYCLE W3 — robustesse (reconnexion, resync, abandon, désync) ----------
+
+// Fabrique une pièce complète depuis des données sérialisées (le module board.js
+// n'exporte pas creerPiece ; on reconstruit un objet aux MÊMES champs, id synthétique —
+// piece.id n'entre jamais dans le hash ni la logique, seulement l'identité locale).
+let _resyncId = 100000;
+function makePiece(d) {
+  return {
+    id: _resyncId++, type: d.type, owner: d.owner, r: d.r, c: d.c,
+    upgrades: Array.isArray(d.upgrades) ? [...d.upgrades] : [],
+    shield: !!d.shield,
+    cooldowns: d.cooldowns ? { ...d.cooldowns } : {},
+    doubleCoupUsed: !!d.doubleCoupUsed,
+    decretUsed: !!d.decretUsed,
+    sacrificeArmed: !!d.sacrificeArmed,
+    rempartGranted: !!d.rempartGranted,
+  };
+}
+
+// Snapshot d'état complet et sérialisable (§7.3). Le survivant l'émet au retour de
+// l'adversaire ou sur demande (resync_req). Contient tout ce qui rend l'état déterministe
+// + les horloges + le seq courant (pour reprendre le lockstep au bon numéro d'action).
+function pvwBuildSnapshot() {
+  const p = state.pvw;
+  const pieces = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const q = state.board[r][c];
+      if (!q) continue;
+      pieces.push({
+        r, c, owner: q.owner, type: q.type, upgrades: q.upgrades,
+        shield: q.shield, cooldowns: q.cooldowns, doubleCoupUsed: q.doubleCoupUsed,
+        decretUsed: q.decretUsed, sacrificeArmed: q.sacrificeArmed, rempartGranted: q.rempartGranted,
+      });
+    }
+  }
+  return {
+    pieces,
+    ecus: [state.ecus[0], state.ecus[1]],
+    capturesDep: [state.capturesDep[0], state.capturesDep[1]], // départage §8.3 (fix W3)
+    turn: state.turn,
+    chain: state.chain ? { r: state.chain.piece.r, c: state.chain.piece.c, type: state.chain.type } : null,
+    clocks: [pvwLiveClock(0), pvwLiveClock(1)],
+    activeClock: state.turn,
+    seq: getOnline().seq,
+    hash: hashState(state),
+  };
+}
+
+// Reconstruit l'état local depuis un snapshot reçu (§7.3). On repart de la VÉRITÉ du
+// survivant (pas d'un rejeu des coups), puis on reprend le lockstep au seq indiqué.
+function pvwApplySnapshot(snap) {
+  const p = state.pvw;
+  if (!p || p.ended || !snap || !Array.isArray(snap.pieces)) return;
+  const board = Array.from({ length: 8 }, () => Array(8).fill(null));
+  for (const d of snap.pieces) {
+    if (d.r < 0 || d.r > 7 || d.c < 0 || d.c > 7) continue;
+    board[d.r][d.c] = makePiece(d);
+  }
+  state.board = board;
+  state.ecus = [snap.ecus[0], snap.ecus[1]];
+  // Départage §8.3 : valeurs de vérité du survivant (backward compat : snapshot pré-v20 sans champ).
+  if (Array.isArray(snap.capturesDep)) state.capturesDep = [snap.capturesDep[0], snap.capturesDep[1]];
+  state.turn = snap.turn;
+  state.selected = null; state.legalMoves = []; state.panelPiece = null; state.ruTargets = [];
+  state.anim = null; state.phase = 'play';
+  // Chaîne éventuelle en cours chez le survivant.
+  if (snap.chain) {
+    const piece = board[snap.chain.r] && board[snap.chain.r][snap.chain.c];
+    state.chain = piece ? { piece, type: snap.chain.type } : null;
+    if (state.chain) {
+      selectionner(piece);
+      if (snap.chain.type === 'second-galop') state.legalMoves = state.legalMoves.filter((m) => !m.capture);
+    }
+  } else {
+    state.chain = null;
+  }
+  // Horloges : valeurs de vérité du survivant, l'active repart de maintenant.
+  p.clocks = [snap.clocks[0], snap.clocks[1]];
+  p.activeClock = snap.turn;
+  p.clockT0 = performance.now();
+  p._lastTurn = snap.turn;
+  p.clockDisplay = [snap.clocks[0], snap.clocks[1]];
+  // Lockstep : on adopte le seq du survivant et on vide la file (les vieux messages
+  // périmés sont abandonnés ; les suivants arriveront avec un seq > seq courant).
+  onlineSetSeq(snap.seq | 0);
+  onlineClearInbox();
+  // Reprise : plus de désync ni de fenêtre de déconnexion en attente.
+  p.desync = false; p.oppDisconnected = false; p._gapT0 = 0;
+}
+
+// Victoire par abandon (§7.2/§8.3) : fenêtre 30 s échue sans retour de l'adversaire.
+function pvwEndByAbandon() {
+  const p = state.pvw;
+  if (!p || p.ended) return;
+  pvwCommitActive();
+  p.endReason = 'abandon';
+  finPartie(p.side); // je suis le survivant → je gagne
+}
+
+// Annulation propre du match (désync confirmée, §3.4) : aucun trophée, retour possible au menu.
+function pvwVoidMatch() {
+  const p = state.pvw;
+  if (!p || p.ended) return;
+  p.voided = true;
+  p.ended = true;
+  p.endReason = 'void';
+  state.winner = null;
+  state.phase = 'gameover';
+  console.warn('[online] match annulé (désynchronisation non résolue) — aucun trophée attribué');
+}
+
+// --- Revanche (§9.4) : proposée par les deux, couleurs inversées, nouveau match privé. ---
+function proposerRevanche() {
+  const p = state.pvw;
+  if (!p || !p.ended) return;
+  if (!p.rematch) p.rematch = {};
+  if (p.rematch.offeredByMe || p.rematch.launching) return;
+  p.rematch.offeredByMe = true;
+  p.rematch.t0 = performance.now();
+  sendRematch('offer');
+  verifierRevanche();
+}
+function onRematchMsg(msg) {
+  const p = state.pvw;
+  if (!p || !p.ended) return;
+  if (!p.rematch) p.rematch = {};
+  if (msg.phase === 'offer' || msg.phase === 'accept') {
+    p.rematch.offeredByOpp = true;
+    verifierRevanche();
+  }
+}
+function verifierRevanche() {
+  const p = state.pvw;
+  if (!p || !p.rematch || p.rematch.launching) return;
+  if (p.rematch.offeredByMe && p.rematch.offeredByOpp) {
+    p.rematch.launching = true;
+    const prevId = p.matchId || getOnline().matchId;
+    // Bascule en écran de mise en relation : le handshake 'ready' du nouveau canal
+    // relancera commencerPartiePvP (couleurs inversées via le side renvoyé par la RPC).
+    state.phase = 'matchmaking';
+    state.matchmaking = {
+      mode: 'matched', oppPseudo: p.oppPseudo, oppTrophies: p.oppTrophies,
+      error: null, band: 100, searchStart: Date.now(),
+    };
+    state._pvwStarting = false;
+    onlineRematch(prevId).then((ok) => {
+      if (!ok && state.phase === 'matchmaking') {
+        state.matchmaking.mode = 'lobby';
+        state.matchmaking.error = getOnline().error || 'Revanche impossible.';
+      }
+    });
+  }
+}
+
+// Boucle W2/W3 : pompe les actions entrantes, gère l'horloge, la chute de drapeau, la
+// fenêtre de reconnexion (30 s → abandon), les trous de seq et la désync (→ resync/void).
+function pvwTick() {
+  const p = state.pvw;
+  if (state.mode !== 'pvw' || !p) return;
+
+  // Revanche en attente : timeout 20 s si l'adversaire ne répond pas (§9.4).
+  if (p.ended && p.rematch && p.rematch.offeredByMe && !p.rematch.offeredByOpp
+      && !p.rematch.launching && !p.rematch.expired) {
+    if ((performance.now() - p.rematch.t0) / 1000 > 20) p.rematch.expired = true;
+  }
+
+  // Désync détectée (hash discordant, §3.4) : tenter un resync ; au-delà de 2 essais, annuler.
+  if (p.desync && !p.ended && !p.voided) {
+    p.desync = false;
+    p.desyncTries = (p.desyncTries || 0) + 1;
+    if (p.desyncTries > 2) { pvwVoidMatch(); return; }
+    requestResync();
+  }
+
+  pumpPvw();
+  if (p.ended) return;
+
+  // Trou de séquence persistant (message Broadcast perdu/désordonné, §5.6) : demande de resync.
+  if (inboxHasGap()) {
+    if (!p._gapT0) p._gapT0 = performance.now();
+    else if (performance.now() - p._gapT0 > PVW_GAP_RESYNC_MS) { requestResync(); p._gapT0 = performance.now(); }
+  } else {
+    p._gapT0 = 0;
+  }
+
+  // Bascule de tour (locale OU distante — finDeTour() a déjà tourné state.turn) : commit du
+  // temps écoulé côté sortant, l'horloge passe au nouveau joueur actif. AUCUN incrément :
+  // décision utilisateur 12/07 (spec §6.1 v3.1) — le +3 s/coup vidait le timer de son sens.
+  if (state.turn !== p._lastTurn) {
+    pvwCommitActive();
+    p.activeClock = state.turn;
+    p.clockT0 = performance.now();
+    p._lastTurn = state.turn;
+  }
+  p.clockDisplay = [pvwLiveClock(0), pvwLiveClock(1)];
+
+  // Chute de drapeau (§6.3) — prioritaire sur la fenêtre de reconnexion si l'horloge
+  // tombe avant les 30 s.
+  for (let s = 0; s < 2; s++) {
+    if (pvwLiveClock(s) <= 0) { pvwEndByTime(true); return; }
+  }
+
+  // Fenêtre de reconnexion 30 s (§7.2) : l'adversaire est parti → décompte, puis abandon.
+  if (p.oppDisconnected && !p.ended) {
+    if ((performance.now() - p.oppDcT0) / 1000 >= PVW_RECO_WINDOW) pvwEndByAbandon();
+  }
+}
+
+// ---------- Entrées ----------
+
+// Les chips ÉCONOMIE/COMBAT sont cliquables au menu local ET sur l'écran cadence
+// d'une partie privée en ligne (GDD §7.2 v3.1 — le créateur impose sa variante).
+// La sélection vit dans state.menu dans les deux cas (mémoire partagée).
+function peutChoisirVariante() {
+  if (!state.menu) return false;
+  if (state.phase === 'menu') return true;
+  return state.phase === 'matchmaking' && state.matchmaking
+    && state.matchmaking.mode === 'cadence' && state.matchmaking.pendingAction === 'private';
+}
+
+function actionBouton(action) {
+  switch (action.kind) {
+    case 'ameliorer':
+      if (state.selected && tutorielPermet(state, { type: 'panel', piece: state.selected })) {
+        ouvrirPanneau(state.selected);
+      }
+      break;
+    case 'closePanel': state.panelPiece = null; break;
+    // Promotion (GDD §5.1.b) : choix de pièce du panneau modal → le coup part enfin.
+    case 'promoChoice': {
+      if (state.phase !== 'promotion' || !state.promo) break;
+      const { piece, mv } = state.promo;
+      state.promo = null;
+      state.phase = 'play';
+      jouerCoup(piece, { ...mv, promo: action.t });
+      break;
+    }
+    case 'promoCancel':
+      state.promo = null;
+      state.phase = 'play';
+      deselectionner();
+      break;
+    case 'buy':
+      // Tutoriel : seule la carte de l'étape est achetable (refus = tremblement).
+      if (!tutorielPermet(state, { type: 'buy', id: action.id })) {
+        state.buzz = performance.now(); state.buzzId = action.id;
+        break;
+      }
+      acheter(action.id);
+      break;
+    // Pouvoirs actifs : en tutoriel, seul le pouvoir prévu par l'étape répond.
+    case 'ruee': if (tutorielPermet(state, { type: 'power', kind: 'ruee' })) activerRuee(); break;
+    case 'rayon': if (tutorielPermet(state, { type: 'power', kind: 'rayon' })) activerRayon(); break;
+    case 'rempart': if (tutorielPermet(state, { type: 'power', kind: 'rempart' })) activerRempart(); break;
+    case 'sacrifice': if (tutorielPermet(state, { type: 'power', kind: 'sacrifice' })) activerSacrifice(); break;
+    case 'decret': if (tutorielPermet(state, { type: 'power', kind: 'decret' })) activerDecret(); break;
+    // Décliner un enchaînement (Double coup / Second galop) : pas de cooldown posé.
+    case 'downloadReplay': downloadReplayMD(state); break;
+    // Écran REPLAYS dédié (plein écran, comme le lobby en ligne) — remplace
+    // l'ancienne liste dépliante sous le menu d'accueil (demande utilisateur 12/07).
+    case 'ouvrirReplays':
+      if (state.phase === 'menu') state.phase = 'replays';
+      break;
+    case 'fermerReplays':
+      if (state.phase === 'replays') retourMenu();
+      break;
+    // --- Deck editor (recovery 29/07 [23:30]) ---
+    case 'ouvrirDecks':
+      if (state.phase === 'menu') {
+        // Mount : charge + sanitize le decksRoot depuis localStorage. sanitizeRoot
+        // arme les migrations cumulatives (Décret/Sacrifice inversion, Bouclier/Vétéran
+        // inversion, etc.) — un vieux localStorage n'invalide pas le deck.
+        state.decksRoot = sanitizeRoot(loadDecks());
+        state._deckEditor = null;
+        state.phase = 'decks';
+      }
+      break;
+    case 'fermerDecks':
+      if (state.phase === 'decks') { state._deckEditor = null; retourMenu(); }
+      break;
+    case 'switchDeck': {
+      // Bascule l'actif (idx < ids.length) OU crée un nouveau deck si l'onglet est vide.
+      // Cap DECK_LIMIT=5 dans decks.js — createDeck clone l'actif et retourne un newId.
+      if (state.phase === 'decks' && Number.isInteger(action.value)) {
+        const root = state.decksRoot || sanitizeRoot(loadDecks());
+        const ids = Object.keys(root.decks);
+        const idx = action.value;
+        if (idx < ids.length) {
+          setActiveDeck(root, ids[idx]);
+        } else if (ids.length < 5) {
+          const newId = createDeck(root);
+          setActiveDeck(root, newId);
+        }
+        saveDecks(root);
+        state.decksRoot = root;
+      }
+      break;
+    }
+    case 'editSlot':
+      if (state.phase === 'decks' && action.type && action.cat) {
+        state._deckEditor = { type: action.type, cat: action.cat };
+        state.phase = 'deck-picker';
+      }
+      break;
+    case 'pickUpgrade':
+      if (state.phase === 'deck-picker' && state._deckEditor) {
+        const root = state.decksRoot || sanitizeRoot(loadDecks());
+        const { type, cat } = state._deckEditor;
+        // action.id peut être null (= vider le slot) — setSlot accepte null.
+        const next = setSlot(root, type, cat, action.id);
+        saveDecks(next);
+        state.decksRoot = next;
+        state._deckEditor = null;
+        state.phase = 'decks';
+      }
+      break;
+    case 'cancelPick':
+      if (state.phase === 'deck-picker') {
+        state._deckEditor = null;
+        state.phase = 'decks';
+      }
+      break;
+    // Mode replay — contrôles
+    case 'startReplay': {
+      const r = action.key ? loadReplayByKey(action.key) : loadLastReplay();
+      if (r) commencerReplay(r);
+      break;
+    }
+    case 'replaySpeed':
+      if (state.phase === 'replay' && action.speed >= 1 && action.speed <= 3) {
+        state.replaySpeed = action.speed;
+        // Relance immédiatement avec le nouveau délai si en cours de lecture.
+        if (state.replayPlaying) {
+          clearTimeout(state._replayTimer);
+          avancerReplay();
+        }
+      }
+      break;
+    case 'replayPlayPause':
+      if (state.phase === 'replay') {
+        state.replayPlaying = !state.replayPlaying;
+        if (state.replayPlaying) avancerReplay();
+      }
+      break;
+    case 'replayQuit':
+      if (state.phase === 'replay') retourMenu();
+      break;
+    case 'endChain':
+      if (state.chain) {
+        // PvP en ligne : ne décliner que sur mon tour, et prévenir l'adversaire (§5.5).
+        if (state.mode === 'pvw' && state.pvw && state.turn !== state.pvw.side) break;
+        pvwEmitEndChain();
+        state.chain = null;
+        finDeTour();
+      }
+      break;
+    // SPEC §5.3 : NOUVELLE PARTIE depuis l'écran de victoire = retour au menu
+    // d'accueil (pas relance directe).
+    case 'restart': retourMenu(); break;
+    // Revanche PvP (§9.4) : proposer à l'adversaire (couleurs inversées si accepté).
+    case 'rematch': proposerRevanche(); break;
+    // Cycle A — compte (spec-online §5.1). L'auth/overlay vit dans account.js ; ici on
+    // ne fait qu'ouvrir/fermer. Une panne réseau n'atteint jamais le reste du jeu.
+    case 'login': startAuth(); break;
+    case 'logout': logout(); break;
+    // Retour au menu (spectateur).
+    case 'retourMenu': retourMenu(); break;
+    // Abandonner la partie (PvP, PvAI). L'abandonneur perd.
+    case 'tutoriel': demarrerTutoriel(state); break;
+    case 'tutorialContinue': forcerAvancement(state); break;
+    case 'tutorialRestart': rejouerEtape(state); break;
+    case 'abandonner':
+      if (state.mode === 'pvw' && state.pvw) {
+        // PvP en ligne : abandon = défaite immédiate ; l'adversaire (1-side) gagne (§7.4).
+        if (state.pvw.ended) break;
+        sendAction({ kind: 'resign' });
+        state.pvw.endReason = 'resign';
+        finPartie(1 - state.pvw.side);
+        break;
+      }
+      if (state.mode === 'pvai' && state.ai) finPartie(state.ai.player);
+      else finPartie(1 - state.turn);
+      break;
+    // Cycle 1 — menu d'accueil.
+    case 'pickMode': {
+      // PvP en ligne (pvw) : exige un compte connecté (spec § décision D).
+      if (action.mode === 'pvw') {
+        const acc = getAccount();
+        if (acc.status !== 'connected') { startAuth(); return; }
+        entrerMatchmaking();
+        return;
+      }
+      // PvAI et Spectateur désactivés tant qu'aucune difficulté n'est choisie.
+      if ((action.mode === 'pvai' || action.mode === 'spectator') && (!state.menu || !state.menu.difficulty)) return;
+      const diff = state.menu && state.menu.difficulty ? state.menu.difficulty : 1;
+      // Variantes locales (GDD §7.2 v3) : on passe variantId à commencerPartie ; le
+      // lock scope (PvAI / PvP en ligne refusent) est appliqué côté commencerPartie via
+      // variantePourMode() — la sélection utilisateur reste mémorisée en state.menu
+      // pour le prochain passage en mode 'pvp'.
+      const variantId = variantIdFromMenu(state);
+      commencerPartie(action.mode, { difficulty: diff, variantId });
+      break;
+    }
+    case 'pickDifficulty':
+      if (state.phase === 'menu' && state.menu) state.menu.difficulty = action.level;
+      break;
+    // Variantes locales (GDD §7.2 v3) : deux axes orthogonaux combinés librement.
+    // Chaque clic met à jour l'état mémoire ; le toggle déplie l'accordéon.
+    case 'pickEconomie':
+      if (peutChoisirVariante() && ['standard', 'plafond15', 'illimite'].includes(action.value)) {
+        state.menu.economie = action.value;
+      }
+      break;
+    case 'pickCombat':
+      if (peutChoisirVariante() && ['standard', 'elimX2'].includes(action.value)) {
+        state.menu.combat = action.value;
+      }
+      break;
+    // Phase A.5 v2 Phase 3 : nouvelle row « TAILLE DE PLATEAU » dans l'accordéon
+    // VARIANTES. 2 chips « 8 × 8 » (std, héritage MVP v2 byte-équivalent) + « 8 × 15 »
+    // (l15 Phase A.5 — public STANDARD-only §7.2 strict, hot-seat + privé acceptés).
+    // Si user pick l15 hors hot-seat, console.warn silencieux côté commencerPartie
+    // → fallback std (l15 online est forcé côté serveur, l15 PvAI futur Phase v3).
+    case 'pickTaille':
+      if (peutChoisirVariante() && ['std', 'l15'].includes(action.value)) {
+        state.menu.taille = action.value;
+      }
+      break;
+    case 'toggleVariant':
+      if (state.phase === 'menu' && state.menu) {
+        state.menu.showVariant = !state.menu.showVariant;
+      }
+      break;
+    // (helper hors switch : cf. peutChoisirVariante() — menu local OU écran cadence privé)
+    // Matchmaking — boutons
+    // Lobby → « Lancer une recherche » : ouvre d'abord l'écran de CADENCE (aucun réseau).
+    // L'inscription en file n'a lieu qu'au pickCadence (lancerRecherchePublique).
+    case 'startSearch':
+      // [00:05] Le clic sur « Lancer une recherche » du MENU atterrit sur le LOBBY
+      // matchmaking (mode='lobby') o\u00f9 user peut choisir « 🔍 En ligne au hasard »
+      // ou « 👥 Avec un ami ». Le clic sur « 🔍 Lancer une recherche » depuis le LOBBY
+      // (bouton ligne 1852 de render.js) ouvre directement le cadence picker.
+      if (state.phase === 'menu') {
+        console.log('[matchmaking] startSearch (menu): atterrissage sur lobby');
+        entrerMatchmaking();
+        break;
+      }
+      if (state.phase === 'matchmaking') {
+        // [23:45] Guard auth : si l'user n'est pas connect\u00e9, ouvre l'auth overlay
+        // et affiche un message d'erreur clair (évite le silent fail qui faisait
+        // croire à user que « rien ne marche »).
+        if (getAccount().status !== 'connected') {
+          console.warn('[matchmaking] startSearch sans auth → ouverture overlay');
+          state.matchmaking.error = 'Connectez-vous d\'abord pour jouer en ligne.';
+          startAuth();
+          break;
+        }
+        state.matchmaking.mode = 'cadence';
+        state.matchmaking.pendingAction = 'search';
+        state.matchmaking.error = null;
+      }
+      break;
+    // Écran cadence → choix d'un temps initial, puis route vers l'action d'origine.
+    case 'pickCadence':
+      if (state.phase === 'matchmaking' && state.matchmaking.mode === 'cadence') {
+        state.matchmaking.cadence = action.cadence | 0 || PVW_TEMPS_INITIAL;
+        if (state.matchmaking.pendingAction === 'private') lancerPartiePrivee();
+        else lancerRecherchePublique();
+      }
+      break;
+    // Écran de fin PvP → enchaîner une nouvelle partie en ligne SANS repasser par le
+    // menu/lobby : quitte le match courant puis relance la même recherche publique.
+    case 'newSearchOnline':
+      nouvellePartieEnLigne();
+      break;
+    // Retour au menu depuis le lobby (aucun réseau en cours à annuler ; retourMenu
+    // appelle onlineLeave par sécurité si un canal traînait).
+    case 'quitterLobby':
+      retourMenu();
+      break;
+    // « ✕ Annuler » / « ← Retour » depuis cadence/recherche/privé : ramène AU LOBBY.
+    case 'cancelMatchmaking':
+      if (state.phase === 'matchmaking') {
+        const mm = state.matchmaking;
+        if (mm.mode === 'search') cancelWait();       // retire de la file publique
+        else if (mm.mode !== 'cadence') onlineLeave(); // privé : ferme le canal handshake (cadence : aucun réseau engagé)
+        mm.mode = 'lobby';
+        mm.error = null;
+        mm.privateCode = null;
+        mm.oppPseudo = null;
+        mm.oppTrophies = null;
+        mm.pendingAction = null;
+      }
+      break;
+    // Lobby → « Jouer avec un ami » : même détour par l'écran de cadence (aucun réseau) ;
+    // la création effective (createPrivate) part au pickCadence via lancerPartiePrivee.
+    case 'createPrivateMatch':
+      if (state.phase === 'matchmaking') {
+        state.matchmaking.mode = 'cadence';
+        state.matchmaking.pendingAction = 'private';
+        state.matchmaking.error = null;
+      }
+      break;
+    case 'showJoinCode':
+      if (state.phase === 'matchmaking') {
+        initOnline(getSupabaseClient());
+        state.matchmaking.mode = 'private_join';
+        state.matchmaking.error = null;
+      }
+      break;
+    case 'joinByCode':
+      if (state.phase === 'matchmaking') {
+        // Si le code est vide, c'est que le bouton vient d'être cliqué :
+        // on ouvre un prompt pour saisir le code.
+        if (!action.code) {
+          const code = prompt('Code d\'invitation (6 caractères) :');
+          if (code && code.trim()) {
+            actionBouton({ kind: 'joinByCode', code: code.trim() });
+          }
+          return;
+        }
+        state.matchmaking.error = null;
+        joinByCode(action.code).then((ok) => {
+          if (!ok) state.matchmaking.error = getOnline().error;
+        });
+      }
+      break;
+    case 'backToSearch':
+      if (state.phase === 'matchmaking') {
+        onlineLeave();
+        state.matchmaking.mode = 'search';
+        state.matchmaking.error = null;
+        initOnline(getSupabaseClient());
+        findMatch(state.matchmaking.cadence || PVW_TEMPS_INITIAL);
+      }
+      break;
+  }
+}
+
+function boutonSous(x, y) {
+  if (!state.ui || !state.ui.buttons) return null; // Sécurité
+  for (let i = state.ui.buttons.length - 1; i >= 0; i--) {  
+    const b = state.ui.buttons[i];
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
+  }
+  return null;
+}
+
+function souris(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / rect.width),
+    y: (e.clientY - rect.top) * (canvas.height / rect.height),
+  };
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 2) return; // géré par contextmenu
+  const { x, y } = souris(e);
+
+  // 1) Boutons d'UI (prioritaires, valides même en animation pour restart).
+  const b = boutonSous(x, y);
+  if (b) { if (b.enabled) actionBouton(b.action); return; }
+
+  if (state.phase === 'animating' || state.phase === 'gameover' || state.phase === 'replay') return;
+  // Promotion en attente de choix : un clic hors du panneau (les boutons sont déjà
+  // passés au hit-test ci-dessus) ANNULE et rend la sélection (GDD §5.1.b).
+  if (state.phase === 'promotion') {
+    state.promo = null;
+    state.phase = 'play';
+    deselectionner();
+    return;
+  }
+  // Tutoriel : le verrouillage par étape (tutorielPermet, consulté plus bas)
+  // remplace les anciens blocages codés en dur par numéro d'étape.
+  // SPEC §1.4 : au menu d'accueil, le plateau n'est pas initialisé (state.board === null).
+  // Tout clic hors bouton est ignoré pour éviter un null deref sur state.board[cell.r].
+  if (state.phase === 'menu' || state.phase === 'matchmaking' || !state.board) return;
+  // PvP en ligne (§5.2) : entrées bloquées hors de mon tour (miroir du gating PvAI).
+  if (state.mode === 'pvw' && state.pvw && (state.pvw.ended || state.turn !== state.pvw.side)) return;
+
+  const cell = caseDepuisPixel(x, y);
+  if (!cell) { deselectionner(); return; }
+
+  // 2) Ciblage d'un pouvoir actif (Ruée / Rayon sacré / Décret).
+  const surCible = state.ruTargets.some((t) => t.r === cell.r && t.c === cell.c);
+  if (state.phase === 'ruee-target') {
+    if (surCible) executerRuee(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    return;
+  }
+  if (state.phase === 'rayon-target') {
+    if (surCible) executerRayon(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    return;
+  }
+  if (state.phase === 'decret-target') {
+    if (surCible) executerDecret(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    return;
+  }
+
+  const cliquee = state.board[cell.r][cell.c];
+
+  // 3) Une pièce est sélectionnée : jouer un coup, ou changer de sélection.
+  if (state.selected) {
+    const mv = state.legalMoves.find((m) => m.r === cell.r && m.c === cell.c);
+    if (mv) {
+      // Ceinture tutoriel : les coups verrouillés sont déjà filtrés de legalMoves.
+      if (!tutorielPermet(state, { type: 'move', piece: state.selected, move: mv })) return;
+      // Promotion (GDD §5.1.b) : le choix de pièce précède le coup — panneau modal,
+      // le coup part avec mv.promo (une seule émission réseau, hash cohérent).
+      if (mv.promotion && state.selected.type === 'P') {
+        state.promo = { piece: state.selected, mv };
+        state.phase = 'promotion';
+        return;
+      }
+      jouerCoup(state.selected, mv); return;
+    }
+    if (state.chain) return; // enchaînement en cours : seule la pièce enchaînée agit
+    if (cliquee && cliquee.owner === state.turn) {
+      if (!tutorielPermet(state, { type: 'select', piece: cliquee })) { refusTutoriel(cell); return; }
+      selectionner(cliquee); return;
+    }
+    deselectionner();
+    return;
+  }
+
+  // 4) Rien de sélectionné : sélectionner sa propre pièce (l'étape du tutoriel
+  // peut restreindre à une pièce précise — les autres affichent un cadenas).
+  if (cliquee && cliquee.owner === state.turn) {
+    if (!tutorielPermet(state, { type: 'select', piece: cliquee })) { refusTutoriel(cell); return; }
+    selectionner(cliquee);
+  }
+});
+
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (state.phase === 'animating' || state.phase === 'gameover' || state.phase === 'replay'
+      || state.phase === 'promotion') return;
+  if (state.phase === 'menu' || state.phase === 'matchmaking' || !state.board) return;
+  // PvP en ligne : panneau d'amélioration seulement sur mon tour.
+  if (state.mode === 'pvw' && state.pvw && (state.pvw.ended || state.turn !== state.pvw.side)) return;
+  const { x, y } = souris(e);
+  const cell = caseDepuisPixel(x, y);
+  if (cell) {
+    const p = state.board[cell.r][cell.c];
+    if (p && p.owner === state.turn) {
+      // Tutoriel : le panneau ne s'ouvre que sur la pièce prévue par l'étape.
+      if (!tutorielPermet(state, { type: 'panel', piece: p })) { refusTutoriel(cell); return; }
+      ouvrirPanneau(p); return;
+    }
+  }
+  deselectionner();
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (state.phase === 'replays') { retourMenu(); return; }
+    if (PHASES_CIBLAGE.includes(state.phase)) { state.phase = 'play'; state.ruTargets = []; }
+    else if (state.panelPiece && state.mode !== 'tutorial') state.panelPiece = null;
+    else if (state.mode !== 'tutorial') deselectionner();
+  } else if (e.key === ' ' && state.chain) {
+    // Décliner l'enchaînement en cours (Second galop sans poser le cooldown, Double coup gardé).
+    // PvP en ligne : seulement sur mon tour, et signalé à l'adversaire (§5.5).
+    if (state.mode === 'pvw' && state.pvw && state.turn !== state.pvw.side) return;
+    e.preventDefault();
+    pvwEmitEndChain();
+    state.chain = null;
+    finDeTour();
+  }
+});
+
+// ---------- Boucle ----------
+function update(now) {
+  // Fin d'animation.
+  if (state.anim && now - state.anim.t0 >= 150) {
+    const done = state.anim.onDone;
+    state.anim = null;
+    if (state.phase === 'animating') state.phase = 'play';
+    if (done) done();
+  }
+  // Purge des feedbacks expirés.
+  state.popups = state.popups.filter((p) => now - p.t0 < 600);
+  state.flashes = state.flashes.filter((f) => now - f.t0 < 200);
+
+  // Tutoriel : vérifier si l'étape courante est complétée (hors animation).
+  if (state.mode === 'tutorial' && !state.anim && verifierEtape(state)) {
+    const fini = etapeSuivante(state);
+    if (fini) state.phase = 'tutorial-done';
+  }
+}
+
+function loop(now) {
+  update(now);
+  // Injecte l'état compte (réf. vivante) pour le rendu du bandeau menu, sans coupler
+  // le rendu à account.js. Toujours défini avant render, y compris après un retourMenu().
+  state.account = getAccount();
+  state._hasReplays = hasReplays(); // pour la liste REPLAYS du menu (render.js)
+  if (state.phase === 'menu' || state.phase === 'replays') state._replayList = getReplayList();
+
+  // Matchmaking : sync l'état online → state.matchmaking pour le rendu.
+  // Le lobby est purement local : on ne recopie AUCUN champ réseau (sinon une erreur
+  // résiduelle d'une recherche annulée s'afficherait sur le lobby).
+  if (state.phase === 'matchmaking' && state.matchmaking.mode !== 'lobby') {
+    const ol = getOnline();
+    if (ol) {
+      state.matchmaking.oppPseudo = ol.oppPseudo;
+      state.matchmaking.oppTrophies = ol.oppTrophies;
+      state.matchmaking.error = ol.error;
+      state.matchmaking.band = ol.band;
+      state.matchmaking.variant = ol.variant; // privé : variante imposée/héritée (affichage)
+      if (ol.privateCode) state.matchmaking.privateCode = ol.privateCode;
+    }
+  }
+
+  // PvP en ligne (W2) : synchro des coups entrants + horloge + chute de drapeau.
+  if (state.mode === 'pvw') pvwTick();
+
+  render(ctx, state, now);
+  requestAnimationFrame(loop);
+}
+
+// Câblage des callbacks online → main.js. Appelé une fois au démarrage, et rappelé
+// dans entrerMatchmaking() (idempotent). Placé AVANT requestAnimationFrame pour
+// éviter la race : si l'utilisateur clique « En ligne » avant que le CDN charge,
+// getSupabaseClient() renvoie null → initOnline(null) → error propre.
+function cablerCallbacksOnline() {
+  onOnline('matched', () => {
+    if (state.phase === 'matchmaking') {
+      state.matchmaking.mode = 'matched';
+    }
+  });
+  onOnline('ready', () => {
+    if (state.phase === 'matchmaking' && !state._pvwStarting) {
+      const ol = getOnline();
+      state.matchmaking.oppPseudo = ol.oppPseudo;
+      state.matchmaking.oppTrophies = ol.oppTrophies;
+      setTimeout(() => {
+        if (state.phase === 'matchmaking') commencerPartiePvP();
+      }, 1500);
+    }
+  });
+  onOnline('disconnected', () => {
+    if (state.phase === 'matchmaking') {
+      state.matchmaking.error = getOnline().error || 'Adversaire déconnecté.';
+      state.matchmaking.mode = 'search';
+    }
+  });
+  onOnline('error', () => {
+    if (state.phase === 'matchmaking') {
+      state.matchmaking.error = getOnline().error || 'Erreur de connexion.';
+    }
+  });
+  // CYCLE W2 : messages de contrôle terminaux reçus en partie (abandon / chute de drapeau).
+  onOnline('control', (msg) => {
+    if (state.mode !== 'pvw' || !state.pvw || state.pvw.ended) return;
+    if (msg.kind === 'resign') {
+      // L'adversaire a abandonné → je gagne (§7.4). endReason='resign' (rapport normal
+      // 'win'/'loss' concordant — PAS l'exception abandon des 30 s).
+      state.pvw.endReason = 'resign';
+      finPartie(state.pvw.side);
+    } else if (msg.kind === 'flag') {
+      // L'adversaire a constaté une chute de drapeau → départage local (identique, §6.3).
+      pvwEndByTime(false);
+    }
+  });
+  // CYCLE W3 — robustesse (déconnexion / reconnexion / resync, §7).
+  // L'adversaire a disparu EN PARTIE : ouvre la fenêtre de reconnexion 30 s (bannière).
+  onOnline('oppLeft', () => {
+    if (state.mode === 'pvw' && state.pvw && !state.pvw.ended && !state.pvw.oppDisconnected) {
+      state.pvw.oppDisconnected = true;
+      state.pvw.oppDcT0 = performance.now();
+    }
+  });
+  // L'adversaire est revenu (< 30 s) : ferme la bannière et lui renvoie l'état complet
+  // (je suis le survivant = autorité de resync, §7.3). Il l'applique s'il l'attend.
+  onOnline('oppReturned', () => {
+    if (state.mode === 'pvw' && state.pvw && !state.pvw.ended) {
+      state.pvw.oppDisconnected = false;
+      sendResync(pvwBuildSnapshot());
+    }
+  });
+  // L'adversaire demande mon état (reconnexion / trou de seq) : je lui envoie un snapshot.
+  onOnline('resyncReq', () => {
+    if (state.mode === 'pvw' && state.pvw && !state.pvw.ended) sendResync(pvwBuildSnapshot());
+  });
+  // Je reçois un snapshot que j'ai demandé : je reconstruis mon état et je reprends.
+  onOnline('resync', (msg) => {
+    if (state.mode === 'pvw' && state.pvw && !state.pvw.ended && msg && msg.snapshot) {
+      pvwApplySnapshot(msg.snapshot);
+    }
+  });
+  // Proposition / acceptation de revanche (§9.4).
+  onOnline('rematch', (msg) => onRematchMsg(msg));
+}
+
+// Cycle A : initialise le compte (chargement Supabase + restauration de session). Non
+// bloquant : en cas d'échec, on reste invité et le jeu tourne (garde-fou CLAUDE.md §7.2).
+initAccount();
+cablerCallbacksOnline(); // posé tôt pour que les callbacks soient prêts
+requestAnimationFrame(loop);
+
+// Exposé pour le débogage / tests automatisés.
+// Ne pas écraser les propriétés posées par replay.js (exposeForDebug).
+const existingRoychec = window.__roychec || {};
+window.__roychec = { ...existingRoychec, get state() { return state; }, jouerCoup, coupsLegaux,
+  retourMenu, finPartie, actionBouton,
+  // Harness de test W2 (partie pvw locale sans réseau + injection d'actions entrantes).
+  __pvwStartLocal: (side = 0, cadence = 300, variant) => commencerPartie('pvw', { side, matchId: 'debug', oppPseudo: 'Test', oppTrophies: 42, cadence, variant }),
+  __pvwInject: (msg) => __debugEnqueue(msg),
+  __pvwHash: () => hashState(state),
+  __pvwSetClock: (side, sec) => { if (state.pvw) { state.pvw.clocks[side] = sec; state.pvw.clockT0 = performance.now(); } },
+  // Harness W3 (tests robustesse en local, sans réseau).
+  __pvwSnapshot: () => (state.pvw ? pvwBuildSnapshot() : null),
+  __pvwApplySnapshot: (snap) => pvwApplySnapshot(snap),
+  __pvwOppLeft: () => { if (state.pvw && !state.pvw.ended) { state.pvw.oppDisconnected = true; state.pvw.oppDcT0 = performance.now(); } },
+  __pvwOppReturn: () => { if (state.pvw) state.pvw.oppDisconnected = false; },
+  __pvwDesync: () => { if (state.pvw) state.pvw.desync = true; } };

@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, must-revalidate" />
+  <!-- M1 (audit 2026-07-12) : Content-Security-Policy defense-in-depth (strict default).
+       default-src 'self' = tout en self par défaut (pas d'API tierce non listée).
+       script-src 'self' https://esm.sh = autorise UNIQUEMENT le module local ET
+         l'import dynamique de supabase-js (cf. account.js initAccount). Style-src
+         'unsafe-inline' est volontairement toléré pour le bloc <style> auth-overlay
+         (CSS inline) — traqué en M4 (audit) pour vendoring local futures versions.
+       connect-src 'self' https://esm.sh https://*.supabase.co wss://*.supabase.co = Rest + Realtime
+         WS + source maps esm.sh (.mjs.map = data read-only, jamais exécutée — pas
+         d'extension de surface). img-src data: autorise le favicon SVG inline.
+       object-src/base-uri/frame-src/form-action désactivés (defense-in-depth).
+       ⮕ Un header HTTP serveur (Content-Security-Policy dans nginx/Caddy) sera
+       préférable en prod : le meta-tag est limité (ne couvre pas frame-ancestors,
+       ne s'applique qu'aux ressources post-premiere-frame, etc.). -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'self'">
+  <title>roychec</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='88'%3E%E2%99%9E%3C/text%3E%3C/svg%3E" />
+  <style>
+    /* Polices locales (DA §3) — .woff2 dans assets/fonts, jamais de CDN.
+       font-display: swap => affichage immédiat en fallback puis bascule sans blocage. */
+    @font-face {
+      font-family: 'Archivo Black'; font-style: normal; font-weight: 400; font-display: swap;
+      src: url('./assets/fonts/ArchivoBlack-Regular.woff2') format('woff2');
+    }
+    @font-face {
+      font-family: 'Nunito Sans'; font-style: normal; font-weight: 600; font-display: swap;
+      src: url('./assets/fonts/NunitoSans-SemiBold.woff2') format('woff2');
+    }
+    @font-face {
+      font-family: 'Nunito Sans'; font-style: normal; font-weight: 700; font-display: swap;
+      src: url('./assets/fonts/NunitoSans-Bold.woff2') format('woff2');
+    }
+    html, body { margin: 0; min-height: 100%; background: #EDEFF7; }
+    body { display: grid; place-items: center; font-family: 'Nunito Sans', system-ui, sans-serif; }
+    /* Taille CSS logique fixée par JS (style.width) ; le buffer est mis à l'échelle DPR. */
+    canvas { background: #c0c2c9; max-width: 100%; height: auto; }
+
+    /* --- Overlay d'authentification (cycle A, spec-online §5.1) ---
+       Saisie texte (email / code OTP / pseudo) via de vrais <input> DOM superposés au
+       canvas : le Canvas 2D ne gère pas nativement le clavier/curseur. L'overlay est
+       masqué par défaut (attribut hidden) et n'existe que hors partie (menu). Palette DA. */
+    #auth-overlay {
+      position: fixed; inset: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(36, 28, 22, 0.55);
+      font-family: 'Nunito Sans', system-ui, sans-serif;
+    }
+    #auth-overlay[hidden] { display: none; }
+    .auth-card {
+      position: relative; width: 340px; max-width: 90vw;
+      background: #FCF8F3; border: 2.5px solid #1A1A1A; border-radius: 14px;
+      box-shadow: 0 6px 0 rgba(60,45,30,0.25); padding: 26px 24px 22px;
+    }
+    .auth-card h2 {
+      margin: 0 0 6px; font-family: 'Archivo Black', system-ui, sans-serif;
+      font-size: 22px; color: #1A1A1A; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .auth-card p { margin: 0 0 14px; font-size: 13px; color: #786F60; line-height: 1.4; }
+    .auth-card input {
+      width: 100%; box-sizing: border-box; margin-bottom: 12px;
+      padding: 11px 12px; font-size: 15px; font-family: 'Nunito Sans', system-ui, sans-serif;
+      color: #1A1A1A; background: #FFFFFF;
+      border: 2px solid #1A1A1A; border-radius: 9px; outline: none;
+    }
+    .auth-card input:focus { border-color: #e7bd14; }
+    #auth-code { letter-spacing: 6px; text-align: center; font-weight: 700; }
+
+    /* --- Écran de choix : 3 grosses options distinctes (icône + titre + explication) --- */
+    .auth-method {
+      display: flex; align-items: center; gap: 12px;
+      width: 100%; box-sizing: border-box; margin-bottom: 12px;
+      padding: 12px 14px; text-align: left; cursor: pointer;
+      background: #FFFFFF; border: 2.5px solid #1A1A1A; border-radius: 12px;
+      box-shadow: 0 4px 0 rgba(60,45,30,0.18);
+      transition: transform 0.06s, box-shadow 0.06s, background 0.1s;
+    }
+    .auth-method:hover { background: #FFFDF5; }
+    .auth-method:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(60,45,30,0.18); }
+    /* Option recommandée (lien magique) : liseré doré pour la faire ressortir. */
+    .auth-method[data-method="magic"] { border-color: #cfaa27; background: #FFFDF3; }
+    .auth-method[data-method="magic"]:hover { background: #FFF8E2; }
+    /* Option invité : plus neutre, sans relief, pour signaler « voie secondaire ». */
+    .auth-method[data-method="guest"] { box-shadow: none; background: #F7F3EC; border-style: dashed; }
+    .auth-method-icon {
+      flex: 0 0 auto; width: 40px; height: 40px; display: grid; place-items: center;
+      font-size: 24px; line-height: 1;
+      background: #F0DED8; border: 2px solid #1A1A1A; border-radius: 10px;
+    }
+    .auth-method[data-method="magic"] .auth-method-icon { background: #F7E7A6; }
+    .auth-method[data-method="guest"] .auth-method-icon { background: #E6DFD3; }
+    .auth-method-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .auth-method-title {
+      display: flex; align-items: center; gap: 7px;
+      font-family: 'Archivo Black', system-ui, sans-serif; font-size: 13px;
+      color: #1A1A1A; text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .auth-method-desc { font-size: 11.5px; color: #786F60; line-height: 1.3; }
+    .auth-badge {
+      font-family: 'Nunito Sans', system-ui, sans-serif; font-size: 9.5px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.4px; color: #2B1D06;
+      background: #e7bd14; border: 1.5px solid #1A1A1A; border-radius: 6px;
+      padding: 1px 5px; line-height: 1.4;
+    }
+
+    /* --- Bouton retour (←) : miroir de la croix, coin haut gauche --- */
+    .auth-back {
+      position: absolute; top: 8px; left: 10px; width: 26px; height: 26px;
+      font-size: 17px; line-height: 1; color: #1A1A1A; background: #F0DED8;
+      border: 2px solid #1A1A1A; border-radius: 7px; cursor: pointer;
+    }
+    .auth-back:hover { background: #F7E7A6; }
+    /* Écrans dotés d'un retour : on décale le titre pour ne pas passer sous la flèche. */
+    .has-back h2 { padding-left: 32px; }
+
+    /* --- Onglets connexion / inscription de l'écran mot de passe --- */
+    .auth-tabs {
+      display: flex; gap: 8px; margin-bottom: 14px;
+      background: #EFE8DD; border: 2px solid #1A1A1A; border-radius: 11px; padding: 4px;
+    }
+    .auth-tab {
+      flex: 1; padding: 8px 6px; cursor: pointer;
+      font-family: 'Archivo Black', system-ui, sans-serif; font-size: 11px;
+      text-transform: uppercase; letter-spacing: 0.3px; color: #786F60;
+      background: transparent; border: none; border-radius: 8px;
+    }
+    .auth-tab.is-active { color: #2B1D06; background: #e7bd14; box-shadow: 0 2px 0 #cfaa27; }
+    .auth-hint { margin: -6px 0 12px; font-size: 11.5px; color: #8A5A22; }
+
+    .auth-btn {
+      display: block; width: 100%; box-sizing: border-box; margin-bottom: 10px;
+      padding: 12px; font-size: 13px; font-family: 'Archivo Black', system-ui, sans-serif;
+      text-transform: uppercase; color: #2B1D06; background: #e7bd14;
+      border: 2.5px solid #1A1A1A; border-radius: 10px; cursor: pointer;
+      box-shadow: 0 4px 0 #cfaa27;
+    }
+    .auth-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #cfaa27; }
+    .auth-btn:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
+    .auth-link {
+      display: inline-block; margin: 2px 8px 2px 0; padding: 4px 2px;
+      font-size: 12px; color: #8A5A22; background: none; border: none; cursor: pointer;
+      text-decoration: underline; font-family: 'Nunito Sans', system-ui, sans-serif;
+    }
+    .auth-link:disabled { color: #b9ac93; cursor: default; text-decoration: none; }
+    .auth-row { display: flex; flex-wrap: wrap; align-items: center; }
+    #auth-msg { min-height: 18px; margin: 6px 0 0; font-size: 12.5px; font-weight: 700; }
+    #auth-close {
+      position: absolute; top: 8px; right: 10px; width: 26px; height: 26px;
+      font-size: 18px; line-height: 1; color: #B5573F; background: #F0DED8;
+      border: 2px solid #1A1A1A; border-radius: 7px; cursor: pointer;
+    }
+    .auth-count { font-size: 11px; color: #8f6526; margin-left: 4px; }
+  </style>
+</head>
+<body>
+  <canvas id="jeu" width="980" height="640"></canvas>
+
+  <!-- Overlay d'auth (cycle A v3, refonte UX). Un seul écran visible à la fois via [hidden].
+       Écrans : choice → (magic | password) → sent → pseudo. Voir account.js. -->
+  <div id="auth-overlay" hidden>
+    <div class="auth-card">
+      <button id="auth-close" type="button" aria-label="Fermer">×</button>
+
+      <!-- Écran 0 : CHOIX de la méthode de connexion (3 options distinctes) -->
+      <div data-screen="choice">
+        <h2>Connexion</h2>
+        <p>Comment veux-tu jouer&nbsp;?</p>
+        <button class="auth-method" type="button" data-method="magic">
+          <span class="auth-method-icon">✉️</span>
+          <span class="auth-method-text">
+            <span class="auth-method-title">Lien magique <span class="auth-badge">Recommandé</span></span>
+            <span class="auth-method-desc">Reçois un lien par email. Aucun mot de passe.</span>
+          </span>
+        </button>
+        <button class="auth-method" type="button" data-method="password">
+          <span class="auth-method-icon">🔑</span>
+          <span class="auth-method-text">
+            <span class="auth-method-title">Email + mot de passe</span>
+            <span class="auth-method-desc">Connexion classique.</span>
+          </span>
+        </button>
+        <button class="auth-method" type="button" data-method="guest">
+          <span class="auth-method-icon">👤</span>
+          <span class="auth-method-text">
+            <span class="auth-method-title">Continuer en invité</span>
+            <span class="auth-method-desc">Joue sans compte. Trophées non sauvegardés.</span>
+          </span>
+        </button>
+      </div>
+
+      <!-- Écran 1a : LIEN MAGIQUE dédié -->
+      <div data-screen="magic" class="has-back" hidden>
+        <button class="auth-back" type="button" data-back aria-label="Retour">←</button>
+        <h2>Lien magique</h2>
+        <p>Entre ton email : on t'envoie un lien de connexion. Aucun mot de passe à retenir.</p>
+        <input id="auth-magic-email" type="email" autocomplete="email" inputmode="email"
+               placeholder="ton@email.fr" />
+        <button id="auth-magic-send" class="auth-btn" type="button">Recevoir le lien</button>
+      </div>
+
+      <!-- Écran 1b : EMAIL + MOT DE PASSE dédié (onglets connexion / inscription) -->
+      <div data-screen="password" class="has-back" hidden>
+        <button class="auth-back" type="button" data-back aria-label="Retour">←</button>
+        <h2>Mot de passe</h2>
+        <div class="auth-tabs" role="tablist">
+          <button id="auth-tab-login" class="auth-tab is-active" type="button"
+                  role="tab" aria-selected="true" data-tab="login">Se connecter</button>
+          <button id="auth-tab-signup" class="auth-tab" type="button"
+                  role="tab" aria-selected="false" data-tab="signup">Créer un compte</button>
+        </div>
+        <input id="auth-pwd-email" type="email" autocomplete="email" inputmode="email"
+               placeholder="ton@email.fr" />
+        <input id="auth-pwd-password" type="password" autocomplete="current-password"
+               placeholder="Mot de passe" />
+        <p class="auth-hint" id="auth-pwd-hint" hidden>6 caractères minimum.</p>
+        <button id="auth-pwd-submit" class="auth-btn" type="button">Se connecter</button>
+      </div>
+
+      <!-- Écran 2 : email envoyé (magic link OU confirmation d'inscription) -->
+      <div data-screen="sent" class="has-back" hidden>
+        <button class="auth-back" type="button" data-back aria-label="Retour">←</button>
+        <h2>Email envoyé !</h2>
+        <p id="auth-sent-desc">On a envoyé un lien de connexion à <strong id="auth-email-rappel"></strong>.
+           Clique le lien dans ta boîte mail : tu reviendras ici connecté.</p>
+        <div class="auth-row">
+          <button id="auth-resend" class="auth-link" type="button">Renvoyer le lien</button>
+          <button id="auth-change-email" class="auth-link" type="button">Changer d'email</button>
+        </div>
+      </div>
+
+      <!-- Écran 3 : pseudo (première connexion — inchangé, pas de retour) -->
+      <div data-screen="pseudo" hidden>
+        <h2>Ton pseudo</h2>
+        <p>Choisis un pseudo (3 à 16 caractères). Il sera visible dans le jeu.</p>
+        <input id="auth-pseudo" type="text" maxlength="16" autocomplete="off"
+               placeholder="Roi_2026" />
+        <span class="auth-count" id="auth-pseudo-count">0/16</span>
+        <button id="auth-pseudo-btn" class="auth-btn" type="button">Confirmer</button>
+      </div>
+
+      <p id="auth-msg"></p>
+    </div>
+  </div>
+
+  <!-- Vidéo du feu (pivot v3.2 — 2026-07-11) — pivot utilisateur « DERRIÈRE la pièce ».
+       Balise cachée via attribut HTML5 `hidden` (sort du flux + de l'auth-overlay z-index 50).
+       muted + autoplay acceptés sans interaction utilisateur (Chrome/Safari policy).
+       loop joue en boucle continue. Cache-bust `?v=8` aligné sur le bump main.js.
+       La référence DOM `document.getElementById('video-feu')` est capturée au moment du
+       parsing de `game/src/render.js` (const `videoFeu`), AVANT le `<script>` ci-dessous :
+       l'élément <video> doit être parsé AVANT main.js pour que la const ne soit pas `null`. -->
+  <!-- off-screen (pas `hidden`) : Chrome throttle les <video hidden> (currentTime reste à 0).
+       1x1 px + opacity 0 = invisible pour l'utilisateur mais le navigateur décode vraiment. -->
+  <video id="video-feu" muted autoplay loop playsinline preload="auto"
+         style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;top:-9999px;"
+         src="./assets/pieces/265194.mp4?v=22"></video>
+
+  <script type="module" src="./src/main.js?v=46"></script>
+</body>
+</html>
