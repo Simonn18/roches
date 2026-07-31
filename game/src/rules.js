@@ -1,6 +1,6 @@
 // roychec — génération des coups légaux (GDD §5.1) + cibles de pouvoirs.
 // Pas de détection d'échec/mat : la partie se gagne en capturant le roi (GDD §8.1).
-import { inB, caseAt } from './board.js';
+import { inB, caseAt } from './board.js?v=107';
 
 const KNIGHT = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
 const DIAG = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
@@ -240,6 +240,35 @@ export function coupsLegaux(board, p) {
     if (interdit.size) m = m.filter((mv) => !interdit.has(mv.r + ',' + mv.c));
   }
   return m;
+}
+
+// Indique si le roi d'un camp est actuellement attaquable par un coup adverse.
+// ROYCHEC conserve la règle historique « capture du roi = victoire » : cette
+// fonction est donc informative uniquement et ne filtre aucun coup légal.
+export function roiEnEchec(board, owner) {
+  if (!board || !board.length || !board[0]) return false;
+  let roi = null;
+  for (let r = 0; r < board.length; r++) {
+    for (let c = 0; c < board[r].length; c++) {
+      const piece = board[r][c];
+      if (piece && piece.type === 'K' && piece.owner === owner) {
+        roi = piece;
+        break;
+      }
+    }
+    if (roi) break;
+  }
+  if (!roi) return false; // roi déjà capturé : état de fin, pas un « échec » à afficher
+
+  for (let r = 0; r < board.length; r++) {
+    for (let c = 0; c < board[r].length; c++) {
+      const piece = board[r][c];
+      if (!piece || piece.owner === owner) continue;
+      if (coupsLegaux(board, piece).some((move) =>
+        move.capture && move.r === roi.r && move.c === roi.c)) return true;
+    }
+  }
+  return false;
 }
 
 // Cibles de la Ruée : pièces adverses à distance de cavalier (le cavalier ne bouge pas).

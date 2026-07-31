@@ -8,10 +8,10 @@
 //   d'achat « émergente » (achat-en-coup-complet) est RETIRÉE.
 // Pouvoirs actifs (ex-règles D-E) : hors-scope v1/v2 (le bot achète, ne déclenche pas).
 // Invariant préservé : la recherche travaille sur des CLONES, l'état réel n'est jamais muté.
-import { coupsLegaux, DIRS8 } from './rules.js';
-import { VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js';
-import { upgradesForPiece } from './decks.js';
-import { getBookBonus } from './opening.js';
+import { coupsLegaux, DIRS8 } from './rules.js?v=111';
+import { VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=107';
+import { upgradesForPiece } from './decks.js?v=107';
+import { getBookBonus } from './opening.js?v=107';
 
 // ---------------------------------------------------------------------------
 // Helpers — clone & manipulation du plateau pour la recherche

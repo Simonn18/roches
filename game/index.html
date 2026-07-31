@@ -36,10 +36,41 @@
       font-family: 'Nunito Sans'; font-style: normal; font-weight: 700; font-display: swap;
       src: url('./assets/fonts/NunitoSans-Bold.woff2') format('woff2');
     }
-    html, body { margin: 0; min-height: 100%; background: #EDEFF7; }
-    body { display: grid; place-items: center; font-family: 'Nunito Sans', system-ui, sans-serif; }
-    /* Taille CSS logique fixée par JS (style.width) ; le buffer est mis à l'échelle DPR. */
-    canvas { background: #c0c2c9; max-width: 100%; height: auto; }
+    :root {
+      /* Valeurs injectées par main.js depuis UI_THEME — ne pas éditer ici. */
+      /* Fallback identique au thème sombre : pas de flash transparent avant main.js. */
+      --ui-background: #202326; --ui-panel: #2A2D31; --ui-panel-alt: #34383D;
+      --ui-card: #30343A; --ui-field: #25292D; --ui-text: #ECEBE7;
+      --ui-muted: #AEB3B8; --ui-border: rgba(236, 235, 231, 0.18); --ui-shadow: #151719;
+      --ui-primary: #6F8F7A; --ui-primary-dark: #526B5C;
+      --ui-secondary: #8A9CAF; --ui-secondary-light: #B7C2CD;
+      --ui-danger: #B86F6B; --ui-danger-dark: #7E4B4A; --ui-danger-text: #F4EDEA;
+      --ui-wine: #4A5058; --ui-wine-dark: #363B42;
+      --ui-amber: #B69B63; --ui-amber-light: #D0BC8C; --ui-amber-dark: #7D6A43;
+      --ui-button-text: #1E211F; --ui-disabled: #34383D; --ui-disabled-text: #8A9097;
+      --ui-disabled-border: rgba(236, 235, 231, 0.10); --ui-overlay: rgba(12, 14, 16, 0.84); --ui-subtext: #C5C9CC;
+    }
+    html, body {
+      margin: 0; width: 100%; min-height: 100%;
+      background: var(--ui-background); overflow-x: hidden;
+    }
+    body {
+      display: flex; align-items: flex-start; justify-content: center;
+      font-family: 'Nunito Sans', system-ui, sans-serif;
+    }
+    /* Le canvas conserve son espace logique 1000×900, mais occupe toute la largeur
+       disponible : plus de bordures latérales sur écran large ou étroit. Le ratio
+       est préservé par height:auto et les clics sont remappés via getBoundingClientRect(). */
+    canvas {
+      display: block; width: 100%; max-width: none; height: auto;
+      background: var(--ui-background);
+      transition: width 0.18s ease;
+    }
+    /* Les écrans de partie sont plus compacts que le dashboard : le plateau ne
+       remplit plus toute la hauteur/largeur sur desktop, mais reste fluide sur mobile. */
+    canvas.game-screen {
+      width: min(100%, 820px);
+    }
 
     /* --- Overlay d'authentification (cycle A, spec-online §5.1) ---
        Saisie texte (email / code OTP / pseudo) via de vrais <input> DOM superposés au
@@ -48,27 +79,27 @@
     #auth-overlay {
       position: fixed; inset: 0; z-index: 50;
       display: flex; align-items: center; justify-content: center;
-      background: rgba(36, 28, 22, 0.55);
+      background: var(--ui-overlay);
       font-family: 'Nunito Sans', system-ui, sans-serif;
     }
     #auth-overlay[hidden] { display: none; }
     .auth-card {
       position: relative; width: 340px; max-width: 90vw;
-      background: #FCF8F3; border: 2.5px solid #1A1A1A; border-radius: 14px;
-      box-shadow: 0 6px 0 rgba(60,45,30,0.25); padding: 26px 24px 22px;
+      background: var(--ui-panel); border: 2.5px solid var(--ui-text); border-radius: 14px;
+      box-shadow: 0 6px 0 var(--ui-shadow); padding: 26px 24px 22px;
     }
     .auth-card h2 {
       margin: 0 0 6px; font-family: 'Archivo Black', system-ui, sans-serif;
-      font-size: 22px; color: #1A1A1A; text-transform: uppercase; letter-spacing: 0.5px;
+      font-size: 22px; color: var(--ui-text); text-transform: uppercase; letter-spacing: 0.5px;
     }
-    .auth-card p { margin: 0 0 14px; font-size: 13px; color: #786F60; line-height: 1.4; }
+    .auth-card p { margin: 0 0 14px; font-size: 13px; color: var(--ui-muted); line-height: 1.4; }
     .auth-card input {
       width: 100%; box-sizing: border-box; margin-bottom: 12px;
       padding: 11px 12px; font-size: 15px; font-family: 'Nunito Sans', system-ui, sans-serif;
-      color: #1A1A1A; background: #FFFFFF;
-      border: 2px solid #1A1A1A; border-radius: 9px; outline: none;
+      color: var(--ui-text); background: var(--ui-card);
+      border: 2px solid var(--ui-text); border-radius: 9px; outline: none;
     }
-    .auth-card input:focus { border-color: #e7bd14; }
+    .auth-card input:focus { border-color: var(--ui-amber); }
     #auth-code { letter-spacing: 6px; text-align: center; font-weight: 700; }
 
     /* --- Écran de choix : 3 grosses options distinctes (icône + titre + explication) --- */
@@ -76,108 +107,110 @@
       display: flex; align-items: center; gap: 12px;
       width: 100%; box-sizing: border-box; margin-bottom: 12px;
       padding: 12px 14px; text-align: left; cursor: pointer;
-      background: #FFFFFF; border: 2.5px solid #1A1A1A; border-radius: 12px;
-      box-shadow: 0 4px 0 rgba(60,45,30,0.18);
+      background: var(--ui-card); border: 2.5px solid var(--ui-text); border-radius: 12px;
+      box-shadow: 0 4px 0 var(--ui-shadow);
       transition: transform 0.06s, box-shadow 0.06s, background 0.1s;
     }
-    .auth-method:hover { background: #FFFDF5; }
-    .auth-method:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(60,45,30,0.18); }
+    .auth-method:hover { background: var(--ui-panel-alt); }
+    .auth-method:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--ui-shadow); }
     /* Option recommandée (lien magique) : liseré doré pour la faire ressortir. */
-    .auth-method[data-method="magic"] { border-color: #cfaa27; background: #FFFDF3; }
-    .auth-method[data-method="magic"]:hover { background: #FFF8E2; }
+    .auth-method[data-method="magic"] { border-color: var(--ui-amber-dark); background: var(--ui-panel-alt); }
+    .auth-method[data-method="magic"]:hover { background: var(--ui-amber-light); }
+    .auth-method[data-method="magic"]:hover .auth-method-title { color: var(--ui-button-text); }
+    .auth-method[data-method="magic"]:hover .auth-method-desc { color: var(--ui-amber-dark); }
     /* Option invité : plus neutre, sans relief, pour signaler « voie secondaire ». */
-    .auth-method[data-method="guest"] { box-shadow: none; background: #F7F3EC; border-style: dashed; }
+    .auth-method[data-method="guest"] { box-shadow: none; background: var(--ui-field); border-style: dashed; }
     .auth-method-icon {
       flex: 0 0 auto; width: 40px; height: 40px; display: grid; place-items: center;
       font-size: 24px; line-height: 1;
-      background: #F0DED8; border: 2px solid #1A1A1A; border-radius: 10px;
+      background: var(--ui-danger-dark); border: 2px solid var(--ui-text); border-radius: 10px;
     }
-    .auth-method[data-method="magic"] .auth-method-icon { background: #F7E7A6; }
-    .auth-method[data-method="guest"] .auth-method-icon { background: #E6DFD3; }
+    .auth-method[data-method="magic"] .auth-method-icon { background: var(--ui-amber-light); }
+    .auth-method[data-method="guest"] .auth-method-icon { background: var(--ui-field); }
     .auth-method-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .auth-method-title {
       display: flex; align-items: center; gap: 7px;
       font-family: 'Archivo Black', system-ui, sans-serif; font-size: 13px;
-      color: #1A1A1A; text-transform: uppercase; letter-spacing: 0.3px;
+      color: var(--ui-text); text-transform: uppercase; letter-spacing: 0.3px;
     }
-    .auth-method-desc { font-size: 11.5px; color: #786F60; line-height: 1.3; }
+    .auth-method-desc { font-size: 11.5px; color: var(--ui-muted); line-height: 1.3; }
     .auth-badge {
       font-family: 'Nunito Sans', system-ui, sans-serif; font-size: 9.5px; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.4px; color: #2B1D06;
-      background: #e7bd14; border: 1.5px solid #1A1A1A; border-radius: 6px;
+      text-transform: uppercase; letter-spacing: 0.4px; color: var(--ui-button-text);
+      background: var(--ui-amber); border: 1.5px solid var(--ui-text); border-radius: 6px;
       padding: 1px 5px; line-height: 1.4;
     }
 
     /* --- Bouton retour (←) : miroir de la croix, coin haut gauche --- */
     .auth-back {
       position: absolute; top: 8px; left: 10px; width: 26px; height: 26px;
-      font-size: 17px; line-height: 1; color: #1A1A1A; background: #F0DED8;
-      border: 2px solid #1A1A1A; border-radius: 7px; cursor: pointer;
+      font-size: 17px; line-height: 1; color: var(--ui-text); background: var(--ui-danger-dark);
+      border: 2px solid var(--ui-text); border-radius: 7px; cursor: pointer;
     }
-    .auth-back:hover { background: #F7E7A6; }
+    .auth-back:hover { background: var(--ui-amber-light); }
     /* Écrans dotés d'un retour : on décale le titre pour ne pas passer sous la flèche. */
     .has-back h2 { padding-left: 32px; }
 
     /* --- Onglets connexion / inscription de l'écran mot de passe --- */
     .auth-tabs {
       display: flex; gap: 8px; margin-bottom: 14px;
-      background: #EFE8DD; border: 2px solid #1A1A1A; border-radius: 11px; padding: 4px;
+      background: var(--ui-field); border: 2px solid var(--ui-text); border-radius: 11px; padding: 4px;
     }
     .auth-tab {
       flex: 1; padding: 8px 6px; cursor: pointer;
       font-family: 'Archivo Black', system-ui, sans-serif; font-size: 11px;
-      text-transform: uppercase; letter-spacing: 0.3px; color: #786F60;
+      text-transform: uppercase; letter-spacing: 0.3px; color: var(--ui-muted);
       background: transparent; border: none; border-radius: 8px;
     }
-    .auth-tab.is-active { color: #2B1D06; background: #e7bd14; box-shadow: 0 2px 0 #cfaa27; }
-    .auth-hint { margin: -6px 0 12px; font-size: 11.5px; color: #8A5A22; }
+    .auth-tab.is-active { color: var(--ui-button-text); background: var(--ui-amber); box-shadow: 0 2px 0 var(--ui-amber-dark); }
+    .auth-hint { margin: -6px 0 12px; font-size: 11.5px; color: var(--ui-amber-dark); }
 
     .auth-btn {
       display: block; width: 100%; box-sizing: border-box; margin-bottom: 10px;
       padding: 12px; font-size: 13px; font-family: 'Archivo Black', system-ui, sans-serif;
-      text-transform: uppercase; color: #2B1D06; background: #e7bd14;
-      border: 2.5px solid #1A1A1A; border-radius: 10px; cursor: pointer;
-      box-shadow: 0 4px 0 #cfaa27;
+      text-transform: uppercase; color: var(--ui-button-text); background: var(--ui-amber);
+      border: 2.5px solid var(--ui-text); border-radius: 10px; cursor: pointer;
+      box-shadow: 0 4px 0 var(--ui-amber-dark);
     }
-    .auth-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #cfaa27; }
+    .auth-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--ui-amber-dark); }
     .auth-btn:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
     .auth-link {
       display: inline-block; margin: 2px 8px 2px 0; padding: 4px 2px;
-      font-size: 12px; color: #8A5A22; background: none; border: none; cursor: pointer;
+      font-size: 12px; color: var(--ui-amber-dark); background: none; border: none; cursor: pointer;
       text-decoration: underline; font-family: 'Nunito Sans', system-ui, sans-serif;
     }
-    .auth-link:disabled { color: #b9ac93; cursor: default; text-decoration: none; }
+    .auth-link:disabled { color: var(--ui-disabled-text); cursor: default; text-decoration: none; }
     .auth-row { display: flex; flex-wrap: wrap; align-items: center; }
     #auth-msg { min-height: 18px; margin: 6px 0 0; font-size: 12.5px; font-weight: 700; }
     #auth-close {
       position: absolute; top: 8px; right: 10px; width: 26px; height: 26px;
-      font-size: 18px; line-height: 1; color: #B5573F; background: #F0DED8;
-      border: 2px solid #1A1A1A; border-radius: 7px; cursor: pointer;
+      font-size: 18px; line-height: 1; color: var(--ui-danger); background: var(--ui-danger-dark);
+      border: 2px solid var(--ui-text); border-radius: 7px; cursor: pointer;
     }
-    .auth-count { font-size: 11px; color: #8f6526; margin-left: 4px; }
+    .auth-count { font-size: 11px; color: var(--ui-amber-dark); margin-left: 4px; }
 
     /* --- Modal de rename (deck editor) — z-index 55 JUSTE au-dessus de auth (50) --- */
     #deck-rename-modal {
       position: fixed; inset: 0; z-index: 55;
       display: grid; place-items: center;
-      background: rgba(36, 28, 22, 0.55);
+      background: var(--ui-overlay);
       font-family: 'Nunito Sans', system-ui, sans-serif;
     }
     #deck-rename-modal[hidden] { display: none; }
     .deck-rename-card {
-      background: #FCF8F3;
-      border: 2.5px solid #1A1A1A;
+      background: var(--ui-panel);
+      border: 2.5px solid var(--ui-text);
       border-radius: 14px;
       padding: 22px 24px 18px;
       width: 360px;
       max-width: 90vw;
-      box-shadow: 0 6px 0 rgba(60,45,30,0.25);
+      box-shadow: 0 6px 0 var(--ui-shadow);
     }
     .deck-rename-card h2 {
       margin: 0 0 12px;
       font-family: 'Archivo Black', system-ui, sans-serif;
       font-size: 18px;
-      color: #1A1A1A;
+      color: var(--ui-text);
       text-transform: uppercase;
       letter-spacing: 0.4px;
     }
@@ -185,30 +218,30 @@
       width: 100%; box-sizing: border-box;
       margin: 0 0 4px; padding: 10px 12px;
       font-size: 15px; font-family: 'Nunito Sans', system-ui, sans-serif;
-      color: #1A1A1A; background: #FFFFFF;
-      border: 2px solid #1A1A1A; border-radius: 8px; outline: none;
+      color: var(--ui-text); background: var(--ui-card);
+      border: 2px solid var(--ui-text); border-radius: 8px; outline: none;
     }
-    .deck-rename-card input:focus { border-color: #e7bd14; }
+    .deck-rename-card input:focus { border-color: var(--ui-amber); }
     .deck-rename-card .hint {
-      font-size: 11px; color: #786F60;
+      font-size: 11px; color: var(--ui-muted);
       margin: 0 0 14px;
     }
     #deck-rename-validate {
       display: block; width: 100%; box-sizing: border-box;
       margin-bottom: 8px; padding: 11px 12px;
       font-size: 13px; font-family: 'Archivo Black', system-ui, sans-serif;
-      text-transform: uppercase; color: #2B1D06;
-      background: #e7bd14;
-      border: 2.5px solid #1A1A1A; border-radius: 10px;
-      cursor: pointer; box-shadow: 0 4px 0 #cfaa27;
+      text-transform: uppercase; color: var(--ui-button-text);
+      background: var(--ui-amber);
+      border: 2.5px solid var(--ui-text); border-radius: 10px;
+      cursor: pointer; box-shadow: 0 4px 0 var(--ui-amber-dark);
     }
-    #deck-rename-validate:active { transform: translateY(2px); box-shadow: 0 2px 0 #cfaa27; }
+    #deck-rename-validate:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--ui-amber-dark); }
     #deck-rename-cancel {
       display: block; width: 100%;
       padding: 6px;
       font-size: 12px; font-family: 'Nunito Sans', system-ui, sans-serif;
       background: none; border: none;
-      color: #8A5A22; text-decoration: underline;
+      color: var(--ui-amber-dark); text-decoration: underline;
       cursor: pointer;
     }
   </style>
@@ -328,6 +361,6 @@
     </div>
   </div>
 
-  <script type="module" src="./src/main.js?v=72"></script>
+  <script type="module" src="./src/main.js?v=115"></script>
 </body>
 </html>

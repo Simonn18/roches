@@ -10,14 +10,14 @@
 //           Note : états du moteur qui bouclent sur 8 hardcodé (coupsLegaux/
 //           evalBoard dans rules.js et ai.js) généraliseront en Phase A.5 v3.
 
-import { SOLDE_DEPART } from './constants.js';
-import { reglesEconomie, DEFAULT_VARIANT } from './variants.js';
+import { SOLDE_DEPART } from './constants.js?v=107';
+import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=107';
 // Note Phase A.5 v2 polish : `TAILLES` n'est PAS importé ici — les call sites
 // qui en ont besoin (render.js pour le bouton TAILLE DE PLATEAU, plus tard
 // online.js pour le lockstep header) importeront directement depuis './tailles.js'.
 // Seul `DEFAULT_TAILLE` + `getBoardH/W` (helpers de résolution) sont utilisés
 // ici par creerPlateau(taille).
-import { DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js';
+import { DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=107';
 
 let PROCHAIN_ID = 1;
 

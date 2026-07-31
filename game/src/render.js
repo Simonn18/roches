@@ -10,23 +10,24 @@ import {
   C_CLAIR, C_FONCE, C_SEL, C_MOVE, C_CAP, C_RUEE,
   LETTRE, VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, COULEUR_CAT,
   MAX_UPGRADES_PAR_PIECE, ACCENT, NOM_JOUEUR,
-  DUREE_ANIM, DUREE_FLASH, DUREE_POPUP, DUREE_GOLD,
+  DUREE_ANIM, DUREE_FLASH, DUREE_POPUP, DUREE_GOLD, REVENU_PAR_COUP,
   C_BRUME, C_CARTE, C_ENCRE, C_SAUGE, C_IVOIRE_BOIS,
   C_ENCRE_DOUX, C_ENCRE_PALE, C_CARTE_BORD, C_OMBRE,
   C_AMBRE, C_AMBRE_FONCE, C_TERRACOTTA, C_SAUGE_FONCE, C_AMBRE_CLAIR, DECK_ACCENT,
-  REMPLI_PIECE,C_ENCRE_sub,
+  UI_THEME, REMPLI_PIECE,C_ENCRE_sub,
   PVW_CADENCES, cadenceLabel,
-} from './constants.js';
-import { VARIANT_PRESETS, ECONOMIES, COMBATS, variantLabel } from './variants.js';
+} from './constants.js?v=107';
+import { VARIANT_PRESETS, ECONOMIES, COMBATS, variantLabel } from './variants.js?v=107';
+import { creerPlateau } from './board.js?v=107';
 // Phase A.5 v2 Phase 3 : TAILLE DE PLATEAU chips itèrent sur TAILLES (maison canonique
 // zero-dep de tailles.js). Pas de cycle : tailles.js n'importe aucun autre module.
-import { TAILLES } from './tailles.js';
-import { DIRS8 } from './rules.js';
-import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal } from './tutorial.js';
+import { TAILLES } from './tailles.js?v=107';
+import { DIRS8, coupsLegaux, roiEnEchec } from './rules.js?v=111';
+import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal } from './tutorial.js?v=107';
 // Deck editor UI (recovery 29/07 [23:30]) : couche DONNÉES pure — loadDecks/getActiveDeck/
 // setSlot sont utilisés par main.js (handlers) et render.js (lecture seule du deck actif
 // pour l'affichage). Aucune dépendance inverse.
-import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js';
+import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -119,6 +120,109 @@ function getSpriteHeight() { return Math.round(__CELL_SIZE * SPRITE_H_RATIO); }
 // pour forcer le navigateur à recharger les sprites au lieu d'utiliser son cache.
 const SPRITE_VERSION = 13;
 const sprites = {};  // clé `${owner}${type}` -> HTMLImageElement
+
+// Les aperçus du menu réutilisent les vraies positions de départ du moteur,
+// mais gardent un tableau initial par taille pour ne pas recréer 32 pièces à
+// chaque frame d'animation.
+const PREVIEW_BOARD_CACHE = new Map();
+const PREVIEW_SEQUENCE_CACHE = new Map();
+function previewBoardInitial(taille) {
+  if (!PREVIEW_BOARD_CACHE.has(taille)) PREVIEW_BOARD_CACHE.set(taille, creerPlateau(taille));
+  return PREVIEW_BOARD_CACHE.get(taille);
+}
+const PREVIEW_UPGRADE_LOADOUT = {
+  std: [
+    { r: 6, c: 4, ids: ['bouclier'], shield: true },
+    { r: 7, c: 6, ids: ['second'] },
+    { r: 7, c: 5, ids: ['Zone'], shield: true },
+    { r: 7, c: 0, ids: ['forteresse'], shield: true },
+    { r: 7, c: 3, ids: ['couronne'], shield: true },
+    { r: 0, c: 4, ids: ['sacrifice'] },
+  ],
+  l15: [
+    { r: 6, c: 6, ids: ['bouclier'], shield: true },
+    { r: 7, c: 12, ids: ['second'] },
+    { r: 7, c: 4, ids: ['Zone'], shield: true },
+    { r: 7, c: 0, ids: ['forteresse'], shield: true },
+    { r: 7, c: 6, ids: ['couronne'], shield: true },
+    { r: 0, c: 8, ids: ['sacrifice'] },
+  ],
+};
+
+function clonePreviewBoard(initial) {
+  return initial.map((row) => row.map((piece) => piece ? {
+    ...piece,
+    upgrades: Array.isArray(piece.upgrades) ? [...piece.upgrades] : [],
+    debuffs: piece.debuffs ? { ...piece.debuffs } : piece.debuffs,
+  } : null));
+}
+
+function decoratePreviewBoard(board, taille) {
+  for (const loadout of PREVIEW_UPGRADE_LOADOUT[taille] || PREVIEW_UPGRADE_LOADOUT.std) {
+    const piece = board[loadout.r]?.[loadout.c];
+    if (!piece) continue;
+    piece.upgrades = [...new Set([...(piece.upgrades || []), ...loadout.ids])];
+    if (loadout.shield) piece.shield = true;
+  }
+  return board;
+}
+function applyPreviewMove(board, move) {
+  const piece = board[move.from.r]?.[move.from.c];
+  if (!piece) return false;
+  board[move.to.r][move.to.c] = piece;
+  board[move.from.r][move.from.c] = null;
+  piece.r = move.to.r;
+  piece.c = move.to.c;
+  return true;
+}
+function previewSequence(taille) {
+  if (PREVIEW_SEQUENCE_CACHE.has(taille)) return PREVIEW_SEQUENCE_CACHE.get(taille);
+  const board = decoratePreviewBoard(clonePreviewBoard(previewBoardInitial(taille)), taille);
+  const preferred = taille === 'l15'
+    ? [
+        [[6, 6], [4, 6]], [[1, 6], [3, 6]],
+        [[7, 12], [5, 11]], [[0, 2], [2, 3]],
+        [[7, 10], [5, 8]], [[1, 8], [2, 8]],
+        [[0, 12], [2, 11]],
+      ]
+    : [
+        [[6, 4], [4, 4]], [[1, 4], [3, 4]],
+        [[7, 6], [5, 5]], [[0, 1], [2, 2]],
+        [[7, 5], [4, 2]], [[1, 3], [2, 3]],
+        [[0, 6], [2, 5]],
+      ];
+  const sequence = [];
+  for (let i = 0; i < preferred.length; i++) {
+    const [from, target] = preferred[i];
+    const expectedOwner = i % 2;
+    let piece = board[from[0]]?.[from[1]];
+    let legal = piece && piece.owner === expectedOwner ? coupsLegaux(board, piece) : [];
+    let move = legal.find((candidate) => candidate.r === target[0] && candidate.c === target[1]);
+    // Si une variante de règle rend le coup d'ouverture indisponible, prendre
+    // le premier coup légal du même camp : l'aperçu reste toujours moteur-validé.
+    if (!move) {
+      for (let r = 0; r < board.length && !move; r++) {
+        for (let c = 0; c < board[0].length && !move; c++) {
+          const candidatePiece = board[r][c];
+          if (!candidatePiece || candidatePiece.owner !== expectedOwner) continue;
+          const candidates = coupsLegaux(board, candidatePiece);
+          if (candidates.length) {
+            piece = candidatePiece;
+            legal = candidates;
+            move = candidates[0];
+            from[0] = r; from[1] = c;
+          }
+        }
+      }
+    }
+    if (!piece || !move) break;
+    const resolved = { from: { r: from[0], c: from[1] }, to: { r: move.r, c: move.c } };
+    sequence.push(resolved);
+    applyPreviewMove(board, resolved);
+  }
+  PREVIEW_SEQUENCE_CACHE.set(taille, sequence);
+  return sequence;
+}
 
 // Préchargement au démarrage. Guardé : en environnement sans DOM (tests
 // headless), Image n'existe pas -> on saute et le rendu bascule sur le fallback.
@@ -223,6 +327,9 @@ function cellCenterVue(state, r, c) {
 }
 
 function roundRect(ctx, x, y, w, h, r) {
+  // Canvas accepte mal les rayons supérieurs aux dimensions du rectangle
+  // (notamment les boutons pill du dashboard) : on borne toujours le rayon.
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
@@ -243,16 +350,108 @@ function darken(hex, f = 0.17) {
 
 // Ton d'ombre plate d'un bouton selon sa couleur (DA §11.4.a).
 function ombreBouton(color) {
-  if (color === C_CARTE) return '#DCD5C7';
-  if (color === C_AMBRE) return '#cfaa27';
+  if (color === UI_THEME.card) return UI_THEME.shadow;
+  if (color === UI_THEME.amber) return UI_THEME.amberDark;
+  if (color === UI_THEME.primary) return UI_THEME.primaryDark;
+  if (color === UI_THEME.danger) return UI_THEME.dangerDark;
   return darken(color, 0.17);
 }
 
+// --- Motion UI Canvas (inspiré du starter, sans dépendance) ---
+// Les rectangles de hit-test restent fixes. Seule la couche visuelle bouge :
+// apparition, soulèvement au survol, enfoncement au clic et retour élastique doux.
+const BUTTON_HOVER_MS = 180;
+const BUTTON_PRESS_MS = 90;
+const BUTTON_APPEAR_MS = 260;
+
+function ensureButtonUI(state) {
+  if (!state.ui) state.ui = { buttons: [] };
+  if (!state.ui.buttons) state.ui.buttons = [];
+  if (!state.ui.motion) state.ui.motion = new Map();
+  if (!state.ui.pointer) state.ui.pointer = { x: -1, y: -1, inside: false };
+  if (state.ui.pressedId == null) state.ui.pressedId = null;
+  // Menu hamburger (31/07) : état persistant d'ouverture du panneau. Défaut sûr
+  // pour les états recréés sans ce champ (menuState le pose explicitement).
+  if (state.ui.hamburgerOpen == null) state.ui.hamburgerOpen = false;
+  return state.ui;
+}
+
+function actionSignature(action) {
+  try { return JSON.stringify(action) || String(action); } catch { return String(action); }
+}
+
+function buttonId(x, y, w, h, action, index = 0) {
+  return `${actionSignature(action)}@${Math.round(x)},${Math.round(y)},${Math.round(w)},${Math.round(h)}#${index}`;
+}
+
+function insideButton(button, x, y) {
+  return x >= button.x && x <= button.x + button.w
+    && y >= button.y && y <= button.y + button.h;
+}
+
+function approche(valeur, cible, dt, duree) {
+  const k = 1 - Math.exp(-dt / duree);
+  return valeur + (cible - valeur) * k;
+}
+
+function enregistrerBouton(state, x, y, w, h, action, enabled, styled = false, radius = 10) {
+  ensureButtonUI(state);
+  const button = {
+    x, y, w, h, action, enabled, radius,
+    id: buttonId(x, y, w, h, action, state.ui.buttons.length),
+    styled,
+  };
+  state.ui.buttons.push(button);
+  return button;
+}
+
+function motionBouton(state, button) {
+  const ui = ensureButtonUI(state);
+  const now = ui.frameNow || (typeof performance !== 'undefined' ? performance.now() : 0);
+  let motion = ui.motion.get(button.id);
+  if (!motion) {
+    motion = { hover: 0, press: 0, appear: 0, lastNow: now };
+    ui.motion.set(button.id, motion);
+  }
+  const dt = Math.min(64, Math.max(0, now - motion.lastNow));
+  motion.lastNow = now;
+  const hovered = button.enabled && ui.pointer.inside && insideButton(button, ui.pointer.x, ui.pointer.y);
+  const pressed = button.enabled && ui.pressedId === button.id;
+  motion.hover = approche(motion.hover, hovered ? 1 : 0, dt, BUTTON_HOVER_MS);
+  motion.press = approche(motion.press, pressed ? 1 : 0, dt, BUTTON_PRESS_MS);
+  motion.appear = approche(motion.appear, 1, dt, BUTTON_APPEAR_MS);
+  return motion;
+}
+
+// Même motion que `bouton()`, mais utilisable par le menu V2 qui dessine ses
+// propres corps. Les coordonnées du bouton restent fixes pour le hit-test ;
+// seul `visualY` est animé pendant le rendu.
+function motionMenuBouton(state, x, y, w, h, action, enabled = true, radius = 10) {
+  // Le menu dessine lui-même le corps et le contour après ce calcul : le marquer
+  // comme stylé évite qu'une seconde surcouche générique ne double le liseré.
+  const button = enregistrerBouton(state, x, y, w, h, action, enabled, true, radius);
+  const motion = motionBouton(state, button);
+  // Position stable au repos : seuls le survol et l'appui déplacent le bouton.
+  const visualY = y + (1 - motion.appear) * 3 - motion.hover * 5 + motion.press * 2;
+  button.visualY = visualY;
+  return { button, motion, visualY };
+}
+
+function eclaircir(hex, amount = 0.08) {
+  if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  const n = parseInt(hex.slice(1), 16);
+  const mix = (channel) => Math.round(channel + (255 - channel) * amount);
+  const r = mix((n >> 16) & 255).toString(16).padStart(2, '0');
+  const g = mix((n >> 8) & 255).toString(16).padStart(2, '0');
+  const b = mix(n & 255).toString(16).padStart(2, '0');
+  return `#${r}${g}${b}`;
+}
+
 // Carte / panneau avec ombre douce et liseré — motif chrome répété partout.
-function carte(ctx, x, y, w, h, r, fill, { shadow = true, stroke = C_CARTE_BORD } = {}) {
+function carte(ctx, x, y, w, h, r, fill, { shadow = true, stroke = UI_THEME.border } = {}) {
   ctx.save();
   if (shadow) {
-    ctx.shadowColor = C_OMBRE;
+    ctx.shadowColor = UI_THEME.shadow;
     ctx.shadowBlur = 10;
     ctx.shadowOffsetY = 3;
   }
@@ -266,31 +465,99 @@ function carte(ctx, x, y, w, h, r, fill, { shadow = true, stroke = C_CARTE_BORD 
   }
 }
 
-function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '', color = C_CARTE, textColor = C_ENCRE, subColor = C_ENCRE_sub } = {}) {
-  state.ui.buttons.push({ x, y, w, h, action, enabled });
+function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '', color = UI_THEME.card, textColor = UI_THEME.text, subColor = UI_THEME.subtext, outlineColor = UI_THEME.border, disabledColor = UI_THEME.disabled, disabledTextColor = UI_THEME.disabledText, disabledOutlineColor = UI_THEME.disabledBorder } = {}) {
+  const button = enregistrerBouton(state, x, y, w, h, action, enabled, true);
+  const motion = motionBouton(state, button);
   const r = 10;
-  // Ombre plate dure décalée de +4 px (DA §11.4.a) — seulement si actionnable.
+  const lift = motion.hover * 5;
+  const press = motion.press * 2;
+  const appear = (1 - motion.appear) * 3;
+  // Position stable au repos : le bouton ne bouge qu'au survol ou à l'appui.
+  const visualY = y + appear - lift + press;
+  const visualColor = enabled ? eclaircir(color, motion.hover * 0.08) : disabledColor;
+  ctx.save();
+  // Ombre plate : elle se resserre quand le bouton est pressé et s'éloigne
+  // légèrement au survol pour donner une profondeur lisible sans déplacer le layout.
   if (enabled) {
     ctx.fillStyle = ombreBouton(color);
-    roundRect(ctx, x, y + 4, w, h, r); ctx.fill();
+    roundRect(ctx, x, visualY + 4 - motion.press * 3, w, h, r); ctx.fill();
   }
-  // Corps du bouton (aplat plein, pas de blur).
-  ctx.fillStyle = enabled ? color : '#E7E1D6';
-  roundRect(ctx, x, y, w, h, r); ctx.fill();
+  ctx.globalAlpha = 0.92 + motion.appear * 0.08;
+  ctx.fillStyle = visualColor;
+  roundRect(ctx, x, visualY, w, h, r); ctx.fill();
   // Contour marqué 2.5 px : signale « cliquable » (DA §11.4.a).
-  ctx.lineWidth = 2.5; ctx.strokeStyle = enabled ? C_ENCRE : C_ENCRE_PALE;
-  roundRect(ctx, x, y, w, h, r); ctx.stroke();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = enabled ? outlineColor : disabledOutlineColor;
+  roundRect(ctx, x, visualY, w, h, r); ctx.stroke();
   // Libellé principal : Archivo Black en CAPITALES (DA §3).
-  ctx.fillStyle = enabled ? textColor : C_ENCRE_PALE;
+  ctx.fillStyle = enabled ? textColor : disabledTextColor;
   ctx.font = `13px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(label.toUpperCase(), x + w / 2, y + h / 2 - (sub ? 7 : 0));
+  ctx.fillText(label.toUpperCase(), x + w / 2, visualY + h / 2 - (sub ? 7 : 0));
   if (sub) {
     // Sous-titre descriptif : Nunito Sans, casse normale (texte plus long).
-    ctx.font = `11px ${F_TEXTE}`; ctx.fillStyle = enabled ? subColor : C_ENCRE_sub;
-    ctx.fillText(sub, x + w / 2, y + h / 2 + 9);
+    ctx.font = `11px ${F_TEXTE}`; ctx.fillStyle = enabled ? subColor : UI_THEME.disabledText;
+    ctx.fillText(sub, x + w / 2, visualY + h / 2 + 9);
+  }
+  ctx.restore();
+}
+
+// Les contrôles spécialisés (chips, deck tabs, replay bar) dessinent leur propre
+// corps. Cette surcouche leur apporte néanmoins le même langage de survol, de clic
+// et d'apparition sans réécrire leurs géométries ni leurs hitboxes.
+function dessineEffetsBoutons(ctx, state) {
+  const ui = ensureButtonUI(state);
+  for (const button of ui.buttons) {
+    if (button.styled || !button.enabled) continue;
+    const motion = motionBouton(state, button);
+    const alpha = Math.max(motion.hover, motion.press, 1 - motion.appear);
+    if (alpha < 0.01) continue;
+    ctx.save();
+    // Les contrôles spécialisés gardent leur propre remplissage et leur propre
+    // texte : cette couche ne dessine qu'un liseré, donc aucun recouvrement.
+    const visualY = button.visualY ?? button.y;
+    if (motion.hover > 0.01) {
+      ctx.globalAlpha = motion.hover * 0.8;
+      ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.amber;
+      roundRect(ctx, button.x, visualY, button.w, button.h, button.radius ?? 8); ctx.stroke();
+    }
+    if (motion.press > 0.01) {
+      ctx.globalAlpha = motion.press * 0.7;
+      ctx.lineWidth = 2; ctx.strokeStyle = C_ENCRE;
+      roundRect(ctx, button.x, visualY, button.w, button.h, button.radius ?? 8); ctx.stroke();
+    }
+    // Petit liseré d'entrée : les contrôles custom apparaissent avec le même
+    // rythme que les boutons principaux, sans masquer leur texte.
+    if (motion.appear < 0.98) {
+      ctx.globalAlpha = (1 - motion.appear) * 0.22;
+      ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.amberLight;
+      roundRect(ctx, button.x, visualY, button.w, button.h, button.radius ?? 8); ctx.stroke();
+    }
+    ctx.restore();
   }
 }
+
+function finaliserBoutons(ctx, state) {
+  const ui = ensureButtonUI(state);
+  // Les contrôles spécialisés s'enregistrent encore directement dans
+  // state.ui.buttons : l'index de frame les rend uniques même si deux actions
+  // partagent la même géométrie.
+  const activeIds = new Set();
+  ui.buttons.forEach((button, index) => {
+    button.id = buttonId(button.x, button.y, button.w, button.h, button.action, index);
+    activeIds.add(button.id);
+  });
+  for (const id of ui.motion.keys()) {
+    if (!activeIds.has(id)) ui.motion.delete(id);
+  }
+  dessineEffetsBoutons(ctx, state);
+}
+
+function majUIFrame(state, now) {
+  const ui = ensureButtonUI(state);
+  ui.frameNow = now;
+}
+
+
 
 // Dessine une pièce à une position pixel donnée (centre).
 // Si le sprite du camp est chargé, on l'affiche (la silhouette porte déjà la
@@ -496,12 +763,12 @@ function feuTinte(tint) {
 // ~10 s, ~60 fps) convertie en silhouette de flamme teintée cat (pipeline v3.3
 // ci-dessus). Fallback placeholder procédural (halo radial cat à 0.5 alpha) tant que
 // la vidéo n'est pas bufferisée (`videoFeu.readyState < 3`) — aucune frame vide.
-function dessineFeu(ctx, x, y, now, r, col1, col2, pulsed) {
+function dessineFeu(ctx, x, y, now, r, col1, col2, pulsed, radiusOverride = 40) {
   if (!col1) return;
   // Rayon du halo vidéo — bump de 34 → 40 px (11/07 round 2 user request) : le
   // mouvement des flammes est plus visible à distance quand le halo déborde davantage
   // autour de la silhouette (tuile CELL=70 ; la vignette du masque fond les bords).
-  const radius = 40;
+  const radius = radiusOverride;
   // Ancrage vertical (12/07 user request) : la RACINE de la flamme doit partir de la
   // pièce elle-même (base du sprite, ~y+30), pas du bas du halo circulaire (~y+40).
   // On remonte donc toute la boîte vidéo — la flamme lèche la pièce et monte derrière.
@@ -581,6 +848,56 @@ function dessineFleche(ctx, x1, y1, x2, y2, color) {
   ctx.fill();
 }
 
+function trouveRoi(board, owner) {
+  if (!board || !board.length || !board[0]) return null;
+  for (let r = 0; r < board.length; r++) {
+    for (let c = 0; c < board[r].length; c++) {
+      const piece = board[r][c];
+      if (piece && piece.type === 'K' && piece.owner === owner) return piece;
+    }
+  }
+  return null;
+}
+
+// Alerte visuelle d’échec : informative uniquement, puisque ROYCHEC conserve
+// la capture du roi comme condition de victoire. Le rendu passe par vueCase()
+// pour rester correct en PvP côté 1 et sur les plateaux 8×8 / 8×15.
+function dessineAlertesEchec(ctx, state, now) {
+  if (!state || !state.board || state.phase === 'gameover') return;
+  const pulse = 0.5 + 0.5 * Math.sin(now / 220);
+  for (let owner = 0; owner < 2; owner++) {
+    if (!roiEnEchec(state.board, owner)) continue;
+    const roi = trouveRoi(state.board, owner);
+    if (!roi) continue;
+    const view = vueCase(state, roi.r, roi.c);
+    const centre = cellCenter(view.r, view.c);
+
+    ctx.save();
+    ctx.globalAlpha = 0.16 + pulse * 0.10;
+    ctx.fillStyle = UI_THEME.danger;
+    tilePath(ctx, view.r, view.c); ctx.fill();
+    ctx.globalAlpha = 0.78 + pulse * 0.22;
+    ctx.lineWidth = 4 + pulse * 2;
+    ctx.strokeStyle = UI_THEME.danger;
+    ctx.beginPath();
+    ctx.arc(centre.x, centre.y, Math.max(10, __CELL_SIZE / 2 - 7), 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Petit marqueur « ! » déporté dans l’angle : visible sans masquer la pièce.
+    const markerR = Math.max(8, Math.min(12, __CELL_SIZE * 0.17));
+    const markerX = centre.x + __CELL_SIZE * 0.29;
+    const markerY = centre.y - __CELL_SIZE * 0.29;
+    ctx.globalAlpha = 0.96;
+    ctx.fillStyle = UI_THEME.danger;
+    ctx.beginPath(); ctx.arc(markerX, markerY, markerR, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = UI_THEME.text;
+    ctx.font = `bold ${Math.max(12, Math.round(markerR * 1.5))}px ${F_DISPLAY}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('!', markerX, markerY + 1);
+    ctx.restore();
+  }
+}
+
 function dessineEchiquier(ctx, state, now) {
   // Cadre / socle du plateau (anneau Ivoire Bois) puis fond Brume : les gouttières
   // entre les tuiles laissent apparaître ce fond Brume (DA §4).
@@ -633,6 +950,10 @@ function dessineEchiquier(ctx, state, now) {
     tilePathVue(ctx, state, s.r, s.c);
     ctx.fillStyle = C_SEL; ctx.fill();
   }
+
+  // Alerte d’échec après la sélection : l’anneau reste visible même si le roi
+  // est aussi la pièce sélectionnée.
+  dessineAlertesEchec(ctx, state, now);
 
   // Aura de Zone de contrôle : teinte les 8 tuiles autour du fou équipé sélectionné.
   if (state.selected && state.selected.type === 'B' && state.selected.upgrades.includes('Zone')) {
@@ -780,7 +1101,7 @@ function dessineHorlogesPvw(ctx, state, x, w, y, now) {
     const h = 30;
     // Pulsation douce de la pastille active (cohérent avec l'anneau de ciblage).
     const pulse = actif ? 0.5 + 0.5 * Math.sin(now / 400) : 0;
-    carte(ctx, x, y, w, h, 8, actif ? '#FFFFFF' : C_CARTE, { shadow: actif });
+    carte(ctx, x, y, w, h, 8, actif ? UI_THEME.panelAlt : UI_THEME.card, { shadow: actif });
     if (actif) {
       ctx.save();
       ctx.globalAlpha = 0.35 + 0.35 * pulse;
@@ -792,19 +1113,62 @@ function dessineHorlogesPvw(ctx, state, x, w, y, now) {
     ctx.fillStyle = ACCENT[campVisuel(state, row.side)];
     ctx.beginPath(); ctx.arc(x + 16, y + h / 2, 6, 0, Math.PI * 2); ctx.fill();
     // Nom / pseudo (tronqué).
-    ctx.fillStyle = C_ENCRE; ctx.font = `11px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `11px ${F_DISPLAY}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     let nom = row.label.toUpperCase();
     if (nom.length > 14) nom = nom.slice(0, 13) + '…';
     ctx.fillText(nom, x + 28, y + h / 2);
     // Horloge mm:ss à droite.
-    ctx.fillStyle = bas ? C_TERRACOTTA : C_ENCRE;
+    ctx.fillStyle = bas ? UI_THEME.danger : UI_THEME.text;
     ctx.font = `15px ${F_DISPLAY}`;
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     ctx.fillText('⏱ ' + fmtClock(t), x + w - 10, y + h / 2);
     y += h + 6;
   }
   return y + 6;
+}
+
+// --- Résumé compact de la variante active ---
+// Une seule ligne de contexte pendant la partie : les règles restent visibles sans
+// recréer l'accordéon du menu ni prendre la place des actions de pièce.
+function dessineResumeVariante(ctx, state, x, y, w) {
+  const variant = state.variant || {};
+  const taille = TAILLES[state.taille] || TAILLES.std;
+  const economie = variant.plafond === Infinity ? '∞' : `${variant.plafond ?? 30}`;
+  // Résumé compact mais fidèle : Élim. ×2 supprime le revenu de base,
+  // tandis que Standard crédite le revenu normal par coup.
+  const revenu = variant.revenueBase > 0 ? REVENU_PAR_COUP : 0;
+  const combat = `+${revenu} · ×${variant.captureMul || 1}`;
+  const items = [
+    ['ÉCUS', economie === '∞' ? '∞ max' : `${economie} max`],
+    ['COMBAT', combat],
+    ['PLATEAU', taille.label.replace(/\\s/g, '')],
+  ];
+  const gap = 5;
+  const cellW = Math.max(1, (w - gap * (items.length - 1)) / items.length);
+  const h = 42;
+
+  ctx.save();
+  ctx.fillStyle = UI_THEME.muted;
+  ctx.font = `9px ${F_DISPLAY}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('RÈGLES DE LA PARTIE', x, y - 7);
+  items.forEach(([label, value], i) => {
+    const ix = x + i * (cellW + gap);
+    carte(ctx, ix, y, cellW, h, 7, UI_THEME.panel, { shadow: false, stroke: UI_THEME.border });
+    ctx.fillStyle = UI_THEME.muted;
+    ctx.font = `8px ${F_TEXTE}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(label, ix + cellW / 2, y + 8);
+    ctx.fillStyle = UI_THEME.text;
+    ctx.font = `11px ${F_DISPLAY}`;
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(value, ix + cellW / 2, y + h - 7);
+  });
+  ctx.restore();
+  return y + h;
 }
 
 // --- Panneau latéral (HUD + infos pièce + achats) ---
@@ -824,7 +1188,7 @@ function dessinePanneau(ctx, state, now) {
   }
 
   // Titre — wordmark Archivo Black en capitales (DA §3).
-  ctx.fillStyle = C_ENCRE; ctx.font = `22px ${F_DISPLAY}`;
+  ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   ctx.fillText('♞ ROYCHEC', x, OY + 8);
 
@@ -836,14 +1200,14 @@ function dessinePanneau(ctx, state, now) {
     const actif = j === state.turn && state.phase !== 'gameover';
     // Couleur VISUELLE du camp (échange 0↔1 en pvw côté 1 : ma ligne « Toi » = skin bleu).
     const vj = campVisuel(state, j);
-    carte(ctx, x, y, w, 42, 8, actif ? '#FFFFFF' : C_CARTE, { shadow: actif });
+    carte(ctx, x, y, w, 42, 8, actif ? UI_THEME.panelAlt : UI_THEME.card, { shadow: actif });
     if (actif) {
       ctx.fillStyle = ACCENT[vj];
       roundRect(ctx, x, y, 4, 42, 2); ctx.fill();
     }
     // Point d'accent de camp (inchangé, DA §11.3.a) + nom du joueur.
     ctx.fillStyle = ACCENT[vj]; ctx.beginPath(); ctx.arc(x + 20, y + 21, 9, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = C_ENCRE; ctx.font = `12px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     // En PvP en ligne, on nomme les camps « Toi » / pseudo adverse plutôt que Joueur 1/2.
     let nomJ = NOM_JOUEUR[j];
@@ -854,14 +1218,14 @@ function dessinePanneau(ctx, state, now) {
     const eW = 60, eH = 24, eX = x + w - 66, eY = y + 9;
     ctx.fillStyle = ACCENT[vj];
     roundRect(ctx, eX, eY, eW, eH, eH / 2); ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = C_ENCRE;
+    ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.border;
     roundRect(ctx, eX, eY, eW, eH, eH / 2); ctx.stroke();
     // Icône pièce de monnaie minimale (disque Ivoire + anneau Encre).
     ctx.beginPath(); ctx.arc(eX + 13, eY + eH / 2, 7, 0, Math.PI * 2);
-    ctx.fillStyle = C_IVOIRE_BOIS; ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = C_ENCRE; ctx.stroke();
+    ctx.fillStyle = UI_THEME.card; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
     // Solde en chiffres, aligné à droite (8 px de marge).
-    ctx.fillStyle = C_ENCRE; ctx.font = `13px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_DISPLAY}`;
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     ctx.fillText(String(state.ecus[j]), eX + eW - 8, eY + eH / 2 + 1);
     y += 50;
@@ -869,12 +1233,16 @@ function dessinePanneau(ctx, state, now) {
 
   y += 8;
 
+  // Contexte de variante volontairement discret : il reste présent pendant toute
+  // la partie, mais ne concurrence ni le tour actif ni les actions de la pièce.
+  y = dessineResumeVariante(ctx, state, x, y + 14, w) + 14;
+
   // Enchaînement en attente (Double coup / Second galop).
   if (state.chain) {
     const msg = state.chain.type === 'double-coup'
       ? 'Double coup : rejouez la Dame'
       : 'Second galop : rejouez le Cavalier (sans capture)';
-    ctx.fillStyle = C_AMBRE_FONCE; ctx.font = `600 14px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.amberDark; ctx.font = `600 14px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText(msg, x, y);
     y += 22;
@@ -885,8 +1253,8 @@ function dessinePanneau(ctx, state, now) {
   // Pièce sélectionnée : infos + actions.
   const sel = state.selected;
   if (sel && sel.owner === state.turn && state.phase !== 'gameover') {
-    carte(ctx, x, y, w, 26, 7, '#FFFFFF');
-    ctx.fillStyle = C_ENCRE; ctx.font = `600 14px ${F_TEXTE}`;
+    carte(ctx, x, y, w, 26, 7, UI_THEME.card);
+    ctx.fillStyle = UI_THEME.text; ctx.font = `600 14px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     const valeur = valeurAffichee(sel);
     ctx.fillText(`${nomType(sel.type)} — valeur ${valeur}`, x + 10, y + 13);
@@ -902,7 +1270,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'ruee' });
       bouton(state, ctx, x, y, w, 34, 'Ruée', { kind: 'ruee' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'capture à distance' });
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: cd > 0 ? `recharge ${cd}` : 'capture à distance' });
       // Tutoriel : surligne le bouton quand l'étape guide vers ce pouvoir.
       const hintTuto = state.mode === 'tutorial' ? tutorielHint(state) : null;
       if (hintTuto && hintTuto.power === 'ruee') pulseRect(ctx, x, y, w, 34, now);
@@ -915,7 +1283,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'rempart' });
       bouton(state, ctx, x, y, w, 34, 'Rempart', { kind: 'rempart' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'blinde la tour et les alliés' });
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: cd > 0 ? `recharge ${cd}` : 'blinde la tour et les alliés' });
       y += 42;
     }
 
@@ -925,7 +1293,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'rayon' });
       bouton(state, ctx, x, y, w, 34, 'Rayon sacré', { kind: 'rayon' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'capture à distance' });
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: cd > 0 ? `recharge ${cd}` : 'capture à distance' });
       y += 42;
     }
 
@@ -935,7 +1303,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && cd === 0 && !sel.sacrificeArmed && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'sacrifice' });
       bouton(state, ctx, x, y, w, 34, 'Mariage strat.', { kind: 'sacrifice' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06',
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText,
           sub: sel.sacrificeArmed ? 'armé' : (cd > 0 ? `recharge ${cd}` : 'immobilise la reine adverse') });
       y += 42;
     }
@@ -945,7 +1313,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && !sel.decretUsed && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'decret' });
       bouton(state, ctx, x, y, w, 34, 'Décret', { kind: 'decret' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06',
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText,
           sub: sel.decretUsed ? 'déjà utilisé' : 'échange avec un allié adjacent' });
       y += 42;
     }
@@ -956,7 +1324,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'cavalerie' });
       bouton(state, ctx, x, y, w, 34, 'Cavalerie', { kind: 'cavalerie' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'repousse un ennemi' });
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: cd > 0 ? `recharge ${cd}` : 'repousse un ennemi' });
       y += 42;
     }
 
@@ -966,7 +1334,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'echange' });
       bouton(state, ctx, x, y, w, 34, 'Échange', { kind: 'echange' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'swap avec un pion' });
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: cd > 0 ? `recharge ${cd}` : 'swap avec un pion' });
       y += 42;
     }
 
@@ -976,7 +1344,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && cd === 0 && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'hypnose' });
       bouton(state, ctx, x, y, w, 34, 'Hypnose', { kind: 'hypnose' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06', sub: cd > 0 ? `recharge ${cd}` : 'aura de gel' });
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: cd > 0 ? `recharge ${cd}` : 'aura de gel' });
       y += 42;
     }
 
@@ -985,7 +1353,7 @@ function dessinePanneau(ctx, state, now) {
       const pret = !powersBlocked && !sel.shtUsed && state.phase === 'play'
         && tutorielPermet(state, { type: 'power', kind: 'sht' });
       bouton(state, ctx, x, y, w, 34, 'S.H.T.', { kind: 'sht' },
-        { enabled: pret, color: C_AMBRE, textColor: '#2B1D06',
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText,
           sub: sel.shtUsed ? 'déjà utilisé' : 'silence le roi adverse' });
       y += 42;
     }
@@ -1012,11 +1380,11 @@ function dessinePanneau(ctx, state, now) {
     if (state.mode === 'spectator') {
       bouton(state, ctx, __PANEL_X_RUNTIME + w - 140, btnY, 130, 32, '◀  Retour',
         { kind: 'retourMenu' },
-        { color: C_SAUGE, textColor: C_ENCRE });
+        { color: UI_THEME.primary, textColor: UI_THEME.text });
     } else if (state.mode === 'pvp' || state.mode === 'pvai' || state.mode === 'pvw') {
       bouton(state, ctx, __PANEL_X_RUNTIME + w - 140, btnY, 130, 32, 'Abandonner',
         { kind: 'abandonner' },
-        { color: C_TERRACOTTA, textColor: '#FFFFFF' });
+        { color: UI_THEME.danger, textColor: UI_THEME.text });
     }
   }
 
@@ -1035,7 +1403,7 @@ function dessineLegendeCategories(ctx, x, y) {
   for (const [cat, label] of items) {
     ctx.beginPath(); ctx.arc(lx + 4, y, 4, 0, Math.PI * 2);
     ctx.fillStyle = COULEUR_CAT[cat]; ctx.fill();
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.textAlign = 'left';
+    ctx.fillStyle = UI_THEME.muted; ctx.textAlign = 'left';
     ctx.fillText(label, lx + 11, y);
     lx += ctx.measureText(label).width + 26;
   }
@@ -1043,10 +1411,10 @@ function dessineLegendeCategories(ctx, x, y) {
 
 function dessineCatalogue(ctx, state, x, y, w, now) {
   const p = state.panelPiece;
-  ctx.fillStyle = C_ENCRE; ctx.font = `13px ${F_DISPLAY}`;
+  ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(`AMÉLIORER : ${nomType(p.type).toUpperCase()}`, x, y);
-  bouton(state, ctx, x + w - 26, y - 4, 26, 22, '×', { kind: 'closePanel' }, { color: '#F0DED8', textColor: C_TERRACOTTA });
+  bouton(state, ctx, x + w - 26, y - 4, 26, 22, '×', { kind: 'closePanel' }, { color: UI_THEME.dangerDark, textColor: UI_THEME.text, outlineColor: UI_THEME.danger });
   y += 20;
   dessineLegendeCategories(ctx, x, y + 6);
   // Marge supplémentaire : laisse respirer la pastille de coût qui déborde du haut
@@ -1073,69 +1441,69 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
     // Hitbox : toute la carte (w×62). Inchangée par rapport au code corrigé (commit e2fb50be) ;
     // la pastille de coût déborde au-dessus de cette zone mais reste purement décorative
     // (le clic d'achat se fait sur le corps de la carte). Le clic est refusé (buzz) côté acheter().
-    state.ui.buttons.push({ x: cx0, y, w, h, action: { kind: 'buy', id }, enabled: true });
+    state.ui.buttons.push({ x: cx0, y, w, h, action: { kind: 'buy', id }, enabled: true, radius: 8 });
 
     // Fond de carte selon l'état (priorité : bientôt/verrou > achetée > premium > standard, DA §11.1).
     let bg;
-    if (bientot || verrou) bg = '#F3EFE7';
-    else if (deja) bg = '#EAF1E6';
-    else if (premium) bg = abordable ? '#FFFFFF' : '#EAE3D2'; // grisé chaud (reste doré)
-    else bg = abordable ? '#FFFFFF' : '#F3EFE7';
+    if (bientot || verrou) bg = UI_THEME.disabled;
+    else if (deja) bg = UI_THEME.panelAlt;
+    else if (premium) bg = abordable ? UI_THEME.card : UI_THEME.disabled; // grisé chaud
+    else bg = abordable ? UI_THEME.card : UI_THEME.disabled;
     carte(ctx, cx0, y, w, h, 8, bg, { shadow: achetable || deja, stroke: null });
 
     // Contour selon l'état (un seul, dans l'ordre de priorité DA §11.1).
     if (deja) {
       // Achetée : contour Sauge Foncé 2 px (prime sur le cadre doré).
-      ctx.lineWidth = 2; ctx.strokeStyle = C_SAUGE_FONCE;
+      ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.primaryDark;
       roundRect(ctx, cx0, y, w, h, 8); ctx.stroke();
     } else if (premium) {
-      // Cadre premium doré 3 px + double liseré Encre 1 px inset (DA §11.1.b).
-      ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE;
+      // Cadre premium doré 3 px + double liseré UI 1 px inset (DA §11.1.b).
+      ctx.lineWidth = 3; ctx.strokeStyle = UI_THEME.amber;
       roundRect(ctx, cx0, y, w, h, 8); ctx.stroke();
-      ctx.lineWidth = 1; ctx.strokeStyle = C_ENCRE;
+      ctx.lineWidth = 1; ctx.strokeStyle = UI_THEME.border;
       roundRect(ctx, cx0 + 2, y + 2, w - 4, h - 4, 6); ctx.stroke();
     } else {
       // Standard : liseré discret 1 px.
-      ctx.lineWidth = 1; ctx.strokeStyle = C_CARTE_BORD;
+      ctx.lineWidth = 1; ctx.strokeStyle = UI_THEME.border;
       roundRect(ctx, cx0, y, w, h, 8); ctx.stroke();
     }
 
     // Liseré de catégorie (bord gauche) épaissi à 8 px (DA §11.1.a). Sauge Foncé si achetée.
-    ctx.fillStyle = deja ? C_SAUGE_FONCE : COULEUR_CAT[u.cat];
+    ctx.fillStyle = deja ? UI_THEME.primaryDark : COULEUR_CAT[u.cat];
     roundRect(ctx, cx0, y, 8, h, 4); ctx.fill();
 
     // Nom + description (décalés à droite du liseré 8 px).
-    ctx.fillStyle = (achetable || deja) && !bientot ? C_ENCRE : C_ENCRE_PALE;
+    ctx.fillStyle = (achetable || deja) && !bientot ? UI_THEME.text : UI_THEME.disabledText;
     ctx.font = `12px ${F_DISPLAY}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText(u.nom.toUpperCase(), cx0 + 18, y + 8);
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `11px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
     wrapText(ctx, u.desc, cx0 + 18, y + 28, w - 52, 14);
 
     // Carte « bientôt » : pas de pastille, juste un libellé neutre (DA §11.1, pas de premium).
     if (bientot) {
-      ctx.textAlign = 'right'; ctx.font = `700 13px ${F_TEXTE}`; ctx.fillStyle = C_ENCRE_PALE;
+      ctx.textAlign = 'right'; ctx.font = `700 13px ${F_TEXTE}`; ctx.fillStyle = UI_THEME.disabledText;
       ctx.fillText('bientôt', cx0 + w - 10, y + 8);
     } else if (verrou) {
       // Carte verrouillée par l'étape du tutoriel : cadenas à la place de la pastille.
-      ctx.textAlign = 'right'; ctx.font = `700 13px ${F_TEXTE}`; ctx.fillStyle = C_ENCRE_PALE;
+      ctx.textAlign = 'right'; ctx.font = `700 13px ${F_TEXTE}`; ctx.fillStyle = UI_THEME.disabledText;
       ctx.fillText('🔒', cx0 + w - 10, y + 8);
     } else {
       // Pastille de coût / badge médaille, chevauchant le bord supérieur (DA §11.1.c/d).
       const pcx = cx0 + w - 20, pcy = y, pr = 15;
       let pFill, pTexte, pTexteColor;
       if (deja) {
-        pFill = C_SAUGE; pTexte = '✓'; pTexteColor = C_IVOIRE_BOIS; // badge médaille (DA §11.1.d)
+        pFill = UI_THEME.primary; pTexte = '✓'; pTexteColor = UI_THEME.text; // badge médaille (DA §11.1.d)
       } else {
-        pFill = premium ? C_AMBRE : COULEUR_CAT[u.cat];             // doré si premium (DA §11.1.c)
+        pFill = premium ? UI_THEME.amber : COULEUR_CAT[u.cat];             // doré si premium (DA §11.1.c)
         pTexte = String(u.cout);
-        pTexteColor = abordable ? C_IVOIRE_BOIS : C_TERRACOTTA;     // Terracotta si solde insuffisant
+        pTexteColor = abordable ? UI_THEME.text : UI_THEME.danger;     // Terracotta si solde insuffisant
       }
       ctx.beginPath(); ctx.arc(pcx, pcy, pr, 0, Math.PI * 2);
       ctx.fillStyle = pFill; ctx.fill();
-      ctx.lineWidth = 2; ctx.strokeStyle = C_ENCRE; ctx.stroke();
+      ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
       // Texte : Archivo Black 13 px, liseré Encre 1 px puis remplissage (lisible sur tout fond).
       ctx.font = `13px ${F_DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.lineWidth = 1; ctx.lineJoin = 'round'; ctx.strokeStyle = C_ENCRE;
+      ctx.lineWidth = 1; ctx.lineJoin = 'round'; ctx.strokeStyle = UI_THEME.border;
       ctx.strokeText(pTexte, pcx, pcy + 1);
       ctx.fillStyle = pTexteColor; ctx.fillText(pTexte, pcx, pcy + 1);
     }
@@ -1144,14 +1512,14 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
       pulseRect(ctx, cx0, y, w, h, now);
       ctx.save();
       // Flèche pointant vers la carte
-      ctx.fillStyle = C_AMBRE;
+      ctx.fillStyle = UI_THEME.amber;
       ctx.beginPath();
       ctx.moveTo(cx0 - 14, y + h / 2);
       ctx.lineTo(cx0 - 3, y + h / 2 - 7);
       ctx.lineTo(cx0 - 3, y + h / 2 + 7);
       ctx.closePath(); ctx.fill();
       // Contour de la flèche
-      ctx.lineWidth = 1.5; ctx.strokeStyle = C_ENCRE;
+      ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border;
       ctx.beginPath();
       ctx.moveTo(cx0 - 14, y + h / 2);
       ctx.lineTo(cx0 - 3, y + h / 2 - 7);
@@ -1186,7 +1554,7 @@ function dessineCouronne(ctx, ccx, socleY) {
   for (const [jx, jy] of [[ccx - 17, socleY - 12], [ccx, socleY - 20], [ccx + 17, socleY - 12]]) {
     ctx.beginPath(); ctx.arc(jx, jy, 3, 0, Math.PI * 2);
     ctx.fillStyle = C_AMBRE_CLAIR; ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = C_ENCRE; ctx.stroke();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
   }
 }
 
@@ -1198,7 +1566,7 @@ function dessinePromotion(ctx, state, now) {
   if (!promo) return;
 
   // Voile sombre : signale le modal, le plateau reste lisible dessous.
-  ctx.fillStyle = 'rgba(36, 28, 22, 0.45)';
+  ctx.fillStyle = UI_THEME.overlay;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
   const TILE = 78, GAP = 12, PAD = 24;
@@ -1213,13 +1581,13 @@ function dessinePromotion(ctx, state, now) {
   const x0 = OX + (__BOARD_W - W) / 2;
   const y0 = OY + (__BOARD_H - H) / 2;
 
-  carte(ctx, x0, y0, W, H, 14, C_CARTE);
+  carte(ctx, x0, y0, W, H, 14, UI_THEME.panel);
 
-  ctx.fillStyle = C_ENCRE;
+  ctx.fillStyle = UI_THEME.text;
   ctx.font = `20px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('PROMOTION', x0 + W / 2, y0 + 30);
-  ctx.fillStyle = C_ENCRE_sub;
+  ctx.fillStyle = UI_THEME.subtext;
   ctx.font = `600 12px ${F_TEXTE}`;
   ctx.fillText('Choisissez la nouvelle pièce du pion', x0 + W / 2, y0 + 52);
 
@@ -1227,14 +1595,14 @@ function dessinePromotion(ctx, state, now) {
   types.forEach((choix, i) => {
     const bx = x0 + PAD + i * (TILE + GAP);
     const by = y0 + 70;
-    carte(ctx, bx, by, TILE, TILE, 10, '#FFFFFF', { shadow: false });
+    carte(ctx, bx, by, TILE, TILE, 10, UI_THEME.card, { shadow: false });
     state.ui.buttons.push({ x: bx, y: by, w: TILE, h: TILE,
-      action: { kind: 'promoChoice', t: choix.t }, enabled: true });
+      action: { kind: 'promoChoice', t: choix.t }, enabled: true, radius: 10 });
     dessinePiece(ctx, state, {
       type: choix.t, owner: promo.piece.owner, upgrades: [], shield: false,
       sacrificeArmed: false, cooldowns: {},
     }, bx + TILE / 2, by + TILE / 2 - 6, now);
-    ctx.fillStyle = C_ENCRE_sub;
+    ctx.fillStyle = UI_THEME.subtext;
     ctx.font = `700 10px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(choix.nom.toUpperCase(), bx + TILE / 2, by + TILE - 9);
@@ -1243,8 +1611,8 @@ function dessinePromotion(ctx, state, now) {
   // ✕ annuler (coin haut droit) — rend la sélection sans jouer le coup.
   const cx = x0 + W - 30, cy = y0 + 10, cs = 20;
   state.ui.buttons.push({ x: cx, y: cy, w: cs, h: cs,
-    action: { kind: 'promoCancel' }, enabled: true });
-  ctx.fillStyle = C_TERRACOTTA;
+    action: { kind: 'promoCancel' }, enabled: true, radius: cs / 2 });
+  ctx.fillStyle = UI_THEME.danger;
   ctx.font = `700 15px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('✕', cx + cs / 2, cy + cs / 2);
@@ -1253,7 +1621,7 @@ function dessinePromotion(ctx, state, now) {
 function dessineGameOver(ctx, state, now) {
   const cx = OX + __BOARD_W / 2, cy = OY + __BOARD_H / 2;
   // Voile de fond (inchangé, DA §11.5).
-  ctx.fillStyle = 'rgba(36,28,22,0.72)';
+  ctx.fillStyle = UI_THEME.overlay;
   ctx.fillRect(OX, OY, __BOARD_W, __BOARD_H);
 
   // Burst de 16 rayons plats alternant Doré / Doré Clair, derrière le panneau (DA §11.5).
@@ -1313,7 +1681,7 @@ function dessineGameOver(ctx, state, now) {
   if (pvw && !voided) ph += 56;                         // bouton Revanche
   if (pvw) ph += 56;                                    // bouton Nouvelle partie (aussi si voided)
   const px = cx - pw / 2, py = cy - ph / 2;
-  carte(ctx, px, py, pw, ph, 14, C_CARTE, { shadow: true, stroke: null });
+  carte(ctx, px, py, pw, ph, 14, UI_THEME.panel, { shadow: true, stroke: null });
   ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE;
   roundRect(ctx, px, py, pw, ph, 14); ctx.stroke();
 
@@ -1343,7 +1711,7 @@ function dessineGameOver(ctx, state, now) {
   ctx.fillText(titre, cx, py + 48);
 
   // Sous-texte selon la cause de fin.
-  ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `15px ${F_TEXTE}`;
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `15px ${F_TEXTE}`;
   let soustexte = 'Roi capturé';
   if (voided) soustexte = 'Partie annulée';
   else if (pvw && state.pvw.endReason === 'time') soustexte = state.winner === null ? 'Égalité au temps (départage)' : 'Victoire au temps (départage)';
@@ -1354,11 +1722,11 @@ function dessineGameOver(ctx, state, now) {
   // --- Bloc central : trophée (PvP), calcul en cours, ou annulation ---
   const midY = py + 116;
   if (voided) {
-    ctx.fillStyle = C_TERRACOTTA; ctx.font = `14px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.danger; ctx.font = `14px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('Désynchronisation détectée — aucun trophée attribué.', cx, midY);
   } else if (pendingTrophy) {
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `14px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const dots = ['.', '..', '...'][Math.floor(now / 400) % 3];
     ctx.fillText('Calcul des trophées' + dots, cx, midY);
@@ -1370,7 +1738,7 @@ function dessineGameOver(ctx, state, now) {
   let btnY = py + ph - 58;
   // Bouton principal : retour au menu (tous modes).
   bouton(state, ctx, cx - 100, btnY, 200, 46, pvw ? 'Menu' : 'Nouvelle partie',
-    { kind: 'restart' }, { color: pvw ? C_CARTE : C_AMBRE, textColor: pvw ? C_ENCRE : '#2B1D06' });
+    { kind: 'restart' }, { color: pvw ? UI_THEME.card : UI_THEME.amber, textColor: pvw ? UI_THEME.text : UI_THEME.buttonText });
 
   // Bouton « Nouvelle partie » (PvP uniquement) : enchaîner une recherche publique sans
   // repasser par le menu/lobby. Présent aussi si le match est annulé (voided) — même besoin.
@@ -1379,7 +1747,7 @@ function dessineGameOver(ctx, state, now) {
     btnY -= 54;
     const rmLaunching = !!(state.pvw.rematch && state.pvw.rematch.launching);
     bouton(state, ctx, cx - 130, btnY, 260, 46, '🔍 Nouvelle partie', { kind: 'newSearchOnline' },
-      { color: C_SAUGE, textColor: C_ENCRE, sub: 'chercher un autre adversaire', enabled: !rmLaunching });
+      { color: UI_THEME.primary, textColor: UI_THEME.text, sub: 'chercher un autre adversaire', enabled: !rmLaunching });
   }
 
   // Bouton Revanche (PvP uniquement, §9.4) : au-dessus du bouton Menu.
@@ -1398,7 +1766,7 @@ function dessineGameOver(ctx, state, now) {
     } else {
       const sub = rm.offeredByOpp ? 'l\'adversaire propose une revanche !' : 'couleurs inversées';
       bouton(state, ctx, cx - 130, btnY, 260, 46, '🔁 Revanche', { kind: 'rematch' },
-        { color: C_AMBRE, textColor: '#2B1D06', sub });
+        { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub });
     }
   }
 
@@ -1407,7 +1775,7 @@ function dessineGameOver(ctx, state, now) {
     const rpx = CANVAS_W - 210, rpy = CANVAS_H - 48;
     bouton(state, ctx, rpx, rpy, 195, 34, '📥 Replay (.md)',
       { kind: 'downloadReplay' },
-      { color: C_CARTE, textColor: C_ENCRE });
+      { color: UI_THEME.card, textColor: UI_THEME.text });
   }
 }
 
@@ -1418,19 +1786,19 @@ function dessineReconnexionPvw(ctx, state, now) {
   const restant = Math.max(0, 30 - (now - p.oppDcT0) / 1000);
   const bw = __BOARD_W - 40, bx = OX + 20, by = OY + __BOARD_H / 2 - 34, bh = 68;
   ctx.save();
-  ctx.fillStyle = 'rgba(36,28,22,0.82)';
+  ctx.fillStyle = UI_THEME.overlay;
   roundRect(ctx, bx, by, bw, bh, 12); ctx.fill();
-  ctx.lineWidth = 2; ctx.strokeStyle = C_TERRACOTTA;
+  ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.danger;
   roundRect(ctx, bx, by, bw, bh, 12); ctx.stroke();
   const nom = (p.oppPseudo || 'Adversaire');
-  ctx.fillStyle = '#FFFFFF'; ctx.font = `15px ${F_DISPLAY}`;
+  ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(`${nom} déconnecté`.toUpperCase(), bx + bw / 2, by + 20);
-  ctx.fillStyle = '#F1E4D2'; ctx.font = `13px ${F_TEXTE}`;
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
   ctx.fillText(`Reprise possible — ${Math.ceil(restant)} s`, bx + bw / 2, by + 40);
   // Barre décroissante.
   const barW = bw - 40, barX = bx + 20, barY = by + bh - 14;
-  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.fillStyle = UI_THEME.border;
   roundRect(ctx, barX, barY, barW, 5, 2.5); ctx.fill();
   ctx.fillStyle = C_TERRACOTTA;
   roundRect(ctx, barX, barY, barW * (restant / 30), 5, 2.5); ctx.fill();
@@ -1449,14 +1817,14 @@ function dessineBlocTrophee(ctx, state, cx, baseY, guestEph, now) {
   // Résultat NON écrit (PvP : contesté, réseau KO, ou adversaire n'a pas rapporté) :
   // pas de delta animé — message neutre, aucun trophée perdu/gagné (§3.5).
   if (tr.applied === false) {
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `14px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     let m = 'Trophées non modifiés';
     if (tr.disputed) m = 'Résultat contesté — trophées non modifiés';
     else if (tr.status === 'pending') m = 'En attente du rapport adverse…';
     else m = 'Hors ligne — trophées non sauvegardés';
     ctx.fillText(m, cx, baseY);
-    ctx.fillStyle = C_ENCRE_PALE; ctx.font = `13px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.disabledText; ctx.font = `13px ${F_TEXTE}`;
     ctx.fillText(`Trophées : ${tr.total != null ? tr.total : tr.prev}`, cx, baseY + 24);
     return;
   }
@@ -1484,7 +1852,7 @@ function dessineBlocTrophee(ctx, state, cx, baseY, guestEph, now) {
   // --- Total : tween de l'ancien vers le nouveau sur 400 ms. ---
   const kt = Math.min(1, age / 400);
   const shown = Math.round(tr.prev + (tr.total - tr.prev) * kt);
-  ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `14px ${F_TEXTE}`;
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const note = tr.error ? '  (hors ligne, non sauvegardé)' : '';
   ctx.fillText(`Trophées : ${shown}${note}`, cx, baseY + 30);
@@ -1526,35 +1894,195 @@ function wrapTextLines(ctx, text, x, y, maxW, lh) {
   return count;
 }
 
-// Bandeau compte affiché en haut du menu (cycle A, spec-online §5.1). Les formulaires
-// (email / code / pseudo) sont eux gérés en DOM (overlay), pas ici. La saisie du texte
-// n'appartient pas au canvas ; ce bandeau ne fait qu'afficher l'état + un bouton d'action.
-function dessineBandeauCompte(ctx, state) {
-  const acc = state.account || { status: 'guest' };
-  const bw = 156, right = CANVAS_W - 20;
-  if (acc.status === 'connected') {
-    // Ligne pseudo + compteur trophées (DA §11.3 : ambre/or), puis bouton DÉCONNEXION.
-    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = C_AMBRE_FONCE; ctx.font = `14px ${F_DISPLAY}`;
-    ctx.fillText('🏆 ' + (acc.trophies || 0), right, 30);
-    ctx.fillStyle = C_ENCRE; ctx.font = `15px ${F_DISPLAY}`;
-    ctx.fillText(('♟ ' + (acc.pseudo || '')).toUpperCase(), right, 50);
-    bouton(state, ctx, right - bw, 64, bw, 32, 'Déconnexion', { kind: 'logout' },
-      { color: C_CARTE, textColor: C_ENCRE });
-  } else {
-    // Invité (ou pose de pseudo en cours) : bouton CONNEXION.
-    bouton(state, ctx, right - bw, 24, bw, 38, 'Connexion', { kind: 'login' },
-      { color: C_SAUGE, textColor: C_ENCRE, sub: 'sauvegarde ta progression' });
-    // Compteur RAM éphémère (spec §2.4) : n'affiché que si des trophées ont été gagnés
-    // durant la session (perdus au reload).
-    if (acc.trophies > 0) {
-      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = C_AMBRE_FONCE; ctx.font = `13px ${F_DISPLAY}`;
-      ctx.fillText('🏆 ' + acc.trophies, right, 74);
-      ctx.fillStyle = C_ENCRE_PALE; ctx.font = `10px ${F_TEXTE}`;
-      ctx.fillText('éphémère — connecte-toi pour sauvegarder', right, 88);
+// Version bornée pour les cartes compactes : évite qu'une description longue
+// déborde du cadre lorsque la typographie est agrandie.
+function wrapTextLimite(ctx, text, x, y, maxW, lh, maxLines = 2) {
+  const mots = String(text || '').split(/\s+/).filter(Boolean);
+  const lignes = [];
+  let ligne = '';
+  for (const mot of mots) {
+    const test = ligne ? `${ligne} ${mot}` : mot;
+    if (ctx.measureText(test).width > maxW && ligne) {
+      lignes.push(ligne);
+      ligne = mot;
+    } else {
+      ligne = test;
     }
   }
+  if (ligne) lignes.push(ligne);
+  const visibles = lignes.slice(0, maxLines);
+  const tronquee = lignes.length > maxLines;
+  if (tronquee && visibles.length) {
+    let derniere = visibles[visibles.length - 1];
+    while (derniere.length > 1 && ctx.measureText(`${derniere}…`).width > maxW) {
+      derniere = derniere.slice(0, -1).trimEnd();
+    }
+    visibles[visibles.length - 1] = `${derniere}…`;
+  }
+  visibles.forEach((ligneVisible, i) => ctx.fillText(ligneVisible, x, y + i * lh));
+}
+
+// Menu hamburger (coin haut droit) : regroupe Compte / Apparence / Langues pour
+// libérer le coin droit (demande utilisateur 31/07). Un bouton « 3 traits » ouvre
+// un PANNEAU LATÉRAL (drawer) glissant depuis le bord droit, avec voile (scrim).
+// Les formulaires (email / code / pseudo) restent gérés en DOM (overlay).
+// S'ouvre via { kind: 'toggleHamburger' } ; se ferme au clic sur le scrim ou Échap.
+function dessineBandeauCompte(ctx, state) {
+  const acc = state.account || { status: 'guest' };
+  const right = CANVAS_W - 20;
+  const top = 16;
+  const taille = 44;
+  const ouvert = !!(state.ui && state.ui.hamburgerOpen);
+  const themeMode = state.themeMode === 'light' ? 'light' : 'dark';
+  const themeLabel = themeMode === 'dark' ? '☀ Clair' : '☾ Sombre';
+
+  // Bouton hamburger ENREGISTRÉ en premier : aucun bouton du panneau ne chevauche
+  // son rect (coin haut droit), le hit-test reste donc correct. Il est DESSINÉ en
+  // dernier (fin de fonction) pour rester visible par-dessus le drawer quand il est
+  // ouvert (croix ✕ au lieu des 3 traits).
+  const hb = enregistrerBouton(state, right - taille, top, taille, taille,
+    { kind: 'toggleHamburger' }, true, true, 12);
+
+  if (ouvert) {
+    // --- PANNEAU LATÉRAL (drawer) : voile + glissement depuis le bord droit ---
+    const pw = 280, pad = 16;
+    const px = CANVAS_W - pw;   // collé au bord droit
+    const py = 12;
+    const ph = CANVAS_H - 24;   // presque toute la hauteur
+    const connected = acc.status === 'connected';
+
+    // Voile (scrim) : assombrit le menu derrière le drawer. Un clic dessus referme
+    // le panneau SANS déclencher l'élément couvert (logique dédiée dans main.js).
+    ctx.fillStyle = 'rgba(10, 11, 13, 0.45)';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Glissement d'ouverture depuis la droite (~260 ms, easeOutCubic). hamburgerT0
+    // est posé par main.js au toggle d'ouverture (actionBouton 'toggleHamburger').
+    // Horloge du système de motion (ui.frameNow) pour rester cohérent avec les autres
+    // animations — fallback performance.now() hors frame de rendu.
+    const nowUI = (state.ui && state.ui.frameNow) || performance.now();
+    const t0 = (state.ui && state.ui.hamburgerT0) || 0;
+    const k = Math.min(1, (nowUI - t0) / 260);
+    const ease = 1 - Math.pow(1 - k, 3);
+    const dx = px + (1 - ease) * pw;   // x courant du panneau (= px une fois posé)
+
+    // Géométrie COURANTE (x animé) pour le hit-test de fermeture au clic (main.js) :
+    // pendant le glissement, la zone couverte par le panneau bouge, donc le scrim
+    // suit. Une fois le panneau posé, dx == px.
+    if (state.ui) state.ui.hamburgerPanel = { x: dx, y: py, w: pw, h: ph };
+
+    // Corps du panneau.
+    carte(ctx, dx, py, pw, ph, 16, UI_THEME.panel, { shadow: true, stroke: UI_THEME.border });
+
+    let y = py + 26;
+    // En-tête : MENU + sous-titre.
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
+    ctx.fillText('MENU', dx + pw / 2, y);
+    y += 15;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
+    ctx.fillText('Compte · Apparence · Langues', dx + pw / 2, y);
+    y += 12;
+    ctx.strokeStyle = UI_THEME.border; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(dx + pad, y); ctx.lineTo(dx + pw - pad, y); ctx.stroke();
+    y += 22;
+
+    const entete = (label) => {
+      ctx.fillStyle = UI_THEME.muted; ctx.font = `700 11px ${F_DISPLAY}`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(label.toUpperCase(), dx + pad, y + 10);
+      y += 20;
+    };
+
+    // --- COMPTE ---
+    entete('Compte');
+    if (connected) {
+      // Ligne pseudo + trophées (DA §11.3 : ambre/or).
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
+      ctx.fillText(('♟ ' + (acc.pseudo || '')).toUpperCase(), dx + pad, y + 12);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = UI_THEME.amberDark; ctx.font = `14px ${F_DISPLAY}`;
+      ctx.fillText('🏆 ' + (acc.trophies || 0), dx + pw - pad, y + 12);
+      y += 30;
+      bouton(state, ctx, dx + pad, y, pw - 2 * pad, 34, 'Déconnexion', { kind: 'logout' },
+        { color: UI_THEME.card, textColor: UI_THEME.text });
+      y += 34;
+    } else {
+      bouton(state, ctx, dx + pad, y, pw - 2 * pad, 40, 'Connexion', { kind: 'login' },
+        { color: UI_THEME.primary, textColor: UI_THEME.text, sub: 'sauvegarde ta progression' });
+      y += 40;
+      // Compteur RAM éphémère (spec §2.4) : seulement si des trophées ont été gagnés
+      // durant la session (perdus au reload).
+      if (acc.trophies > 0) {
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = UI_THEME.disabledText; ctx.font = `10px ${F_TEXTE}`;
+        ctx.fillText('🏆 ' + acc.trophies + ' éphémères — connecte-toi pour sauvegarder', dx + pad, y + 8);
+        y += 16;
+      }
+    }
+    y += 16;
+
+    // --- APPARE... ---
+    entete('Apparence');
+    bouton(state, ctx, dx + pad, y, pw - 2 * pad, 36, themeLabel, { kind: 'toggleTheme' },
+      { color: UI_THEME.card, textColor: UI_THEME.text });
+    y += 36 + 16;
+
+    // --- LANGUES ---
+    entete('Langues');
+    // Français : seule langue disponible pour l'instant — ligne active non cliquable.
+    enregistrerBouton(state, dx + pad, y, pw - 2 * pad, 36,
+      { kind: 'langue', code: 'fr' }, false, true, 10);
+    ctx.fillStyle = UI_THEME.field;
+    roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.amberDark;
+    roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.stroke();
+    ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_TEXTE}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('🇫🇷  Français', dx + pad + 12, y + 18);
+    ctx.fillStyle = UI_THEME.amber; ctx.font = `14px ${F_DISPLAY}`;
+    ctx.textAlign = 'right';
+    ctx.fillText('✓', dx + pw - pad - 12, y + 18);
+
+    // Pied du drawer : mention de version discrète.
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
+    ctx.fillText('Roychec · bêta', dx + pw / 2, py + ph - 16);
+  } else {
+    if (state.ui) state.ui.hamburgerPanel = null;
+  }
+
+  // --- Bouton hamburger DESSINÉ en dernier : visible par-dessus le drawer ouvert ---
+  const motion = motionBouton(state, hb);
+  const visualY = top + (1 - motion.appear) * 3 - motion.hover * 4 + motion.press * 2;
+  ctx.save();
+  ctx.fillStyle = ombreBouton(UI_THEME.card);
+  roundRect(ctx, right - taille, visualY + 4 - motion.press * 2, taille, taille, 12); ctx.fill();
+  ctx.globalAlpha = 0.92 + motion.appear * 0.08;
+  ctx.fillStyle = eclaircir(UI_THEME.card, motion.hover * 0.08);
+  roundRect(ctx, right - taille, visualY, taille, taille, 12); ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = ouvert ? UI_THEME.amber : UI_THEME.border;
+  roundRect(ctx, right - taille, visualY, taille, taille, 12); ctx.stroke();
+  // 3 traits horizontaux (ou croix ✕ quand le panneau est ouvert).
+  const cx = right - taille / 2;
+  const cy = visualY + taille / 2;
+  ctx.strokeStyle = UI_THEME.text; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  const wBar = 18, gapBar = 6;
+  if (ouvert) {
+    ctx.beginPath();
+    ctx.moveTo(cx - wBar / 2, cy - gapBar); ctx.lineTo(cx + wBar / 2, cy + gapBar);
+    ctx.moveTo(cx + wBar / 2, cy - gapBar); ctx.lineTo(cx - wBar / 2, cy + gapBar);
+    ctx.stroke();
+  } else {
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(cx - wBar / 2, cy + i * gapBar);
+      ctx.lineTo(cx + wBar / 2, cy + i * gapBar);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 // Dessine le menu d'accueil (SPEC §1.4 / §5.1). 2 boutons principaux +
@@ -1571,17 +2099,449 @@ function dessineBandeauCompte(ctx, state) {
 // (LOCAL / EN LIGNE / ORDINATEUR) MIRROIR de roychec-menu-v2.html, VARIANTES
 // accordion partagé, palette V2 + typo ui-rounded + radius 22/16/12 préservés.
 // Hit-test sémantique inchangée (state.ui.buttons.push avec mêmes kind values).
+// Menu dashboard — composition alignée sur roychec_interface.html.
+// Le plateau et la feuille sont des aperçus décoratifs : les interactions de jeu
+// commencent après le CTA de mode, tandis que les actions de navigation restent
+// enregistrées dans les mêmes state.ui.buttons que le menu historique.
+function dessineMenuDashboard(ctx, state) {
+  const F_DB = '"Nunito Sans", system-ui, sans-serif';
+  const F_DB_BRAND = 'Georgia, "Times New Roman", serif';
+  const C = {
+    bg: UI_THEME.background,
+    panel: UI_THEME.panel,
+    panelHi: UI_THEME.panelAlt,
+    card: UI_THEME.card,
+    field: UI_THEME.field,
+    text: UI_THEME.text,
+    muted: UI_THEME.muted,
+    gold: UI_THEME.amber,
+    goldBright: UI_THEME.amberLight,
+    wine: UI_THEME.wine,
+    wineDark: UI_THEME.wineDark,
+    forest: UI_THEME.primary,
+    forestDark: UI_THEME.primaryDark,
+    border: UI_THEME.border,
+  };
+  const R_CARD = 18, R_INNER = 12, R_PILL = 999;
+  const cx = CANVAS_W / 2;
+  const activeMode = (state.menu && state.menu.activeMode) || 'pvp';
+  const varEco = (state.menu && state.menu.economie) || 'standard';
+  const varCbt = (state.menu && state.menu.combat) || 'standard';
+  const varTail = (state.menu && state.menu.taille) || 'std';
+  const tailleLabel = (TAILLES[varTail] || TAILLES.std).label;
+  // Le dashboard n'affiche plus une barre « Variantes » séparée : les modes
+  // sont regroupés dans une carte directement sous l'aperçu du plateau.
+  const mainY = 150;
+  const mainH = 418;
+  const modeY = mainY + mainH + 16;
+
+  function dbCard(x, y, w, h, fill = C.panel, radius = R_CARD) {
+    ctx.save();
+    ctx.shadowColor = UI_THEME.shadow;
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 4;
+    ctx.fillStyle = fill;
+    roundRect(ctx, x, y, w, h, radius); ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = 1; ctx.strokeStyle = C.border;
+    roundRect(ctx, x, y, w, h, radius); ctx.stroke();
+  }
+
+  function dbText(text, x, y, font, color = C.text, align = 'left', baseline = 'middle') {
+    ctx.fillStyle = color; ctx.font = font;
+    ctx.textAlign = align; ctx.textBaseline = baseline;
+    ctx.fillText(text, x, y);
+  }
+
+  function dbControl(x, y, w, h, label, action, opts = {}) {
+    const enabled = opts.enabled !== false;
+    const { visualY } = motionMenuBouton(state, x, y, w, h, action, enabled, opts.radius || R_INNER);
+    ctx.fillStyle = enabled ? (opts.fill || C.card) : UI_THEME.disabled;
+    roundRect(ctx, x, visualY, w, h, opts.radius || R_INNER); ctx.fill();
+    ctx.lineWidth = opts.selected ? 2 : 1;
+    ctx.strokeStyle = opts.selected ? (opts.selectedBorder || C.gold) : C.border;
+    roundRect(ctx, x, visualY, w, h, opts.radius || R_INNER); ctx.stroke();
+    dbText(label, x + w / 2, visualY + h / 2 - (opts.sub ? 7 : 0), opts.font || `600 13px ${F_DB}`,
+      enabled ? (opts.textColor || C.text) : C.muted, 'center');
+    if (opts.sub) dbText(opts.sub, x + w / 2, visualY + h / 2 + 10, `11px ${F_DB}`,
+      enabled ? C.muted : UI_THEME.disabledText, 'center');
+  }
+
+  function dbCta(x, y, w, h, label, action, opts = {}) {
+    const enabled = opts.enabled !== false;
+    const { visualY } = motionMenuBouton(state, x, y, w, h, action, enabled, R_PILL);
+    if (enabled) {
+      ctx.save(); ctx.globalAlpha = 0.45; ctx.fillStyle = opts.shadow || C.forestDark;
+      roundRect(ctx, x, visualY + 4, w, h, R_PILL); ctx.fill(); ctx.restore();
+    }
+    ctx.fillStyle = enabled ? (opts.fill || C.forest) : UI_THEME.disabled;
+    roundRect(ctx, x, visualY, w, h, R_PILL); ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = enabled ? (opts.stroke || C.forestDark) : C.border;
+    roundRect(ctx, x, visualY, w, h, R_PILL); ctx.stroke();
+    dbText(label.toUpperCase(), x + w / 2, visualY + h / 2 - (opts.sub ? 8 : 0), `700 13px ${F_DB}`,
+      enabled ? C.text : C.muted, 'center');
+    if (opts.sub) dbText(opts.sub, x + w / 2, visualY + h / 2 + 10, `11px ${F_DB}`,
+      enabled ? C.text : C.muted, 'center');
+  }
+
+  function drawPreviewBoard(x, y, w, h, state) {
+    dbCard(x, y, w, h, C.card, R_INNER);
+    const pad = 9;
+    const rows = 8;
+    const taille = varTail === 'l15' ? 'l15' : 'std';
+    const moves = previewSequence(taille);
+    if (!moves.length) return;
+    const board = decoratePreviewBoard(clonePreviewBoard(previewBoardInitial(taille)), taille);
+    const cols = board[0].length;
+    const bw = w - pad * 2, bh = h - pad * 2;
+    const cell = Math.min(bw / cols, bh / rows);
+    const ox = x + (w - cell * cols) / 2, oy = y + (h - cell * rows) / 2;
+    const glyphs = { P: '♟', N: '♞', B: '♝', R: '♜', Q: '♛', K: '♚' };
+    const stepMs = 1250;
+    const now = state?.ui?.frameNow || (typeof performance !== 'undefined' ? performance.now() : 0);
+    const elapsed = now % (moves.length * stepMs);
+    const moveIndex = Math.floor(elapsed / stepMs);
+    const progress = (elapsed % stepMs) / stepMs;
+    const current = moves[moveIndex];
+    for (let i = 0; i < moveIndex; i++) applyPreviewMove(board, moves[i]);
+
+    function pieceAt(r, c) { return board[r] && board[r][c]; }
+
+    ctx.save();
+    ctx.fillStyle = C.gold;
+    roundRect(ctx, ox - 5, oy - 5, cell * cols + 10, cell * rows + 10, 10); ctx.fill();
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        ctx.fillStyle = (r + c) % 2 === 0 ? '#F1E6D4' : '#6B3A52';
+        ctx.fillRect(ox + c * cell, oy + r * cell, cell + 0.5, cell + 0.5);
+      }
+    }
+
+    function drawPiece(piece, r, c, px = ox + (c + 0.5) * cell, py = oy + (r + 0.52) * cell) {
+      if (!piece) return;
+      const flameOpts = optionsFeuPour(piece);
+      if (flameOpts) {
+        // Même pipeline que le vrai plateau : flamme derrière la pièce,
+        // proportionnée et contenue dans la cellule du mini-plateau.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(ox + c * cell, oy + r * cell, cell, cell);
+        ctx.clip();
+        dessineFeu(ctx, px, py, now, cell * 0.38, flameOpts.col1, flameOpts.col2,
+          flameOpts.pulsed, Math.min(40, Math.max(8, cell * 0.42)));
+        ctx.restore();
+      }
+      const upgradeCats = [...new Set((piece.upgrades || [])
+        .map((id) => UPGRADES[id]?.cat)
+        .filter(Boolean))];
+      if (upgradeCats.length) {
+        ctx.save();
+        // Le halo reste visuellement contenu dans la case : il signale la carte
+        // sans contaminer les cases voisines, surtout sur le format 15×8.
+        ctx.beginPath();
+        ctx.rect(ox + c * cell, oy + r * cell, cell, cell);
+        ctx.clip();
+        ctx.globalAlpha = 0.28;
+        const aura = ctx.createRadialGradient(px, py, 0, px, py, Math.max(7, cell * 0.7));
+        aura.addColorStop(0, COULEUR_CAT[upgradeCats[0]]);
+        aura.addColorStop(1, `${COULEUR_CAT[upgradeCats[0]]}00`);
+        ctx.fillStyle = aura;
+        ctx.beginPath(); ctx.arc(px, py, Math.max(7, cell * 0.7), 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+      const img = spritePret(piece.owner, piece.type);
+      if (img) {
+        const targetH = Math.max(13, Math.min(42, cell * 0.9));
+        const ratio = img.naturalWidth / img.naturalHeight || 1;
+        const targetW = targetH * ratio;
+        ctx.drawImage(img, px - targetW / 2, py - targetH / 2 - 1, targetW, targetH);
+      } else {
+        ctx.fillStyle = piece.owner === 1 ? C.wineDark : C.text;
+        ctx.font = `${Math.max(12, Math.min(24, Math.round(cell * 0.72)))}px Georgia, serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(glyphs[piece.type] || '♟', px, py);
+      }
+      if (piece.shield) {
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(7, cell * 0.43), 0, Math.PI * 2);
+        ctx.strokeStyle = COULEUR_CAT.S;
+        ctx.lineWidth = Math.max(1, cell * 0.055);
+        ctx.stroke();
+      }
+      if (upgradeCats.length) {
+        const dotR = Math.max(1.8, Math.min(3.2, cell * 0.11));
+        upgradeCats.forEach((cat, i) => {
+          ctx.beginPath();
+          ctx.arc(px + cell * 0.27, py - cell * 0.29 + i * dotR * 2.2, dotR, 0, Math.PI * 2);
+          ctx.fillStyle = COULEUR_CAT[cat];
+          ctx.fill();
+          ctx.lineWidth = 0.7;
+          ctx.strokeStyle = C.bg;
+          ctx.stroke();
+        });
+      }
+    }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (current && ((r === current.from.r && c === current.from.c)
+          || (r === current.to.r && c === current.to.c))) continue;
+        drawPiece(pieceAt(r, c), r, c);
+      }
+    }
+
+    const movingPiece = pieceAt(current.from.r, current.from.c);
+    if (movingPiece) {
+      const eased = progress < 0.5
+        ? 2 * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+      const { from, to } = current;
+      const px = ox + (from.c + 0.5 + (to.c - from.c) * eased) * cell;
+      const py = oy + (from.r + 0.52 + (to.r - from.r) * eased) * cell;
+      drawPiece(movingPiece, to.r, to.c, px, py);
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(5, cell * 0.34), 0, Math.PI * 2);
+      ctx.strokeStyle = C.goldBright;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawMoves(x, y, w, h) {
+    dbCard(x, y, w, h, C.panel, R_CARD);
+    const replay = state._dashboardReplay && typeof state._dashboardReplay === 'object'
+      ? state._dashboardReplay : null;
+    const events = replay && Array.isArray(replay.events)
+      ? replay.events.filter((event) => event && typeof event === 'object') : [];
+    const modeLabel = replay?.mode === 'pvai' ? 'Ordinateur'
+      : replay?.mode === 'pvw' ? 'En ligne'
+      : replay?.mode === 'spectator' ? 'Spectateur' : 'Local';
+    const winner = replay?.result && (replay.result.winner === 0 || replay.result.winner === 1)
+      ? NOM_JOUEUR[replay.result.winner] : null;
+    const resultLabel = winner ? `${winner} gagne` : 'Partie en cours / nulle';
+    const actionLabel = (event) => {
+      if (event.type === 'move') return `${event.piece || '?'} ${event.from || '?'}→${event.to || '?'}`;
+      if (event.type === 'purchase') return `🛒 ${event.upgrade || 'achat'}`;
+      if (event.type === 'power') return `⚡ ${event.power || 'pouvoir'}`;
+      return event.type || 'action';
+    };
+    const compact = (text, max = 18) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
+
+    dbText('FEUILLE DE PARTIE', x + 18, y + 25, `700 13px ${F_DB}`, C.text);
+    dbText(replay ? `${modeLabel} · ${resultLabel}` : 'Aucune partie enregistrée',
+      x + 18, y + 45, `10px ${F_DB}`, replay ? C.muted : C.goldBright);
+    ctx.strokeStyle = C.border; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x + 14, y + 61); ctx.lineTo(x + w - 14, y + 61); ctx.stroke();
+
+    if (!replay || !events.length) {
+      dbText(replay ? 'Aucune action enregistrée' : 'Termine une partie pour afficher',
+        x + w / 2, y + 175, `11px ${F_DB}`, C.muted, 'center');
+      if (!replay) dbText('sa feuille de partie ici.', x + w / 2, y + 198,
+        `10px ${F_DB}`, C.muted, 'center');
+    } else {
+      // Le panneau montre les 8 dernières actions, dans l’ordre réel du replay.
+      const visible = events.slice(-8);
+      const firstIndex = events.length - visible.length;
+      for (let i = 0; i < visible.length; i++) {
+        const event = visible[i];
+        const yy = y + 84 + i * 28;
+        const isLatest = i === visible.length - 1;
+        if (isLatest) {
+          ctx.fillStyle = 'rgba(201,161,90,0.14)';
+          roundRect(ctx, x + 9, yy - 13, w - 18, 25, 7); ctx.fill();
+        }
+        dbText(`${firstIndex + i + 1}.`, x + 18, yy, `11px ${F_DB}`, C.gold);
+        dbText(compact(actionLabel(event)), x + 48, yy, `600 11px ${F_DB}`,
+          isLatest ? C.goldBright : C.text);
+        dbText(`J${event.owner === 1 ? '2' : '1'}`, x + w - 16, yy,
+          `10px ${F_DB}`, event.owner === 1 ? C.rose : C.muted, 'right');
+      }
+    }
+
+    ctx.strokeStyle = C.border;
+    ctx.beginPath(); ctx.moveTo(x + 14, y + h - 36); ctx.lineTo(x + w - 14, y + h - 36); ctx.stroke();
+    const total = replay?.result?.totalActions ?? events.length;
+    const durationMs = Number(replay?.result?.duration);
+    const duration = Number.isFinite(durationMs) ? `${Math.floor(durationMs / 60000)}:${String(Math.floor(durationMs / 1000) % 60).padStart(2, '0')}` : '--:--';
+    dbText(`${total} actions · ${duration}`, x + 16, y + h - 18, `10px ${F_DB}`, C.muted);
+    if (replay && typeof state._dashboardReplayKey === 'string'
+        && state._dashboardReplayKey.length > 0) {
+      dbControl(x + w - 88, y + h - 32, 72, 24, 'Rejouer',
+        { kind: 'startReplay', key: state._dashboardReplayKey },
+        { fill: C.gold, font: `700 9px ${F_DB}`, radius: 7 });
+    }
+  }
+
+  function drawSideMenu(x, y, w, h) {
+    dbControl(x, y, w, 48, '✦  TUTORIEL', { kind: 'tutoriel' }, { fill: C.panelHi, font: `700 13px ${F_DB}` });
+
+    // La carte Historique remplit la colonne jusqu'à Decks.
+    // Decks s'aligne sur le bas des cartes Plateau / Feuille de partie,
+    // puis conserve le même espacement de 16 px avant le panneau de jeu.
+    const historyY = y + 60;
+    const deckH = 48;
+    const deckY = mainY + mainH - deckH;
+    const historyH = Math.max(174, deckY - historyY - 8);
+    dbCard(x, historyY, w, historyH, C.panel, R_CARD);
+    dbText('HISTORIQUE DES PARTIES', x + 16, historyY + 25, `700 12px ${F_DB}`, C.text);
+    // Source réelle : la même liste que l'écran REPLAYS, alimentée par les
+    // parties finalisées dans localStorage. Chaque ligne ouvre directement le
+    // replay concerné ; aucun nom ou score fictif n'est injecté dans le menu.
+    const replays = Array.isArray(state._replayList) ? state._replayList : [];
+    // Une entrée corrompue ne doit jamais casser le rendu du menu : seules les
+    // synthèses avec une clé localStorage exploitable deviennent cliquables.
+    const visibleReplays = replays
+      .filter((replay) => replay && typeof replay === 'object'
+        && typeof replay.key === 'string' && replay.key.length > 0)
+      .slice(0, 7);
+    const modeLabel = (mode) => mode === 'spectator' ? 'Spectateur'
+      : mode === 'pvai' ? 'Ordinateur'
+      : mode === 'pvw' ? 'En ligne' : 'Local';
+    const winnerIndex = (winner) => winner === 0 || winner === '0' ? 0
+      : winner === 1 || winner === '1' ? 1 : null;
+    const resultLabel = (winner) => {
+      const index = winnerIndex(winner);
+      return index === null ? 'Partie' : `${NOM_JOUEUR[index]} gagne`;
+    };
+    const shortDate = (timestamp) => {
+      const date = new Date(Number(timestamp));
+      if (!Number.isFinite(date.getTime())) return 'date inconnue';
+      return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+    };
+
+    if (!visibleReplays.length) {
+      dbText('Aucune partie enregistrée', x + w / 2, historyY + 92,
+        `11px ${F_DB}`, C.muted, 'center');
+      dbText('Termine une partie pour la retrouver ici.', x + w / 2, historyY + 114,
+        `10px ${F_DB}`, C.muted, 'center');
+    } else {
+      for (let i = 0; i < visibleReplays.length; i++) {
+        const replay = visibleReplays[i];
+        const yy = historyY + 52 + i * 25;
+        // La ligne est une vraie cible de clic, en plus du bouton global.
+        state.ui.buttons.push({
+          x: x + 10, y: yy - 12, w: w - 20, h: 24,
+          action: { kind: 'startReplay', key: replay.key }, enabled: true, radius: 7,
+        });
+        const mode = modeLabel(replay.mode);
+        const actions = `${Number(replay.totalActions) || 0} act.`;
+        const result = resultLabel(replay.winner);
+        const date = shortDate(replay.startTime);
+        dbText(`${mode} · ${date}`, x + 16, yy, `10px ${F_DB}`, C.muted);
+        dbText(result, x + w - 52, yy, `600 10px ${F_DB}`,
+          winnerIndex(replay.winner) === null ? C.muted : C.forest, 'right');
+        dbText(actions, x + w - 16, yy + 11, `9px ${F_DB}`, C.muted, 'right');
+      }
+    }
+    dbControl(x + 12, historyY + historyH - 40, w - 24, 30, 'Voir toutes les parties', { kind: 'ouvrirReplays' }, { fill: C.card, font: `600 10px ${F_DB}` });
+    dbControl(x, deckY, w, deckH, 'DECKS  ›', { kind: 'ouvrirDecks' }, { fill: C.panelHi, font: `700 13px ${F_DB}` });
+  }
+
+  function drawModeBar() {
+    // Même largeur que la carte Plateau : les modes se lisent comme sa
+    // navigation locale, juste sous l'aperçu, au lieu d'une barre globale.
+    const x = 24, y = modeY, w = CANVAS_W - 48, h = 304;
+    dbCard(x, y, w, h, C.panel, R_CARD);
+    const modes = [
+      { id: 'pvp', label: 'LOCAL' },
+      { id: 'pvw', label: 'EN LIGNE' },
+      { id: 'pvai', label: 'ORDINATEUR' },
+    ];
+    const tabW = (w - 36) / 3;
+    modes.forEach((mode, i) => dbControl(x + 12 + i * (tabW + 6), y + 12, tabW, 38, mode.label,
+      { kind: 'selectMode', mode: mode.id }, { fill: activeMode === mode.id ? C.wine : C.field, selected: activeMode === mode.id, radius: 10, font: `700 11px ${F_DB}` }));
+    const contentX = x + 16, contentY = y + 68, contentW = w - 32;
+    dbCard(contentX, contentY, contentW, 142, C.field, R_INNER);
+    if (activeMode === 'pvp') {
+      dbText('JOUEUR 1', contentX + 170, contentY + 39, `600 18px ${F_DB_BRAND}`, C.text, 'center');
+      dbText('VS', contentX + contentW / 2, contentY + 39, `700 11px ${F_DB}`, C.goldBright, 'center');
+      dbText('JOUEUR 2', contentX + contentW - 170, contentY + 39, `600 18px ${F_DB_BRAND}`, C.text, 'center');
+      dbText('Partie locale · chacun son tour', contentX + contentW / 2, contentY + 72, `11px ${F_DB}`, C.muted, 'center');
+      dbCta(contentX + contentW - 220, contentY + 93, 190, 36, 'Jouer', { kind: 'pickMode', mode: 'pvp' }, { fill: C.gold, stroke: C.goldBright, shadow: C.wineDark });
+    } else if (activeMode === 'pvw') {
+      dbText('PRÊT À CHERCHER UN ADVERSAIRE', contentX + 30, contentY + 38, `700 13px ${F_DB}`, C.text);
+      dbText('Classement estimé · partie en ligne', contentX + 30, contentY + 66, `11px ${F_DB}`, C.muted);
+      dbCta(contentX + contentW - 250, contentY + 48, 220, 40, 'Lancer une recherche', { kind: 'startSearch' }, { fill: C.gold, stroke: C.goldBright, shadow: C.wineDark });
+    } else {
+      const diff = state.menu && state.menu.difficulty;
+      const diffGap = 6;
+      const diffW = (contentW - 48 - diffGap * 2) / 3;
+      dbText('DIFFICULTÉ', contentX + 24, contentY + 21, `700 10px ${F_DB}`, C.muted);
+      ['Débutant', 'Intermédiaire', 'Avancé'].forEach((label, i) => dbControl(contentX + 24 + i * (diffW + diffGap), contentY + 35, diffW, 38, label.toUpperCase(),
+        { kind: 'pickDifficulty', level: i + 1 }, { fill: diff === i + 1 ? C.wine : C.card, selected: diff === i + 1, radius: 9, font: `700 10px ${F_DB}` }));
+      dbCta(contentX + contentW - 250, contentY + 93, 220, 36, 'Jouer contre l’ordinateur', { kind: 'pickMode', mode: 'pvai' },
+        { enabled: !!diff, fill: C.forest, stroke: C.forestDark });
+    }
+
+    // Réglages de partie compacts : ils restent disponibles sans recréer une
+    // section « Variantes » séparée de la navigation des modes.
+    const optionY = y + 218;
+    const optionX = x + 16;
+    const optionLabelW = 54;
+    const optionGap = 4;
+    const ecoW = (contentW - optionLabelW - optionGap * 2 - 8) / 3;
+    dbText('ÉCUS', optionX, optionY + 12, `700 9px ${F_DB}`, C.muted);
+    ECONOMIES.slice(0, 3).forEach((item, i) => dbControl(
+      optionX + optionLabelW + i * (ecoW + optionGap), optionY, ecoW, 24,
+      item.label.toUpperCase(), { kind: 'pickEconomie', value: item.id },
+      { fill: item.id === varEco ? C.forest : C.field, selected: item.id === varEco, radius: 7, font: `700 8px ${F_DB}` },
+    ));
+    const combatY = optionY + 28;
+    const combatW = (contentW - optionLabelW - optionGap - 8) / 2;
+    dbText('COMBAT', optionX, combatY + 12, `700 9px ${F_DB}`, C.muted);
+    COMBATS.forEach((item, i) => dbControl(
+      optionX + optionLabelW + i * (combatW + optionGap), combatY, combatW, 24,
+      item.label.toUpperCase(), { kind: 'pickCombat', value: item.id },
+      { fill: item.id === varCbt ? C.wine : C.field, selected: item.id === varCbt, radius: 7, font: `700 8px ${F_DB}` },
+    ));
+
+    const tailleY = combatY + 28;
+    const tailleW = (contentW - optionLabelW - optionGap - 8) / 2;
+    dbText('TAILLE', optionX, tailleY + 12, `700 9px ${F_DB}`, C.muted);
+    [['std', '8 × 8'], ['l15', '15 × 8']].forEach(([id, label], i) => dbControl(
+      optionX + optionLabelW + i * (tailleW + optionGap), tailleY, tailleW, 24,
+      label, { kind: 'pickTaille', value: id },
+      { fill: id === varTail ? C.gold : C.field, selected: id === varTail, radius: 7,
+        font: `700 9px ${F_DB}`, textColor: id === varTail ? C.bg : C.text },
+    ));
+  }
+
+  // Fond et en-tête.
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  const glowA = ctx.createRadialGradient(120, -20, 0, 120, 240, 560);
+  glowA.addColorStop(0, `${UI_THEME.wine}6B`); glowA.addColorStop(1, `${UI_THEME.wine}00`);
+  ctx.fillStyle = glowA; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  const glowB = ctx.createRadialGradient(CANVAS_W, 30, 0, CANVAS_W - 90, 220, 500);
+  glowB.addColorStop(0, `${UI_THEME.primaryDark}42`); glowB.addColorStop(1, `${UI_THEME.primaryDark}00`);
+  ctx.fillStyle = glowB; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  dbText('♞ ROY', 32, 66, `600 36px ${F_DB_BRAND}`);
+  dbText('CHEC', 139, 66, `italic 500 36px ${F_DB_BRAND}`, C.goldBright);
+  // Zone centrale HTML : plateau / feuille / panneau latéral.
+  const boardX = 24, boardW = 430;
+  dbCard(boardX, mainY, boardW, mainH, C.panel, R_CARD);
+  dbText('PLATEAU', boardX + 20, mainY + 25, `700 13px ${F_DB}`, C.text);    drawPreviewBoard(boardX + 18, mainY + 52, boardW - 36, mainH - 98, state);
+  dbText('●  Trait aux blancs', boardX + 20, mainY + mainH - 24, `11px ${F_DB}`, C.goldBright);
+  dbText(`Partie libre · ${tailleLabel}`, boardX + boardW - 20, mainY + mainH - 24, `10px ${F_DB}`, C.muted, 'right');
+
+  drawMoves(466, mainY, 210, mainH);
+  drawSideMenu(692, mainY, 284, mainH);
+  drawModeBar();
+  dessineBandeauCompte(ctx, state);
+}
+
 function dessineMenu(ctx, state) {
-  // [V2] Constantes (palette + typo, mêmes que v5.10).
-  const F_V2 = 'ui-rounded, "SF Pro Rounded", "Segoe UI Rounded", "Baloo 2", system-ui, sans-serif';
+  // [Salon de jeu × Roychec] : prune profond, or éditorial, ivoire et forêt.
+  // Le menu reprend la hiérarchie de roychec_interface.html tout en restant Canvas pur.
+  const F_V2 = '"Nunito Sans", system-ui, sans-serif';
+  const F_BRAND = 'Georgia, "Times New Roman", serif';
   const V2 = {
-    bg:       '#fffafa', card:    '#FFFAFA',
-    ink:      '#3d4024', inkSoft: '#2B2B2B',
-    purple:   '#8e8c29', purpleD: '#2B2B2B',
-    green:    '#3F5B4C', greenD:  '#33493D',
-    rose:     '#E7B9AC', roseD:   '#D99A88',
-    panelL:   '#FCF8F3', panelO:  '#FCF8F3', panelC: '#FCF8F3', // crème chaud (idem cartes jeu)
-    field:    '#E6E1F2', fldInk:  '#4A4460', border: '#2B2B2B',
+    bg: UI_THEME.background, card: UI_THEME.card,
+    ink: UI_THEME.text, inkSoft: UI_THEME.muted,
+    purple: UI_THEME.secondary, purpleD: UI_THEME.secondaryLight,
+    green: UI_THEME.primary, greenD: UI_THEME.primaryDark,
+    rose: UI_THEME.wine, roseD: UI_THEME.wineDark,
+    panelL: UI_THEME.panel, panelO: UI_THEME.background, panelC: UI_THEME.panelAlt,
+    field: UI_THEME.field, fldInk: UI_THEME.text, border: UI_THEME.border,
   };
   const R_LG = 22, R_MD = 16, R_SM = 12, R_XS = 8;
 
@@ -1603,55 +2563,55 @@ function dessineMenu(ctx, state) {
   }
   function field(x, y, w, h, label, action, opts = {}) {
     const enabled = opts.enabled !== false;
-    state.ui.buttons.push({ x, y, w, h, action, enabled });
-    ctx.fillStyle = enabled ? V2.field : '#E8E3EE';
-    roundRect(ctx, x, y, w, h, R_MD); ctx.fill();
+    const { visualY } = motionMenuBouton(state, x, y, w, h, action, enabled, R_MD);
+    ctx.fillStyle = enabled ? V2.field : V2.card;
+    roundRect(ctx, x, visualY, w, h, R_MD); ctx.fill();
     ctx.lineWidth = 1;
-    ctx.strokeStyle = enabled ? V2.border : 'rgba(43,36,64,0.18)';
-    roundRect(ctx, x, y, w, h, R_MD); ctx.stroke();
+    ctx.strokeStyle = enabled ? V2.border : 'rgba(245,241,232,0.18)';
+    roundRect(ctx, x, visualY, w, h, R_MD); ctx.stroke();
     ctx.fillStyle = enabled ? V2.fldInk : V2.inkSoft;
     ctx.font = `bold 13px ${F_V2}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(label.toUpperCase(), x + w / 2, y + h / 2 - (opts.sub ? 8 : 0));
+    ctx.fillText(label.toUpperCase(), x + w / 2, visualY + h / 2 - (opts.sub ? 8 : 0));
     if (opts.sub) {
       ctx.font = `11px ${F_V2}`;
       ctx.fillStyle = enabled ? V2.fldInk : V2.inkSoft;
-      ctx.fillText(opts.sub, x + w / 2, y + h / 2 + 10);
+      ctx.fillText(opts.sub, x + w / 2, visualY + h / 2 + 10);
     }
   }
   function cta(x, y, w, h, label, action, color = V2.green, opts = {}) {
     const enabled = opts.enabled !== false;
-    state.ui.buttons.push({ x, y, w, h, action, enabled });
+    const { visualY } = motionMenuBouton(state, x, y, w, h, action, enabled, R_LG);
     if (enabled) {
-      ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = '#C4A035';
-      roundRect(ctx, x, y + 3, w, h, R_LG); ctx.fill(); ctx.restore();
+      ctx.save(); ctx.globalAlpha = 0.24; ctx.fillStyle = V2.greenD;
+      roundRect(ctx, x, visualY + 3, w, h, R_LG); ctx.fill(); ctx.restore();
     }
     ctx.fillStyle = enabled ? color : V2.field;
-    roundRect(ctx, x, y, w, h, R_LG); ctx.fill();
+    roundRect(ctx, x, visualY, w, h, R_LG); ctx.fill();
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = enabled ? '#C4A035' : 'rgba(43,36,64,0.18)';
-    roundRect(ctx, x, y, w, h, R_LG); ctx.stroke();
+    ctx.strokeStyle = enabled ? V2.greenD : 'rgba(245,241,232,0.18)';
+    roundRect(ctx, x, visualY, w, h, R_LG); ctx.stroke();
     ctx.fillStyle = enabled ? '#FFFFFF' : V2.inkSoft;
     ctx.font = `bold 15px ${F_V2}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(label.toUpperCase(), x + w / 2, y + h / 2 - (opts.sub ? 9 : 0));
+    ctx.fillText(label.toUpperCase(), x + w / 2, visualY + h / 2 - (opts.sub ? 9 : 0));
     if (opts.sub) {
       ctx.font = `12px ${F_V2}`;
       ctx.fillStyle = enabled ? 'rgba(255,255,255,0.92)' : V2.inkSoft;
-      ctx.fillText(opts.sub, x + w / 2, y + h / 2 + 12);
+      ctx.fillText(opts.sub, x + w / 2, visualY + h / 2 + 12);
     }
   }
   function friendBtn(x, y, w, h, label, action) {
-    state.ui.buttons.push({ x, y, w, h, action, enabled: true });
-    ctx.save(); ctx.globalAlpha = 0.18; ctx.fillStyle = '#C4A035';
-    roundRect(ctx, x, y + 3, w, h, R_LG); ctx.fill(); ctx.restore();
+    const { visualY } = motionMenuBouton(state, x, y, w, h, action, true, R_LG);
+    ctx.save(); ctx.globalAlpha = 0.24; ctx.fillStyle = V2.roseD;
+    roundRect(ctx, x, visualY + 3, w, h, R_LG); ctx.fill(); ctx.restore();
     ctx.fillStyle = V2.rose;
-    roundRect(ctx, x, y, w, h, R_LG); ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = '#C4A035';
-    roundRect(ctx, x, y, w, h, R_LG); ctx.stroke();
+    roundRect(ctx, x, visualY, w, h, R_LG); ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = V2.roseD;
+    roundRect(ctx, x, visualY, w, h, R_LG); ctx.stroke();
     ctx.fillStyle = V2.ink; ctx.font = `bold 13px ${F_V2}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(label, x + w / 2, y + h / 2);
+    ctx.fillText(label, x + w / 2, visualY + h / 2);
   }
 
   const cx = CANVAS_W / 2;
@@ -1665,40 +2625,54 @@ function dessineMenu(ctx, state) {
   const tailleLabel = (TAILLES[varTail] || TAILLES.std).label;
   const varStatus = `${varOpen ? '▼' : '▶'}  VARIANTES  ·  ${ecoLabel} * ${cbtLabel} * ${tailleLabel}`;
 
-  // === Fond lavande ===
+  // === Fond prune avec deux halos très discrets, comme la référence HTML ===
   ctx.fillStyle = V2.bg;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  const wineGlow = ctx.createRadialGradient(135, -40, 0, 135, 290, 620);
+  wineGlow.addColorStop(0, `${UI_THEME.wine}6B`);
+  wineGlow.addColorStop(0.62, `${UI_THEME.wine}1F`);
+  wineGlow.addColorStop(1, `${UI_THEME.wine}00`);
+  ctx.fillStyle = wineGlow; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  const forestGlow = ctx.createRadialGradient(CANVAS_W + 40, 20, 0, CANVAS_W - 80, 210, 520);
+  forestGlow.addColorStop(0, `${UI_THEME.primaryDark}47`);
+  forestGlow.addColorStop(1, `${UI_THEME.primaryDark}00`);
+  ctx.fillStyle = forestGlow; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
   // === Title row (y=24..80) ===
-  ctx.fillStyle = V2.purpleD; ctx.font = `bold 38px ${F_V2}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('♞ ROYCHEC', 32, 78);
+  ctx.fillStyle = V2.ink; ctx.font = `600 38px ${F_BRAND}`;
+  ctx.fillText('♞ ROY', 32, 78);
+  const royWidth = ctx.measureText('♞ ROY').width;
+  ctx.fillStyle = V2.purpleD; ctx.font = `italic 500 38px ${F_BRAND}`;
+  ctx.fillText('CHEC', 32 + royWidth - 2, 78);
 
   // === TUTORIEL bar full-width (y=110..166) ===
   const tutY = 110, tutH = 56, tutX = 32, tutW = CANVAS_W - 64;
-  state.ui.buttons.push({ x: tutX, y: tutY, w: tutW, h: tutH,
-    action: { kind: 'tutoriel' }, enabled: true });
+  const tutMotion = motionMenuBouton(state, tutX, tutY, tutW, tutH,
+    { kind: 'tutoriel' }, true, R_MD);
+  const tutVisualY = tutMotion.visualY;
   ctx.fillStyle = V2.panelO;
-  roundRect(ctx, tutX, tutY, tutW, tutH, R_MD); ctx.fill();
+  roundRect(ctx, tutX, tutVisualY, tutW, tutH, R_MD); ctx.fill();
   ctx.lineWidth = 1; ctx.strokeStyle = V2.border;
-  roundRect(ctx, tutX, tutY, tutW, tutH, R_MD); ctx.stroke();
+  roundRect(ctx, tutX, tutVisualY, tutW, tutH, R_MD); ctx.stroke();
   ctx.fillStyle = V2.purpleD; ctx.font = `bold 18px ${F_V2}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('🎓  TUTORIEL', cx, tutY + 22);
+  ctx.fillText('✦  TUTORIEL', cx, tutVisualY + 22);
   ctx.font = `12px ${F_V2}`; ctx.fillStyle = V2.fldInk;
-  ctx.fillText('apprendre à jouer en 5 minutes', cx, tutY + 42);
+  ctx.fillText('apprendre à jouer en 5 minutes', cx, tutVisualY + 42);
 
   // === VARIANTES toggle bar (y=190..225, full-width, partagé) ===
   const varY = 190, varH = 35;
-  state.ui.buttons.push({ x: 32, y: varY, w: CANVAS_W - 64, h: varH,
-    action: { kind: 'toggleVariant' }, enabled: true });
+  const variantMotion = motionMenuBouton(state, 32, varY, CANVAS_W - 64, varH,
+    { kind: 'toggleVariant' }, true, R_SM);
+  const variantVisualY = variantMotion.visualY;
   ctx.fillStyle = V2.panelL;
-  roundRect(ctx, 32, varY, CANVAS_W - 64, varH, R_SM); ctx.fill();
+  roundRect(ctx, 32, variantVisualY, CANVAS_W - 64, varH, R_SM); ctx.fill();
   ctx.lineWidth = 1; ctx.strokeStyle = V2.border;
-  roundRect(ctx, 32, varY, CANVAS_W - 64, varH, R_SM); ctx.stroke();
+  roundRect(ctx, 32, variantVisualY, CANVAS_W - 64, varH, R_SM); ctx.stroke();
   ctx.fillStyle = V2.purpleD; ctx.font = `bold 13px ${F_V2}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(varStatus.toUpperCase(), cx, varY + varH / 2);
+  ctx.fillText(varStatus.toUpperCase(), cx, variantVisualY + varH / 2);
 
   // === Accordion ECONOME + COMBAT chips (when state.menu.showVariant) ===
   let panelsY = varY + varH + 16;  // 241 si fermé
@@ -1715,16 +2689,17 @@ function dessineMenu(ctx, state) {
       const e = ECONOMIES[i];
       const ex = cx - ecoTotal / 2 + i * (ecoChipW + 8);
       const sel = varEco === e.id;
-      state.ui.buttons.push({ x: ex, y: accY, w: ecoChipW, h: ecoChipH,
-        action: { kind: 'pickEconomie', value: e.id }, enabled: true });
+      const economyMotion = motionMenuBouton(state, ex, accY, ecoChipW, ecoChipH,
+        { kind: 'pickEconomie', value: e.id }, true, R_XS);
+      const economyVisualY = economyMotion.visualY;
       ctx.fillStyle = sel ? V2.green : V2.field;
-      roundRect(ctx, ex, accY, ecoChipW, ecoChipH, R_XS); ctx.fill();
+      roundRect(ctx, ex, economyVisualY, ecoChipW, ecoChipH, R_XS); ctx.fill();
       ctx.lineWidth = 1.5; ctx.strokeStyle = sel ? V2.greenD : V2.border;
-      roundRect(ctx, ex, accY, ecoChipW, ecoChipH, R_XS); ctx.stroke();
+      roundRect(ctx, ex, economyVisualY, ecoChipW, ecoChipH, R_XS); ctx.stroke();
       ctx.fillStyle = sel ? '#FFFFFF' : V2.fldInk;
       ctx.font = `bold 11px ${F_V2}`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(e.label.toUpperCase(), ex + ecoChipW / 2, accY + ecoChipH / 2);
+      ctx.fillText(e.label.toUpperCase(), ex + ecoChipW / 2, economyVisualY + ecoChipH / 2);
     }
     accY += ecoChipH + 16;
     ctx.fillStyle = V2.inkSoft; ctx.font = `10px ${F_V2}`;
@@ -1737,17 +2712,18 @@ function dessineMenu(ctx, state) {
       const c = COMBATS[i];
       const cxx = cx - cbtTotal / 2 + i * (cbtChipW + 8);
       const sel = varCbt === c.id;
-      state.ui.buttons.push({ x: cxx, y: accY, w: cbtChipW, h: cbtChipH,
-        action: { kind: 'pickCombat', value: c.id }, enabled: true });
+      const combatMotion = motionMenuBouton(state, cxx, accY, cbtChipW, cbtChipH,
+        { kind: 'pickCombat', value: c.id }, true, R_XS);
+      const combatVisualY = combatMotion.visualY;
       const selCol = sel ? V2.rose : V2.field;
       ctx.fillStyle = selCol;
-      roundRect(ctx, cxx, accY, cbtChipW, cbtChipH, R_XS); ctx.fill();
+      roundRect(ctx, cxx, combatVisualY, cbtChipW, cbtChipH, R_XS); ctx.fill();
       ctx.lineWidth = 1.5; ctx.strokeStyle = sel ? V2.roseD : V2.border;
-      roundRect(ctx, cxx, accY, cbtChipW, cbtChipH, R_XS); ctx.stroke();
+      roundRect(ctx, cxx, combatVisualY, cbtChipW, cbtChipH, R_XS); ctx.stroke();
       ctx.fillStyle = sel ? V2.ink : V2.fldInk;
       ctx.font = `bold 11px ${F_V2}`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(c.label.toUpperCase(), cxx + cbtChipW / 2, accY + cbtChipH / 2);
+      ctx.fillText(c.label.toUpperCase(), cxx + cbtChipW / 2, combatVisualY + cbtChipH / 2);
     }
     accY += cbtChipH + 16;
     // === Phase A.5 v2 Phase 3 — 3e row « TAILLE DE PLATEAU » ===
@@ -1770,21 +2746,22 @@ function dessineMenu(ctx, state) {
         const t = tailArray[i];
         const txx = cx - tailTotal / 2 + i * (tailChipW + 8);
         const sel = varTail === t.id;
-        state.ui.buttons.push({ x: txx, y: accY, w: tailChipW, h: tailChipH,
-          action: { kind: 'pickTaille', value: t.id }, enabled: true });
+        const tailleMotion = motionMenuBouton(state, txx, accY, tailChipW, tailChipH,
+          { kind: 'pickTaille', value: t.id }, true, R_XS);
+        const tailleVisualY = tailleMotion.visualY;
         // Lookup direct fill (V2[t.accent]) + stroke (V2[t.stroke]) — pas d'approximation
         // +'D'. tailees.js est la maison canonique des deux clés : tout nouveau TAILLES.*
         // (Phase A.5 v3+) doit déclarer BOTH `accent` ET `stroke`.
         const selCol = sel ? (V2[t.accent] || V2.green) : V2.field;
         const strokeCol = sel ? (V2[t.stroke] || V2.border) : V2.border;
         ctx.fillStyle = selCol;
-        roundRect(ctx, txx, accY, tailChipW, tailChipH, R_XS); ctx.fill();
+        roundRect(ctx, txx, tailleVisualY, tailChipW, tailChipH, R_XS); ctx.fill();
         ctx.lineWidth = 1.5; ctx.strokeStyle = strokeCol;
-        roundRect(ctx, txx, accY, tailChipW, tailChipH, R_XS); ctx.stroke();
+        roundRect(ctx, txx, tailleVisualY, tailChipW, tailChipH, R_XS); ctx.stroke();
         ctx.fillStyle = sel ? '#FFFFFF' : V2.fldInk;
         ctx.font = `bold 11px ${F_V2}`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(t.label.toUpperCase(), txx + tailChipW / 2, accY + tailChipH / 2);
+        ctx.fillText(t.label.toUpperCase(), txx + tailChipW / 2, tailleVisualY + tailChipH / 2);
       }
     }
     panelsY = accY + 26 + 8;  // tailChipH=26 + 8 gap ; ≈ 380
@@ -1858,17 +2835,18 @@ function dessineMenu(ctx, state) {
     const lvl = i + 1;
     const cxx = P_X2 + PANEL_PAD + i * (chipW + 7);
     const sel = !!(state.menu && state.menu.difficulty === lvl);
-    state.ui.buttons.push({ x: cxx, y: chipY, w: chipW, h: chipH,
-      action: { kind: 'pickDifficulty', level: lvl }, enabled: true });
+    const difficultyMotion = motionMenuBouton(state, cxx, chipY, chipW, chipH,
+      { kind: 'pickDifficulty', level: lvl }, true, R_SM);
+    const difficultyVisualY = difficultyMotion.visualY;
     ctx.fillStyle = sel ? V2.purple : V2.card;
-    roundRect(ctx, cxx, chipY, chipW, chipH, R_SM); ctx.fill();
+    roundRect(ctx, cxx, difficultyVisualY, chipW, chipH, R_SM); ctx.fill();
     ctx.lineWidth = sel ? 2 : 1.5;
-    ctx.strokeStyle = sel ? V2.purpleD : 'rgba(43,36,64,0.18)';
-    roundRect(ctx, cxx, chipY, chipW, chipH, R_SM); ctx.stroke();
+    ctx.strokeStyle = sel ? V2.purpleD : V2.border;
+    roundRect(ctx, cxx, difficultyVisualY, chipW, chipH, R_SM); ctx.stroke();
     ctx.fillStyle = sel ? '#FFFFFF' : V2.ink;
     ctx.font = `bold 11px ${F_V2}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(chipNames[i].toUpperCase(), cxx + chipW / 2, chipY + chipH / 2);
+    ctx.fillText(chipNames[i].toUpperCase(), cxx + chipW / 2, difficultyVisualY + chipH / 2);
   }
   field(P_X2 + PANEL_PAD, panelsY + PANEL_PAD + 152, IN_W, 50, 'SPECTATEUR',  // shift +60
     { kind: 'pickMode', mode: 'spectator' },
@@ -1887,16 +2865,16 @@ function dessineMenu(ctx, state) {
   const drW = (CANVAS_W - 64 - drGap) / 2; // 458 px (moitié de la largeur tuto)
   const drX0 = 32; // aligné avec le bord gauche du tutoriel
   function menuPanelBtn(x, y, w, h, iconLabel, sub, action) {
-    state.ui.buttons.push({ x, y, w, h, action, enabled: true });
+    const { visualY } = motionMenuBouton(state, x, y, w, h, action, true, R_MD);
     ctx.fillStyle = V2.panelO;
-    roundRect(ctx, x, y, w, h, R_MD); ctx.fill();
+    roundRect(ctx, x, visualY, w, h, R_MD); ctx.fill();
     ctx.lineWidth = 1; ctx.strokeStyle = V2.border;
-    roundRect(ctx, x, y, w, h, R_MD); ctx.stroke();
+    roundRect(ctx, x, visualY, w, h, R_MD); ctx.stroke();
     ctx.fillStyle = V2.purpleD; ctx.font = `bold 18px ${F_V2}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(iconLabel, x + w / 2, y + 22);
+    ctx.fillText(iconLabel, x + w / 2, visualY + 22);
     ctx.font = `12px ${F_V2}`; ctx.fillStyle = V2.fldInk;
-    ctx.fillText(sub, x + w / 2, y + 42);
+    ctx.fillText(sub, x + w / 2, visualY + 42);
   }
   menuPanelBtn(drX0, drY, drW, drH, 'DECKS', 'éditer vos decks', { kind: 'ouvrirDecks' });
   menuPanelBtn(drX0 + drW + drGap, drY, drW, drH, 'REPLAYS', 'revoir vos parties', { kind: 'ouvrirReplays' });
@@ -1912,8 +2890,8 @@ function dessineMatchmaking(ctx, state) {
   const mm = state.matchmaking || {};
   const cx = CANVAS_W / 2, cy = CANVAS_H / 2;
 
-  // Fond Brume.
-  ctx.fillStyle = C_BRUME;
+  // Fond UI centralisé.
+  ctx.fillStyle = UI_THEME.background;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
   // [23:55] Bannière d'erreur matchmaking — affiche state.matchmaking.error
@@ -1923,12 +2901,11 @@ function dessineMatchmaking(ctx, state) {
   // Texte multi-lignes via wrapText (cap 3 lignes pour erreurs futures plus longues).
   if (mm.error) {
     const bx = 200, by = 180, bw = 600, bh = 48;
-    carte(ctx, bx, by, bw, bh, 10, '#FFFFFF', { shadow: true });
-    ctx.strokeStyle = C_TERRACOTTA;
+    carte(ctx, bx, by, bw, bh, 10, UI_THEME.card, { shadow: true });
+    ctx.strokeStyle = UI_THEME.danger;
     ctx.lineWidth = 2.5;
-    roundRect(ctx, bx, by, bw, bh, 10); ctx.stroke();
-    ctx.fillStyle = C_TERRACOTTA;
-    ctx.font = `600 14px ${F_TEXTE}`;
+    roundRect(ctx, bx, by, bw, bh, 10); ctx.stroke();ctx.fillStyle = UI_THEME.danger;
+     ctx.font = `600 14px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     // ⚠ + message, wrap sur 2-3 lignes si trop long.
     ctx.fillText('⚠', bx + 30, by + 8);
@@ -1936,7 +2913,7 @@ function dessineMatchmaking(ctx, state) {
   }
 
   // Wordmark.
-  ctx.fillStyle = C_ENCRE; ctx.font = `36px ${F_DISPLAY}`;
+  ctx.fillStyle = UI_THEME.text; ctx.font = `36px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillText('♞ ROYCHEC', cx, 86);
 
@@ -1946,36 +2923,36 @@ function dessineMatchmaking(ctx, state) {
     // LOBBY EN LIGNE — 100 % local, aucun appel réseau (spec-pvp-online §9.2).
     // Trois choix clairs : recherche publique, partie entre amis, rejoindre par code.
     const acc = state.account || {};
-    ctx.fillStyle = C_ENCRE; ctx.font = `18px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('JOUER EN LIGNE', cx, 180);
 
     // Sous-titre : pseudo + trophées du joueur connecté.
     if (acc.status === 'connected') {
-      ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `13px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
       ctx.fillText(`♟ ${acc.pseudo || ''}  ·  🏆 ${acc.trophies || 0} trophées`, cx, 208);
     }
 
     // 3 gros boutons distincts.
     bouton(state, ctx, cx - wB / 2, 244, wB, 58, '🔍 Lancer une recherche',
       { kind: 'startSearch' },
-      { color: C_AMBRE, textColor: '#2B1D06', sub: 'trouver un adversaire au hasard' });
+      { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'trouver un adversaire au hasard' });
 
     bouton(state, ctx, cx - wB / 2, 314, wB, 58, '👥 Jouer avec un ami',
       { kind: 'createPrivateMatch' },
-      { color: C_SAUGE, textColor: C_ENCRE, sub: 'créer une partie privée' });
+      { color: UI_THEME.primary, textColor: UI_THEME.text, sub: 'créer une partie privée' });
 
     bouton(state, ctx, cx - wB / 2, 384, wB, 58, '🔑 Rejoindre par code',
       { kind: 'showJoinCode' },
-      { color: C_CARTE, textColor: C_ENCRE, sub: 'entrer un code d\'invitation' });
+      { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'entrer un code d\'invitation' });
 
     // Retour au menu.
     bouton(state, ctx, cx - wB / 2, 460, wB, hB, '← Retour',
       { kind: 'quitterLobby' },
-      { color: C_CARTE, textColor: C_ENCRE });
+      { color: UI_THEME.card, textColor: UI_THEME.text });
 
     if (mm.error) {
-      ctx.fillStyle = C_TERRACOTTA; ctx.font = `13px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
       ctx.fillText(mm.error, cx, 530);
     }
 
@@ -1983,10 +2960,10 @@ function dessineMatchmaking(ctx, state) {
     // Écran CADENCE (spec §6) — 100 % local, s'intercale entre le lobby et le réseau.
     // Le titre rappelle l'action d'origine ; deux joueurs ne s'apparient que sur la
     // même cadence (file publique) / le créateur impose la sienne (partie privée).
-    ctx.fillStyle = C_ENCRE; ctx.font = `18px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('CADENCE DE JEU', cx, 180);
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `13px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
     ctx.fillText(mm.pendingAction === 'private'
       ? 'Temps de réflexion de la partie privée (ton ami en hérite)'
       : 'Temps de réflexion — tu ne rencontres que des joueurs de la même cadence', cx, 208);
@@ -1999,7 +2976,7 @@ function dessineMatchmaking(ctx, state) {
         cx - gw - gap / 2 + col * (gw + gap), 244 + row * (gh + gap + 4), gw, gh,
         `${c.emoji} ${c.label}`,
         { kind: 'pickCadence', cadence: c.s },
-        { color: c.s === 300 ? C_AMBRE : C_CARTE, textColor: c.s === 300 ? '#2B1D06' : C_ENCRE, sub: c.sub });
+        { color: c.s === 300 ? UI_THEME.amber : UI_THEME.card, textColor: c.s === 300 ? UI_THEME.buttonText : UI_THEME.text, sub: c.sub });
     });
 
     // Variante (GDD §7.2 v3.1) — partie PRIVÉE uniquement : le créateur impose,
@@ -2010,7 +2987,7 @@ function dessineMatchmaking(ctx, state) {
     if (mm.pendingAction === 'private') {
       const varEco = (state.menu && state.menu.economie) || 'standard';
       const varCbt = (state.menu && state.menu.combat) || 'standard';
-      ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `10px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
       ctx.fillText('VARIANTE  —  ton ami hérite de ton choix', cx, 408);
       // Rangée ÉCONOMIE (3 chips 92×26) puis COMBAT (2 chips 142×26), style menu.
@@ -2025,17 +3002,17 @@ function dessineMatchmaking(ctx, state) {
           const sel = row.sel === it.id;
           state.ui.buttons.push({
             x, y: row.y, w: row.w, h: 26,
-            action: { kind: row.kind, value: it.id }, enabled: true,
+            action: { kind: row.kind, value: it.id }, enabled: true, radius: 8,
           });
-          const selColor = row.kind === 'pickCombat' && it.id === 'elimX2' ? C_TERRACOTTA
-            : (row.kind === 'pickCombat' ? C_SAUGE : C_AMBRE);
-          ctx.fillStyle = ombreBouton(sel ? selColor : C_CARTE);
+          const selColor = row.kind === 'pickCombat' && it.id === 'elimX2' ? UI_THEME.danger
+            : (row.kind === 'pickCombat' ? UI_THEME.primary : UI_THEME.amber);
+          ctx.fillStyle = ombreBouton(sel ? selColor : UI_THEME.card);
           roundRect(ctx, x, row.y + 3, row.w, 26, 8); ctx.fill();
-          ctx.fillStyle = sel ? selColor : C_CARTE;
+          ctx.fillStyle = sel ? selColor : UI_THEME.card;
           roundRect(ctx, x, row.y, row.w, 26, 8); ctx.fill();
-          ctx.lineWidth = sel ? 3 : 1.5; ctx.strokeStyle = sel ? C_ENCRE : C_CARTE_BORD;
+          ctx.lineWidth = sel ? 3 : 1.5; ctx.strokeStyle = sel ? UI_THEME.border : UI_THEME.border;
           roundRect(ctx, x, row.y, row.w, 26, 8); ctx.stroke();
-          ctx.fillStyle = sel && row.kind === 'pickCombat' ? '#FFFFFF' : (sel ? '#2B1D06' : C_ENCRE);
+          ctx.fillStyle = sel && row.kind === 'pickCombat' ? UI_THEME.text : (sel ? UI_THEME.buttonText : UI_THEME.text);
           ctx.font = `11px ${F_DISPLAY}`;
           ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
           ctx.fillText(it.label.toUpperCase(), x + row.w / 2, row.y + 13);
@@ -2047,7 +3024,7 @@ function dessineMatchmaking(ctx, state) {
     // Retour au lobby (aucun réseau engagé à ce stade).
     bouton(state, ctx, cx - wB / 2, retourY, wB, hB, '← Retour',
       { kind: 'cancelMatchmaking' },
-      { color: C_CARTE, textColor: C_ENCRE, sub: 'revenir au lobby' });
+      { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'revenir au lobby' });
 
   } else if (mm.mode === 'search') {
     // Écran RECHERCHE (spec §9.2).
@@ -2055,71 +3032,71 @@ function dessineMatchmaking(ctx, state) {
     const band = mm.band || 100;
     const bandLabel = band >= 99999 ? 'tous niveaux' : `±${band}`;
 
-    ctx.fillStyle = C_ENCRE; ctx.font = `16px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('RECHERCHE D\'UN ADVERSAIRE…', cx, 194);
 
     // Spinner simple (texte animé).
     const dots = ['.', '..', '...'][Math.floor(Date.now() / 500) % 3];
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `28px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `28px ${F_TEXTE}`;
     ctx.fillText(dots, cx, 230);
 
     // Infos (la cadence choisie borne la file : rappel visible pendant l'attente).
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `13px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
     ctx.fillText(`Temps écoulé : ${elapsed}s  ·  Niveau : ${bandLabel}  ·  ⏱ ${cadenceLabel(mm.cadence || 300)}`, cx, 270);
 
     // Bouton Annuler : ramène AU LOBBY (retire de la file publique via cancelWait).
     bouton(state, ctx, cx - wB / 2, 320, wB, hB, '✕ Annuler',
       { kind: 'cancelMatchmaking' },
-      { color: C_CARTE, textColor: C_ENCRE, sub: 'revenir au lobby' });
+      { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'revenir au lobby' });
 
     if (mm.error) {
-      ctx.fillStyle = C_TERRACOTTA; ctx.font = `13px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
       ctx.fillText(mm.error, cx, 400);
     }
 
   } else if (mm.mode === 'private_create') {
     // Écran CRÉATION partie privée.
-    ctx.fillStyle = C_ENCRE; ctx.font = `16px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('PARTIE PRIVÉE CRÉÉE', cx, 194);
 
     if (mm.privateCode) {
       // Code en gros.
-      ctx.fillStyle = C_AMBRE; ctx.font = `42px ${F_DISPLAY}`;
+      ctx.fillStyle = UI_THEME.amber; ctx.font = `42px ${F_DISPLAY}`;
       ctx.fillText(mm.privateCode, cx, 250);
-      ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `13px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
       ctx.fillText('Partage ce code avec ton adversaire', cx, 284);
       const varSuffix = mm.variant && mm.variant !== 'pvp_standard'
         ? `  ·  ⚔ ${variantLabel(mm.variant)}` : '';
       ctx.fillText(`Cadence : ⏱ ${cadenceLabel(mm.cadence || 300)}${varSuffix}  ·  En attente…`, cx, 308);
     } else {
-      ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `15px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.muted; ctx.font = `15px ${F_TEXTE}`;
       ctx.fillText('Création en cours…', cx, 240);
     }
 
     bouton(state, ctx, cx - wB / 2, 354, wB, hB, '✕ Annuler',
       { kind: 'cancelMatchmaking' },
-      { color: C_CARTE, textColor: C_ENCRE });
+      { color: UI_THEME.card, textColor: UI_THEME.text });
 
     if (mm.error) {
-      ctx.fillStyle = C_TERRACOTTA; ctx.font = `13px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
       ctx.fillText(mm.error, cx, 430);
     }
 
   } else if (mm.mode === 'private_join') {
     // Écran REJOINDRE partie privée.
-    ctx.fillStyle = C_ENCRE; ctx.font = `16px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('REJOINDRE UNE PARTIE', cx, 194);
 
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `14px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
     ctx.fillText('Entre le code à 6 caractères :', cx, 230);
 
     // Bouton qui déclenche un prompt (simplifié — pas de DOM input en v1).
     bouton(state, ctx, cx - 120, 264, 240, 46, 'Entrer le code',
       { kind: 'joinByCode', code: '' },
-      { color: C_AMBRE, textColor: '#2B1D06', sub: 'cliquer pour saisir' });
+      { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'cliquer pour saisir' });
 
     // Note : le prompt est déclenché par un listener spécial dans main.js.
     // On override le code vide → au clic, un prompt s'ouvre, puis on rappelle
@@ -2127,34 +3104,34 @@ function dessineMatchmaking(ctx, state) {
 
     bouton(state, ctx, cx - wB / 2, 330, wB, hB, '← Retour',
       { kind: 'cancelMatchmaking' },
-      { color: C_CARTE, textColor: C_ENCRE, sub: 'revenir au lobby' });
+      { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'revenir au lobby' });
 
     if (mm.error) {
-      ctx.fillStyle = C_TERRACOTTA; ctx.font = `13px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
       ctx.fillText(mm.error, cx, 390);
     }
 
   } else if (mm.mode === 'matched') {
     // Écran MATCH TROUVÉ (spec §9.2).
-    ctx.fillStyle = C_SAUGE; ctx.font = `22px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.primary; ctx.font = `22px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('✓ ADVERSIRE TROUVÉ !', cx, 194);
 
     // Infos adversaire.
-    ctx.fillStyle = C_ENCRE; ctx.font = `18px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
     ctx.fillText(`♟ ${(mm.oppPseudo || 'Adversaire').toUpperCase()}`, cx, 244);
-    ctx.fillStyle = C_AMBRE_FONCE; ctx.font = `15px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.amberDark; ctx.font = `15px ${F_DISPLAY}`;
     ctx.fillText(`🏆 ${mm.oppTrophies || 0} trophées`, cx, 274);
 
     // Variante héritée (partie privée non-standard) : le rejoignant découvre ici
     // la variante imposée par le créateur (GDD §7.2 v3.1).
     if (mm.variant && mm.variant !== 'pvp_standard') {
-      ctx.fillStyle = C_TERRACOTTA; ctx.font = `13px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
       ctx.fillText(`⚔ Variante : ${variantLabel(mm.variant)}`, cx, 296);
     }
 
     // Compte à rebours visuel.
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `14px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
     ctx.fillText('Connexion en cours…', cx, 318);
   }
 
@@ -2165,25 +3142,39 @@ function dessineMatchmaking(ctx, state) {
 // Écran REPLAYS dédié (phase 'replays') — plein écran, même modèle que le lobby
 // en ligne. Liste jusqu'à 20 parties (tout le stock localStorage) sur 2 colonnes,
 // clic = lancement du replay, « ← Retour » (ou Échap) = menu d'accueil.
+// Palette locale : même thème hybride que le menu et l'éditeur Decks, sans modifier
+// le chrome clair des autres écrans.
+// Références dynamiques : le sélecteur clair/sombre modifie UI_THEME à chaud.
+const REPLAY_UI = {};
+for (const [alias, token] of Object.entries({
+  bg: 'background', panel: 'panel', card: 'card', field: 'field',
+  ink: 'text', muted: 'muted', border: 'border',
+  green: 'primary', greenD: 'primaryDark', blue: 'secondary',
+  rose: 'danger', roseD: 'dangerDark', amber: 'amberLight', amberD: 'amberDark',
+  cardShadow: 'shadow', darkInk: 'buttonText', roseInk: 'dangerText',
+})) Object.defineProperty(REPLAY_UI, alias, { enumerable: true, get: () => UI_THEME[token] });
+
 function dessineReplays(ctx, state) {
   const cx = CANVAS_W / 2;
 
-  // Fond Brume + wordmark (identique à dessineMatchmaking).
-  ctx.fillStyle = C_BRUME;
+  // Fond graphite + panneau flottant : adaptation sombre de la liste Replays.
+  ctx.fillStyle = REPLAY_UI.bg;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  ctx.fillStyle = C_ENCRE; ctx.font = `36px ${F_DISPLAY}`;
+  carte(ctx, 24, 24, CANVAS_W - 48, 744, 22, REPLAY_UI.panel,
+    { shadow: false, stroke: REPLAY_UI.border });
+  ctx.fillStyle = REPLAY_UI.ink; ctx.font = `36px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillText('♞ ROYCHEC', cx, 86);
 
-  ctx.fillStyle = C_ENCRE; ctx.font = `18px ${F_DISPLAY}`;
+  ctx.fillStyle = REPLAY_UI.ink; ctx.font = `18px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('🎬 REPLAYS', cx, 160);
-  ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `13px ${F_TEXTE}`;
+  ctx.fillStyle = REPLAY_UI.muted; ctx.font = `13px ${F_TEXTE}`;
   ctx.fillText('Revoir tes dernières parties — les 20 plus récentes sont conservées', cx, 188);
 
   const replays = state._replayList || [];
   if (!replays.length) {
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `15px ${F_TEXTE}`;
+    ctx.fillStyle = REPLAY_UI.muted; ctx.font = `15px ${F_TEXTE}`;
     ctx.fillText('Aucun replay pour l\'instant — joue une partie !', cx, 300);
   }
 
@@ -2203,15 +3194,16 @@ function dessineReplays(ctx, state) {
     const label = `${modeStr}${diffStr}  ·  ${rp.totalActions} act.  ·  ${dateStr}${winnerStr}`;
     state.ui.buttons.push({
       x, y: ry, w: rW, h: rH,
-      action: { kind: 'startReplay', key: rp.key }, enabled: true,
+      action: { kind: 'startReplay', key: rp.key }, enabled: true, radius: 8,
     });
-    ctx.fillStyle = ombreBouton(C_CARTE);
+    // Carte interactive : surface étagée et lisible sur graphite.
+    ctx.fillStyle = REPLAY_UI.cardShadow;
     roundRect(ctx, x, ry + 3, rW, rH, 8); ctx.fill();
-    ctx.fillStyle = C_CARTE;
+    ctx.fillStyle = REPLAY_UI.card;
     roundRect(ctx, x, ry, rW, rH, 8); ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = C_CARTE_BORD;
+    ctx.lineWidth = 1.5; ctx.strokeStyle = REPLAY_UI.border;
     roundRect(ctx, x, ry, rW, rH, 8); ctx.stroke();
-    ctx.fillStyle = C_ENCRE; ctx.font = `12px ${F_TEXTE}`;
+    ctx.fillStyle = REPLAY_UI.ink; ctx.font = `12px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(label, x + rW / 2, ry + rH / 2);
   }
@@ -2220,7 +3212,8 @@ function dessineReplays(ctx, state) {
   const wB = 320, hB = 52;
   bouton(state, ctx, cx - wB / 2, 700, wB, hB, '← Retour',
     { kind: 'fermerReplays' },
-    { color: C_CARTE, textColor: C_ENCRE, sub: 'revenir au menu (Échap)' });
+    { color: REPLAY_UI.green, textColor: REPLAY_UI.ink, outlineColor: REPLAY_UI.greenD,
+      sub: 'revenir au menu (Échap)', subColor: REPLAY_UI.muted });
 
   dessineBandeauCompte(ctx, state);
 }
@@ -2281,10 +3274,28 @@ const DECK_RET_W = 220, DECK_RET_H = 44;
 const DECK_RET_X = (CANVAS_W - DECK_RET_W) / 2;
 const DECK_RET_Y = 720;
 
+// Palette Decks : même langage hybride que le menu, isolé pour ne pas modifier
+// le chrome clair du plateau ni les autres écrans.
+// Références dynamiques : Decks suit lui aussi le thème choisi sans reconstruire
+// le module render.js.
+const DECK_UI = {};
+for (const [alias, token] of Object.entries({
+  bg: 'background', panel: 'panel', card: 'card', field: 'field',
+  ink: 'text', muted: 'muted', border: 'border',
+  green: 'primary', greenD: 'primaryDark', blue: 'secondary', blueD: 'secondaryLight',
+  rose: 'danger', roseD: 'dangerDark', amber: 'amberLight', amberD: 'amberDark',
+})) Object.defineProperty(DECK_UI, alias, { enumerable: true, get: () => UI_THEME[token] });
+
 function dessineDecks(ctx, state) {
-  // Fond blanc derrière le deck editor (user request).
-  ctx.fillStyle = '#FFFFFF';
+  // Fond graphite + panneau flottant : adaptation Decks de la direction hybride.
+  ctx.fillStyle = DECK_UI.bg;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  carte(ctx, 36, 24, CANVAS_W - 72, 744, 22, DECK_UI.panel,
+    { shadow: false, stroke: DECK_UI.border });
+  ctx.fillStyle = DECK_UI.ink;
+  ctx.font = `24px ${F_DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('MES DECKS', CANVAS_W / 2, 59);
 
   const root = state.decksRoot || sanitizeRoot(loadDecks());
   state.decksRoot = root;
@@ -2306,20 +3317,21 @@ function dessineDecks(ctx, state) {
     const tabX = DECK_TABS_X0 + i * (DECK_TAB_W + DECK_TAB_GAP);
     const hasDeck = i < ids.length;
     const isActive = hasDeck && ids[i] === root.active;
-    ctx.fillStyle = ombreBouton('#FFFFFF');
+    const tabFill = isActive ? DECK_UI.green : (hasDeck ? DECK_UI.field : DECK_UI.panel);
+    ctx.fillStyle = isActive ? DECK_UI.greenD : UI_THEME.shadow;
     roundRect(ctx, tabX, DECK_TABS_Y + 3, DECK_TAB_W, DECK_TAB_H, 9); ctx.fill();
-    ctx.fillStyle = '#FFFFFF';
+    ctx.fillStyle = tabFill;
     roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 9); ctx.fill();
-    ctx.strokeStyle = isActive ? DECK_ACCENT : (hasDeck ? C_ENCRE : C_ENCRE_PALE);
+    ctx.strokeStyle = isActive ? DECK_UI.green : (hasDeck ? DECK_UI.border : UI_THEME.field);
     ctx.lineWidth = isActive ? 3 : 2;
     roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 9); ctx.stroke();
-    ctx.fillStyle = isActive ? DECK_ACCENT : C_ENCRE;
+    ctx.fillStyle = isActive ? DECK_UI.ink : (hasDeck ? DECK_UI.ink : DECK_UI.muted);
     ctx.font = `24px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(i + 1), tabX + DECK_TAB_W / 2, DECK_TABS_Y + DECK_TAB_H / 2);
     state.ui.buttons.push({
       x: tabX, y: DECK_TABS_Y, w: DECK_TAB_W, h: DECK_TAB_H,
-      action: { kind: 'switchDeck', value: i }, enabled: true,
+      action: { kind: 'switchDeck', value: i }, enabled: true, radius: 9,
     });
   }
 
@@ -2334,20 +3346,15 @@ function dessineDecks(ctx, state) {
       const slots = (activeDeck && activeDeck.slots && activeDeck.slots[type]) || {};
 
       const pbX = cardX, pbY = cardY;
-      // Encadré style « cadre photo » : ombre plate décalée, fond blanc,
-      // bordure épaisse Encre + ligne intérieure pâle pour effet museum frame.
-      // Sépare visuellement chaque pièce des 3 pills adjacentes (D/A/S).
-      ctx.fillStyle = ombreBouton('#FFFFFF');
+      // Encadré de pièce : surface field, ombre plate et bordure claire lisible
+      // sur graphite. La géométrie reste inchangée pour préserver les hitboxes.
+      ctx.fillStyle = UI_THEME.shadow;
       roundRect(ctx, pbX, pbY + 4, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.fill();
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = DECK_UI.field;
       roundRect(ctx, pbX, pbY, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.fill();
-      // Bordure extérieure épaisse (2.5 px) — silhouette de l'encadré.
-      ctx.strokeStyle = C_ENCRE; ctx.lineWidth = 2.5;
+      ctx.strokeStyle = DECK_UI.border; ctx.lineWidth = 2.5;
       roundRect(ctx, pbX, pbY, DECK_PIECE_BOX_W, DECK_CARD_H, 10); ctx.stroke();
-      // Bordure intérieur pâle (1.5 px, inset 5 px) — finesse du cadre.
-      // Alpha bumpée de C_CARTE_BORD (0.10) à 0.30 pour rester visible à taille
-      // normale tout en gardant le côté « finesse » du cadre intérieur.
-      ctx.strokeStyle = 'rgba(26,20,15,0.30)'; ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(245,241,232,0.20)'; ctx.lineWidth = 1.5;
       roundRect(ctx, pbX + 5, pbY + 5,
         DECK_PIECE_BOX_W - 10, DECK_CARD_H - 10, 7); ctx.stroke();
       // Sprite de la pièce (camp 0 = bleu) centré dans le piece_box. Fallback lettre
@@ -2365,7 +3372,7 @@ function dessineDecks(ctx, state) {
         ctx.drawImage(pieceImg, pieceCx - w / 2, pieceCy - targetH / 2, w, targetH);
       } else {
         // Fallback lettre FR si sprite pas encore chargé (canplay race 1re frame).
-        ctx.fillStyle = C_ENCRE;
+        ctx.fillStyle = DECK_UI.ink;
         ctx.font = `${DECK_LETTER_SIZE}px ${F_DISPLAY}`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(DECK_LETTRE_FR[type] || type, pieceCx, pieceCy + 1);
@@ -2377,27 +3384,30 @@ function dessineDecks(ctx, state) {
       for (let s = 0; s < DECK_CATS.length; s++) {
         const cat = DECK_CATS[s];
         const pillY = cardY + pillTopPad + s * (DECK_PILL_H + DECK_PILL_INNER_GAP);
-        ctx.fillStyle = COULEUR_CAT[cat];
+        const pillFill = cat === 'D' ? DECK_UI.blue : cat === 'A' ? DECK_UI.rose : DECK_UI.green;
+        const pillStroke = cat === 'D' ? DECK_UI.blueD : cat === 'A' ? DECK_UI.roseD : DECK_UI.greenD;
+        ctx.fillStyle = pillFill;
         roundRect(ctx, pillX, pillY, DECK_PILL_W, DECK_PILL_H, DECK_PILL_H / 2); ctx.fill();
-        ctx.strokeStyle = C_ENCRE; ctx.lineWidth = 2;
+        ctx.strokeStyle = pillStroke; ctx.lineWidth = 2;
         roundRect(ctx, pillX, pillY, DECK_PILL_W, DECK_PILL_H, DECK_PILL_H / 2); ctx.stroke();
         const upgId = slots[cat];
         const upg = upgId && UPGRADES[upgId];
         const label = upg ? upg.nom.toUpperCase() : '—';
-        ctx.fillStyle = C_ENCRE;
+        ctx.fillStyle = UI_THEME.text;
         ctx.font = `600 13px ${F_DISPLAY}`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(label, pillX + DECK_PILL_W / 2, pillY + DECK_PILL_H / 2 + 1);
         state.ui.buttons.push({
           x: pillX, y: pillY, w: DECK_PILL_W, h: DECK_PILL_H,
-          action: { kind: 'editSlot', type, cat }, enabled: true,
+          action: { kind: 'editSlot', type, cat }, enabled: true, radius: DECK_PILL_H / 2,
         });
       }
     }
   }
 
   bouton(state, ctx, DECK_RET_X, DECK_RET_Y, DECK_RET_W, DECK_RET_H,
-    'Retour au menu', { kind: 'fermerDecks' });
+    'Retour au menu', { kind: 'fermerDecks' },
+    { color: DECK_UI.green, textColor: DECK_UI.ink, outlineColor: DECK_UI.greenD });
 }
 
 function dessineDeckPicker(ctx, state) {
@@ -2408,13 +3418,15 @@ function dessineDeckPicker(ctx, state) {
   const activeDeck = root.decks[root.active];
   const currentSlot = (activeDeck && activeDeck.slots && activeDeck.slots[type]) ? activeDeck.slots[type][cat] : null;
 
-  // Overlay sombre transparent.
-  ctx.save();
-  ctx.fillStyle = 'rgba(26, 20, 15, 0.55)'; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  ctx.restore();
+  // Écran autonome : le deck principal ne reste plus visible sous le picker.
+  // Cette surface opaque focalise le choix sur les améliorations compatibles.
+  ctx.fillStyle = DECK_UI.bg;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  carte(ctx, 130, 38, 740, 700, 22, DECK_UI.panel,
+    { shadow: false, stroke: DECK_UI.border });
 
   // Titre.
-  ctx.fillStyle = C_BRUME; ctx.font = `22px ${F_DISPLAY}`;
+  ctx.fillStyle = DECK_UI.ink; ctx.font = `22px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   // Phase 6.2 belt-and-braces — defensive defaults pour les 3 reads.
   // _deckEditor peut etre mal forme (race, partial sanitize, deck user-created
@@ -2426,8 +3438,11 @@ function dessineDeckPicker(ctx, state) {
   const catLabel  = DECK_CAT_LABEL[cat] || cat || '—';
   ctx.fillText(`${typeStr} — ${typeNom} · ${catLabel.toUpperCase()}`,
     CANVAS_W / 2, 80);
-  ctx.fillStyle = C_CARTE; ctx.font = `12px ${F_TEXTE}`;
-  ctx.fillText('Choisis une amélioration (ou vide le slot)', CANVAS_W / 2, 102);
+  ctx.fillStyle = DECK_UI.muted; ctx.font = `12px ${F_TEXTE}`;
+  ctx.fillText('Choisis une amélioration compatible', CANVAS_W / 2, 102);
+  ctx.font = `10px ${F_DISPLAY}`;
+  ctx.fillStyle = DECK_UI.amber;
+  ctx.fillText('OU VIDE LE SLOT POUR LE RÉINITIALISER', CANVAS_W / 2, 119);
 
   // Cartes éligibles : UPGRADES filtrées sur (piece, cat), triées par coût croissant.
   const eligible = Object.values(UPGRADES)
@@ -2441,41 +3456,33 @@ function dessineDeckPicker(ctx, state) {
     const cx = startX;
     const cy = startY + i * (cardH + cardGap);
     const isCurrent = u.id === currentSlot;
-    carte(ctx, cx, cy, cardW, cardH, 10, isCurrent ? C_AMBRE_CLAIR : '#FFFFFF',
-      { shadow: true });
+    carte(ctx, cx, cy, cardW, cardH, 10, isCurrent ? DECK_UI.greenD : DECK_UI.card,
+      { shadow: true, stroke: DECK_UI.border });
     if (isCurrent) {
-      ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE;
+      ctx.lineWidth = 3; ctx.strokeStyle = DECK_UI.green;
       roundRect(ctx, cx, cy, cardW, cardH, 10); ctx.stroke();
     }
-    // Nom upgrade (bold).
-    ctx.fillStyle = C_ENCRE; ctx.font = `bold 16px ${F_TEXTE}`;
+    // Typographie renforcée : la carte utilise mieux son espace ; le contour
+    // vert reste le seul repère de la sélection courante.
+    ctx.fillStyle = DECK_UI.ink; ctx.font = `bold 18px ${F_DISPLAY}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText(u.nom, cx + 16, cy + 10);
-    // Coût ★ en haut à droite.
-    ctx.fillStyle = C_AMBRE_FONCE; ctx.font = `600 14px ${F_DISPLAY}`;
+    ctx.fillText(u.nom, cx + 16, cy + 9);
+    // Coût lisible en haut à droite.
+    ctx.fillStyle = DECK_UI.amber; ctx.font = `700 16px ${F_DISPLAY}`;
     ctx.textAlign = 'right'; ctx.textBaseline = 'top';
-    ctx.fillText(`★ ${u.cout}`, cx + cardW - 16, cy + 12);
-    // Badge cd/once sous le coût.
+    ctx.fillText(`★ ${u.cout}`, cx + cardW - 16, cy + 10);
+    // Badge cd/once sous le coût, légèrement agrandi lui aussi.
     if (u.cooldown || u.once) {
-      ctx.fillStyle = C_ENCRE_PALE; ctx.font = `600 10px ${F_TEXTE}`;
+      ctx.fillStyle = DECK_UI.muted; ctx.font = `600 11px ${F_TEXTE}`;
       ctx.fillText(u.once ? 'usage unique' : `cd ${u.cooldown}`, cx + cardW - 16, cy + 32);
     }
-    // ✓ si carte courante.
-    if (isCurrent) {
-      ctx.fillStyle = C_AMBRE_FONCE; ctx.font = `bold 18px ${F_DISPLAY}`;
-      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillText('✓ ACTUEL', cx + 16, cy + 32);
-    }
-    // Description multi-lignes — utilise wrapText existant (helper module-scope ligne 1405).
-    // N.B. une longue desc peut déborder verticalement (cardH=100 dispose ~4 lignes max à
-    // lineH=14) ; pas critique : si on veut borner à 3 lignes strictes avec « … », ajouter
-    // un wrapDeckText dédié. Pour MVP, acceptons le débordement contrôlé.
-    ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `12px ${F_TEXTE}`;
+    // Description plus présente, avec un interligne adapté aux caractères agrandis.
+    ctx.fillStyle = DECK_UI.muted; ctx.font = `13px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    wrapText(ctx, u.desc, cx + 16, cy + cardH - 38, cardW - 32, 14);
+    wrapTextLimite(ctx, u.desc, cx + 16, cy + 47, cardW - 32, 16, 2);
     // Hit-test cliquable.
     state.ui.buttons.push({ x: cx, y: cy, w: cardW, h: cardH,
-      action: { kind: 'pickUpgrade', id: u.id }, enabled: true });
+      action: { kind: 'pickUpgrade', id: u.id }, enabled: true, radius: 8 });
   }
 
   // Bouton « Vider le slot » + « Retour » sous la dernière carte (dynamic y).
@@ -2484,45 +3491,55 @@ function dessineDeckPicker(ctx, state) {
     : startY + 40;
   bouton(state, ctx, startX, footerY, 240, 38, '🗑️  Vider le slot',
     { kind: 'pickUpgrade', id: null },
-    { enabled: currentSlot !== null, color: C_CARTE });
+    { enabled: currentSlot !== null, color: DECK_UI.field, textColor: DECK_UI.ink,
+      outlineColor: DECK_UI.border, disabledColor: DECK_UI.panel,
+      disabledTextColor: DECK_UI.muted, disabledOutlineColor: DECK_UI.border });
   bouton(state, ctx, startX + cardW - 200, footerY, 200, 38, '← Retour',
-    { kind: 'cancelPick' });
+    { kind: 'cancelPick' },
+    { color: DECK_UI.green, textColor: DECK_UI.ink, outlineColor: DECK_UI.greenD });
 }
 
 export function render(ctx, state, now) {
   computeGeometry(state);
+  ensureButtonUI(state);
+  majUIFrame(state, now);
   state.ui.buttons = []; // réinitialisé chaque frame pour le hit-test
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
   // SPEC §1.4 : menu d'accueil — occupe tout le canvas, on ne dessine rien d'autre.
   if (state.phase === 'menu') {
-    dessineMenu(ctx, state);
+    dessineMenuDashboard(ctx, state);
+    finaliserBoutons(ctx, state);
     return;
   }
 
   // Matchmaking PvP en ligne (cycle W1) — plein écran.
   if (state.phase === 'matchmaking') {
     dessineMatchmaking(ctx, state);
+    finaliserBoutons(ctx, state);
     return;
   }
 
   // Écran REPLAYS dédié — plein écran (demande utilisateur 12/07).
   if (state.phase === 'replays') {
     dessineReplays(ctx, state);
+    finaliserBoutons(ctx, state);
     return;
   }
   // Deck editor (recovery 29/07 [23:30]) : phase 'decks' = écran principal,
   // phase 'deck-picker' = overlay pour choisir une upgrade pour un slot cliqué.
-  if (state.phase === 'decks') { dessineDecks(ctx, state); return; }
+  if (state.phase === 'decks') { dessineDecks(ctx, state); finaliserBoutons(ctx, state); return; }
   if (state.phase === 'deck-picker') {
-    dessineDecks(ctx, state); // fond + grille derrière l'overlay
-    dessineDeckPicker(ctx, state); // overlay
+    // Le picker est désormais un écran autonome : pas de grille complète des decks
+    // en arrière-plan, donc aucune distraction ni amélioration hors contexte visible.
+    dessineDeckPicker(ctx, state);
+    finaliserBoutons(ctx, state);
     return;
   }
 
   // Fond parchemin doux (remplace l'ancien fond "app sombre" — cohérent avec
   // la palette pastel déjà définie pour le plateau).
-  ctx.fillStyle = C_BRUME; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  ctx.fillStyle = UI_THEME.background; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
   // Bandeau de tour (DA §11.3.c) — pilule flat plus affirmée : ombre plate,
   // fond de camp ~55 %, contour Encre, onglet 8 px, chevron directionnel.
@@ -2548,6 +3565,8 @@ export function render(ctx, state, now) {
   ctx.font = `14px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   const prefixe = state.mode === 'spectator' ? 'IA ' : '';
+  const echecActuel = !!(state.board && state.turn != null
+    && state.phase !== 'gameover' && roiEnEchec(state.board, state.turn));
   let banniere;
   switch (state.phase) {
     case 'ruee-target': banniere = 'Ruée : choisissez une cible'; break;
@@ -2562,6 +3581,10 @@ export function render(ctx, state, now) {
         banniere = 'TUTORIEL';
       } else if (state.phase === 'gameover') {
         banniere = 'Partie terminée';
+      } else if (echecActuel) {
+        banniere = state.mode === 'pvw' && state.pvw && state.turn !== state.pvw.side
+          ? 'ÉCHEC — le roi adverse est menacé'
+          : 'ÉCHEC — ton roi est menacé';
       } else if (state.ai && state.ai.thinking) {
         banniere = "L'IA RÉFLÉCHIT…";
       } else if (state.mode === 'pvw' && state.pvw) {
@@ -2579,7 +3602,7 @@ export function render(ctx, state, now) {
   if (state.mode === 'pvw' && state.pvw && state.pvw.desync) {
     ctx.fillStyle = C_TERRACOTTA;
     roundRect(ctx, OX, OY + __BOARD_H + 6, __BOARD_W, 22, 8); ctx.fill();
-    ctx.fillStyle = '#FFFFFF'; ctx.font = `12px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('⚠ DÉSYNCHRONISATION DÉTECTÉE (voir console)', OX + __BOARD_W / 2, OY + __BOARD_H + 17);
   }
@@ -2599,6 +3622,7 @@ export function render(ctx, state, now) {
   if (state.phase === 'gameover' && state.mode !== 'tutorial') dessineGameOver(ctx, state, now);
   if (state.phase === 'replay') dessineReplayHUD(ctx, state);
   if (state.phase === 'tutorial-done') dessineTutorielFin(ctx, state);
+  finaliserBoutons(ctx, state);
 }
 
 // --- Guidage visuel du tutoriel ---
@@ -2635,7 +3659,7 @@ function dessineTutorielCibles(ctx, state, now) {
     ctx.beginPath();
     ctx.moveTo(x, pointe); ctx.lineTo(x - 8, cy); ctx.lineTo(x + 8, cy);
     ctx.closePath(); ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = C_ENCRE; ctx.stroke();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
     ctx.restore();
   }
 }
@@ -2646,7 +3670,7 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
   if (!step) return;
 
   // Titre — wordmark.
-  ctx.fillStyle = C_ENCRE; ctx.font = `22px ${F_DISPLAY}`;
+  ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   ctx.fillText('♞ ROYCHEC', x, OY + 8);
 
@@ -2654,21 +3678,20 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
 
   // Badge étape + flash « BIEN JOUÉ ! » à l'arrivée sur l'étape.
   const badgeW = 110, badgeH = 28;
-  ctx.fillStyle = '#8FB8E0';
+  ctx.fillStyle = UI_THEME.secondary;
   roundRect(ctx, x, y, badgeW, badgeH, 8); ctx.fill();
   ctx.lineWidth = 2; ctx.strokeStyle = C_ENCRE;
   roundRect(ctx, x, y, badgeW, badgeH, 8); ctx.stroke();
-  ctx.fillStyle = C_ENCRE; ctx.font = `13px ${F_DISPLAY}`;
+  ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(`ÉTAPE ${state.tutorialStep + 1}/${TOTAL_STEPS}`, x + badgeW / 2, y + badgeH / 2);
   if (state._tutoBravoT && now - state._tutoBravoT < 1200) {
     ctx.save();
-    ctx.globalAlpha = Math.min(1, (1200 - (now - state._tutoBravoT)) / 400);
-    ctx.fillStyle = C_SAUGE;
-    roundRect(ctx, x + badgeW + 10, y, 130, badgeH, 8); ctx.fill();
+    ctx.globalAlpha = Math.min(1, (1200 - (now - state._tutoBravoT)) / 400);ctx.fillStyle = UI_THEME.primary;
+     roundRect(ctx, x + badgeW + 10, y, 130, badgeH, 8); ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = C_ENCRE;
     roundRect(ctx, x + badgeW + 10, y, 130, badgeH, 8); ctx.stroke();
-    ctx.fillStyle = C_ENCRE; ctx.font = `12px ${F_DISPLAY}`;
+    ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
     ctx.fillText('✔ BIEN JOUÉ !', x + badgeW + 75, y + badgeH / 2);
     ctx.restore();
   }
@@ -2677,36 +3700,35 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
   // Barre de progression.
   const barW = w - 4, barH = 6;
   const pct = (state.tutorialStep + 1) / TOTAL_STEPS;
-  ctx.fillStyle = 'rgba(26,20,15,0.10)';
+  ctx.fillStyle = UI_THEME.border;
   roundRect(ctx, x, y, barW, barH, 3); ctx.fill();
-  ctx.fillStyle = '#8FB8E0';
+  ctx.fillStyle = UI_THEME.secondary;
   roundRect(ctx, x, y, barW * pct, barH, 3); ctx.fill();
   y += barH + 18;
 
   // Titre de l'étape.
-  ctx.fillStyle = C_ENCRE; ctx.font = `16px ${F_DISPLAY}`;
+  ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(step.title.toUpperCase(), x, y);
   y += 28;
 
   // Instruction principale.
-  ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `600 15px ${F_TEXTE}`;
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `600 15px ${F_TEXTE}`;
   const lines = wrapTextLines(ctx, step.text, x, y, w - 8, 22);
   y += lines * 22 + 10;
 
   // Détail.
   if (step.detail) {
-    ctx.fillStyle = C_ENCRE_PALE; ctx.font = `12px ${F_TEXTE}`;
+    ctx.fillStyle = UI_THEME.disabledText; ctx.font = `12px ${F_TEXTE}`;
     const dLines = wrapTextLines(ctx, step.detail, x, y, w - 8, 18);
     y += dLines * 18 + 16;
   }
 
   // Solde d'écus du joueur (le HUD normal est masqué pendant les instructions).
-  carte(ctx, x, y, 150, 34, 8, '#FFFFFF');
-  ctx.beginPath(); ctx.arc(x + 18, y + 17, 8, 0, Math.PI * 2);
-  ctx.fillStyle = C_AMBRE; ctx.fill();
-  ctx.lineWidth = 1.5; ctx.strokeStyle = C_ENCRE; ctx.stroke();
-  ctx.fillStyle = C_ENCRE; ctx.font = `13px ${F_DISPLAY}`;
+  carte(ctx, x, y, 150, 34, 8, UI_THEME.card);
+  ctx.beginPath(); ctx.arc(x + 18, y + 17, 8, 0, Math.PI * 2);ctx.fillStyle = UI_THEME.amber; ctx.fill();
+   ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
+   ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillText(`${state.ecus[0]} ÉCUS`, x + 34, y + 18);
   y += 46;
@@ -2715,19 +3737,19 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
   if (step.continuer) {
     bouton(state, ctx, x + w - 140, y, 130, 36, 'Continuer',
       { kind: 'tutorialContinue' },
-      { color: C_SAUGE, textColor: C_ENCRE });
+      { color: UI_THEME.primary, textColor: UI_THEME.text });
     y += 46;
   }
 
   // Filet de sécurité : rejouer l'étape depuis zéro en cas d'impasse.
   bouton(state, ctx, x + w - 160, CANVAS_H - 88, 150, 32, '↻ Recommencer',
     { kind: 'tutorialRestart' },
-    { color: C_CARTE, textColor: C_ENCRE });
+    { color: UI_THEME.card, textColor: UI_THEME.text });
 
   // Bouton Quitter le tutoriel (toujours visible).
   bouton(state, ctx, x + w - 160, CANVAS_H - 48, 150, 32, '◀  Menu',
     { kind: 'retourMenu' },
-    { color: C_CARTE, textColor: C_ENCRE });
+    { color: UI_THEME.card, textColor: UI_THEME.text });
 }
 
 // Écran de fin du tutoriel.
@@ -2735,13 +3757,13 @@ function dessineTutorielFin(ctx, state) {
   const cx = OX + __BOARD_W / 2, cy = OY + __BOARD_H / 2;
 
   // Voile de fond.
-  ctx.fillStyle = 'rgba(36,28,22,0.72)';
+  ctx.fillStyle = UI_THEME.overlay;
   ctx.fillRect(OX, OY, __BOARD_W, __BOARD_H);
 
   // Panneau centré.
   const pw = 380, ph = 220;
   const px = cx - pw / 2, py = cy - ph / 2;
-  carte(ctx, px, py, pw, ph, 14, C_CARTE, { shadow: true, stroke: null });
+  carte(ctx, px, py, pw, ph, 14, UI_THEME.panel, { shadow: true, stroke: null });
   ctx.lineWidth = 3; ctx.strokeStyle = C_SAUGE;
   roundRect(ctx, px, py, pw, ph, 14); ctx.stroke();
 
@@ -2750,11 +3772,11 @@ function dessineTutorielFin(ctx, state) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.strokeStyle = C_ENCRE;
   ctx.strokeText('FÉLICITATIONS !', cx, py + 48);
-  ctx.fillStyle = C_SAUGE_FONCE;
+  ctx.fillStyle = UI_THEME.primaryDark;
   ctx.fillText('FÉLICITATIONS !', cx, py + 48);
 
   // Message.
-  ctx.fillStyle = C_ENCRE_DOUX; ctx.font = `15px ${F_TEXTE}`;
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `15px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('Tu maîtrises les bases de Roychec.', cx, py + 90);
   ctx.fillText('Lance une vraie partie !', cx, py + 112);
@@ -2762,7 +3784,7 @@ function dessineTutorielFin(ctx, state) {
   // Bouton Menu.
   bouton(state, ctx, cx - 100, py + ph - 62, 200, 48, 'Menu',
     { kind: 'restart' },
-    { color: C_SAUGE, textColor: C_ENCRE });
+    { color: UI_THEME.primary, textColor: UI_THEME.text });
 }
 
 // --- HUD du mode replay (contrôles de lecture) ---
@@ -2772,14 +3794,17 @@ function dessineReplayHUD(ctx, state) {
   const barY = OY + __BOARD_H + 4;
   const barH = 52;
 
-  // Fond semi-transparent.
-  ctx.fillStyle = 'rgba(26,26,26,0.82)';
+  // Barre de lecture graphite : elle reprend les surfaces du menu hybride
+  // sans modifier le rendu du plateau situé au-dessus.
+  ctx.fillStyle = REPLAY_UI.panel;
   roundRect(ctx, OX, barY, __BOARD_W, barH, 8); ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = REPLAY_UI.border;
+  roundRect(ctx, OX, barY, __BOARD_W, barH, 8); ctx.stroke();
 
   // Progression : "Action X / Y"
   const idx = Math.max(0, state.replayIndex);
   const total = data.events.length;
-  ctx.fillStyle = '#FFFFFF'; ctx.font = `12px ${F_DISPLAY}`;
+  ctx.fillStyle = REPLAY_UI.ink; ctx.font = `12px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   const label = state.replayPlaying
     ? `▶ REPLAY — Action ${idx + 1} / ${total}`
@@ -2793,10 +3818,10 @@ function dessineReplayHUD(ctx, state) {
   // Barre de progression.
   const progW = __BOARD_W - 24, progH = 4;
   const progX = OX + 12, progY = barY + barH / 2 + 4;
-  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.fillStyle = REPLAY_UI.field;
   roundRect(ctx, progX, progY, progW, progH, 2); ctx.fill();
   if (total > 0) {
-    ctx.fillStyle = C_AMBRE;
+    ctx.fillStyle = REPLAY_UI.amber;
     roundRect(ctx, progX, progY, progW * Math.min(1, (idx + 1) / total), progH, 2); ctx.fill();
   }
 
@@ -2812,10 +3837,12 @@ function dessineReplayHUD(ctx, state) {
     const sel = state.replaySpeed === s.speed;
     const bw = s.w, bh = 24;
     state.ui.buttons.push({ x: sx, y: barY + barH / 2 - bh / 2 - 1, w: bw, h: bh,
-      action: { kind: 'replaySpeed', speed: s.speed }, enabled: true });
-    ctx.fillStyle = sel ? C_AMBRE : 'rgba(255,255,255,0.12)';
+      action: { kind: 'replaySpeed', speed: s.speed }, enabled: true, radius: 6 });
+    ctx.fillStyle = sel ? REPLAY_UI.green : REPLAY_UI.field;
     roundRect(ctx, sx, barY + barH / 2 - bh / 2 - 1, bw, bh, 6); ctx.fill();
-    ctx.fillStyle = sel ? '#2B1D06' : 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1; ctx.strokeStyle = sel ? REPLAY_UI.greenD : REPLAY_UI.border;
+    roundRect(ctx, sx, barY + barH / 2 - bh / 2 - 1, bw, bh, 6); ctx.stroke();
+    ctx.fillStyle = sel ? REPLAY_UI.darkInk : REPLAY_UI.muted;
     ctx.font = `10px ${F_DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(s.label, sx + bw / 2, barY + barH / 2 - 1);
     sx += bw + 6;
@@ -2824,20 +3851,24 @@ function dessineReplayHUD(ctx, state) {
   // Play/Pause.
   const ppW = 36, ppH = 24, ppX = __BOARD_W -92;
   state.ui.buttons.push({ x: ppX, y: barY + barH / 2 - ppH / 2 - 1, w: ppW, h: ppH,
-    action: { kind: 'replayPlayPause' }, enabled: idx < total });
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    action: { kind: 'replayPlayPause' }, enabled: idx < total, radius: 6 });
+  ctx.fillStyle = REPLAY_UI.green;
   roundRect(ctx, ppX, barY + barH / 2 - ppH / 2 - 1, ppW, ppH, 6); ctx.fill();
-  ctx.fillStyle = '#FFFFFF'; ctx.font = `14px ${F_DISPLAY}`;
+  ctx.lineWidth = 1; ctx.strokeStyle = REPLAY_UI.greenD;
+  roundRect(ctx, ppX, barY + barH / 2 - ppH / 2 - 1, ppW, ppH, 6); ctx.stroke();
+  ctx.fillStyle = REPLAY_UI.darkInk; ctx.font = `14px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(state.replayPlaying ? '⏸' : '▶', ppX + ppW / 2, barY + barH / 2 - 1);
 
   // Quitter.
   const qW = 60, qH = 24, qX = __BOARD_W - 48;
   state.ui.buttons.push({ x: qX, y: barY + barH / 2 - qH / 2 - 1, w: qW, h: qH,
-    action: { kind: 'replayQuit' }, enabled: true });
-  ctx.fillStyle = C_TERRACOTTA;
+    action: { kind: 'replayQuit' }, enabled: true, radius: 6 });
+  ctx.fillStyle = REPLAY_UI.rose;
   roundRect(ctx, qX, barY + barH / 2 - qH / 2 - 1, qW, qH, 6); ctx.fill();
-  ctx.fillStyle = '#FFFFFF'; ctx.font = `10px ${F_DISPLAY}`;
+  ctx.lineWidth = 1; ctx.strokeStyle = REPLAY_UI.roseD;
+  roundRect(ctx, qX, barY + barH / 2 - qH / 2 - 1, qW, qH, 6); ctx.stroke();
+  ctx.fillStyle = REPLAY_UI.roseInk; ctx.font = `10px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('QUITTER', qX + qW / 2, barY + barH / 2 - 1);
 }

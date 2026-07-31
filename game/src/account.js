@@ -523,7 +523,7 @@ function ouvrirPseudo() {
 function message(text, isError) {
   if (!el.msg) return;
   el.msg.textContent = text || '';
-  el.msg.style.color = isError ? '#B5573F' : '#5E8A52';
+  el.msg.style.color = isError ? 'var(--ui-danger)' : 'var(--ui-primary)';
 }
 
 // Met à jour le texte de l'écran "sent" selon qu'on vient du magic link ou de l'inscription password.

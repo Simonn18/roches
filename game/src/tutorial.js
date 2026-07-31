@@ -4,13 +4,13 @@
 // ce qui n'est pas explicitement autorisé par l'étape courante est bloqué :
 // main.js et render.js consultent tutorielPermet() avant d'agir, si bien
 // qu'aucun clic ne peut sortir l'étape de son scénario ni casser le jeu.
-import { creerPiece } from './board.js';
-import { UPGRADES, CELL, OX, OY } from './constants.js';
+import { creerPiece } from './board.js?v=107';
+import { UPGRADES, CELL, OX, OY } from './constants.js?v=107';
 // Variantes locales (GDD §7.2 v3, delivré 12/07) : basePlateau doit poser
 // state.variant pour que crediterCoup() (rewiré dans le lot variantes) lise
 // v.revenueBase / v.plafond / v.captureMul sans crasher. capturesDep pour
 // la même raison — jouée par jouerCoup() à chaque capture, cf. fix W3.
-import { reglesEconomie, DEFAULT_VARIANT } from './variants.js';
+import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=107';
 
 function plateauVide() {
   return Array.from({ length: 8 }, () => Array(8).fill(null));

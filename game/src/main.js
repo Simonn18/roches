@@ -1,37 +1,102 @@
 // roychec — point d'entrée : boucle de jeu, entrées souris/clavier, logique de tour.
 // MVP (GDD §9) : hot-seat 2 joueurs, économie d'écus, 1 amélioration par type de pièce.
 // Cycle 1 IA (design/spec-ia.md) : menu d'accueil, mode PvAI optionnel, hook bot dummy.
-import { creerEtat, creerPlateau, inB, caseAt } from './board.js';
-import { coupsLegaux, ciblesRuee, ciblesRayon, DIRS8 } from './rules.js';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js';
-import { iaDecideTour } from './ai.js';
-import { initReplay, recordMove, recordPurchase, recordPower, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js';
-import { updateBook } from './opening.js';
+import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=107';
+import { coupsLegaux, ciblesRuee, ciblesRayon, DIRS8 } from './rules.js?v=111';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=115';
+import { iaDecideTour } from './ai.js?v=107';
+import { initReplay, recordMove, recordPurchase, recordPower, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=107';
+import { updateBook } from './opening.js?v=107';
 import { demarrerTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
-  rejouerEtape, tutorielPermet } from './tutorial.js';
-import { initAccount, startAuth, logout, getAccount, getSupabaseClient } from './account.js';
+  rejouerEtape, tutorielPermet } from './tutorial.js?v=107';
+import { initAccount, startAuth, logout, getAccount, getSupabaseClient } from './account.js?v=107';
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue,
   report as onlineReport, requestResync, sendResync, setSeq as onlineSetSeq, clearInbox as onlineClearInbox,
-  sendRematch, rematch as onlineRematch, inboxHasGap } from './online.js';
+  sendRematch, rematch as onlineRematch, inboxHasGap } from './online.js?v=107';
 // Deck editor (recovery 29/07 [23:30]) : API complète de decks.js (couche DONNÉES).
 // loadDecks/saveDecks étaient déjà importés ; on ajoute les helpers d'id/active/clone.
-import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js';
+import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import {
   UPGRADES, UPGRADES_PAR_TYPE, VALEUR_PIECE, REVENU_PAR_COUP,
-  MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT,
-} from './constants.js';
-import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js';
+  MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT, UI_THEME, UI_THEMES,
+} from './constants.js?v=107';
+import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js?v=107';
 // Phase A.5 v2 Phase 3 : import des TAILLES_DE_PLATEAU depuis la maison canonique
 // (zero-dep, cf. tailles.js + commit ba30d273). `TAILLES` n'est pas directement utilisé
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
-import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js';
+import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=107';
 
 const canvas = document.getElementById('jeu');
 canvas.width = CANVAS_W;
 canvas.height = CANVAS_H;
 const ctx = canvas.getContext('2d');
+
+// Pont unique Canvas → DOM : les overlays HTML consomment les mêmes tokens que
+// les écrans Canvas. Modifier UI_THEME dans constants.js suffit donc à recolorer
+// l'application sans dupliquer la palette dans index.html.
+const THEME_STORAGE_KEY = 'roychec-theme';
+
+function lireThemeSauvegarde() {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    return saved === 'light' || saved === 'dark' ? saved : 'dark';
+  } catch (_) {
+    return 'dark';
+  }
+}
+
+let themeMode = lireThemeSauvegarde();
+
+function appliquerThemeDOM() {
+  const root = document.documentElement;
+  const vars = {
+    '--ui-background': UI_THEME.background,
+    '--ui-panel': UI_THEME.panel,
+    '--ui-panel-alt': UI_THEME.panelAlt,
+    '--ui-card': UI_THEME.card,
+    '--ui-field': UI_THEME.field,
+    '--ui-text': UI_THEME.text,
+    '--ui-muted': UI_THEME.muted,
+    '--ui-border': UI_THEME.border,
+    '--ui-shadow': UI_THEME.shadow,
+    '--ui-primary': UI_THEME.primary,
+    '--ui-primary-dark': UI_THEME.primaryDark,
+    '--ui-secondary': UI_THEME.secondary,
+    '--ui-secondary-light': UI_THEME.secondaryLight,
+    '--ui-danger': UI_THEME.danger,
+    '--ui-danger-dark': UI_THEME.dangerDark,
+    '--ui-danger-text': UI_THEME.dangerText,
+    '--ui-wine': UI_THEME.wine,
+    '--ui-wine-dark': UI_THEME.wineDark,
+    '--ui-amber': UI_THEME.amber,
+    '--ui-amber-light': UI_THEME.amberLight,
+    '--ui-amber-dark': UI_THEME.amberDark,
+    '--ui-button-text': UI_THEME.buttonText,
+    '--ui-disabled': UI_THEME.disabled,
+    '--ui-disabled-text': UI_THEME.disabledText,
+    '--ui-disabled-border': UI_THEME.disabledBorder,
+    '--ui-overlay': UI_THEME.overlay,
+    '--ui-subtext': UI_THEME.subtext,
+  };
+  for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+}
+
+function appliquerTheme(mode, { persist = true } = {}) {
+  themeMode = mode === 'light' ? 'light' : 'dark';
+  Object.assign(UI_THEME, UI_THEMES[themeMode]);
+  appliquerThemeDOM();
+  if (persist) {
+    try { localStorage.setItem(THEME_STORAGE_KEY, themeMode); } catch (_) { /* non bloquant */ }
+  }
+}
+
+function basculerTheme() {
+  appliquerTheme(themeMode === 'dark' ? 'light' : 'dark');
+}
+
+appliquerTheme(themeMode, { persist: false });
 
 // PvP en ligne (spec-pvp-online §6) : cadence au choix (1 min / 5 min / 1 h / 1 jour,
 // catalogue PVW_CADENCES de constants.js), SANS incrément (décision utilisateur 12/07,
@@ -87,19 +152,23 @@ function menuState() {
     replay: null,
     _replayTimer: null,
     _replayList: [],
+    _dashboardReplay: null,
+    _dashboardReplayKey: null,
     _hasReplays: false,
     menu: { difficulty: null,
+             themeMode,
              // Variantes locales (GDD §7.2 v3) : TROIS axes orthogonaux combinés
              // librement (3 économie × 2 combat × 2 taille = 12). Phase A.5 v2
              // Phase 3 ajoute l'axe TAILLE (std 8×8 / l15 8×15) avec silent
              // fallback std côté engine pour modes hors scope hot-seat (§7.2).
              // Le toggle « showVariant » déplie l'accordéon au menu d'accueil.
              showVariant: false,
+             activeMode: 'pvp',
              economie: 'standard',
              combat: 'standard',
              taille: DEFAULT_TAILLE,   // 'std' par défaut (legacy MVP v2 byte-équivalent)
            },
-    ui: { buttons: [] },
+    ui: { buttons: [], hamburgerOpen: false },
   };
 }
 
@@ -283,7 +352,7 @@ function executerEvenementReplay(e) {
     // Popup écus — gain total crédité (inclut revenueBase × REVENU_PAR_COUP + bonus × captureMul).
     const credite = e.gain != null ? e.gain : (REVENU_PAR_COUP + (e.bonus || 0));
     const { x, y } = centreVue(to.r, to.c);
-    state.popups.push({ text: `+${credite}`, x, y: y - 20, t0: performance.now(), color: '#f6cc54' });
+    state.popups.push({ text: `+${credite}`, x, y: y - 20, t0: performance.now(), color: UI_THEME.amberLight });
   } else if (e.type === 'purchase') {
     const pos = fromAlgebraic(e.pos, state.board);
     if (!pos) return;
@@ -425,7 +494,7 @@ function gagnerEcus(joueur, baseRevenue, captureBonus, atCell) {
   const gagne = state.ecus[joueur] - avant;
   if (gagne > 0 && atCell) {
     const { x, y } = centreVue(atCell.r, atCell.c);
-    state.popups.push({ text: `+${gagne}`, x, y: y - 20, t0: performance.now(), color: '#f6cc54' });
+    state.popups.push({ text: `+${gagne}`, x, y: y - 20, t0: performance.now(), color: UI_THEME.amberLight });
   }
   return gagne;
 }
@@ -450,7 +519,7 @@ function addFlash(r, c, color) {
 // Tutoriel : feedback visuel quand l'étape verrouille l'action cliquée.
 function refusTutoriel(cell) {
   const { x, y } = centreVue(cell.r, cell.c);
-  state.popups.push({ text: '🔒', x, y: y - 10, t0: performance.now(), color: '#786F60' });
+  state.popups.push({ text: '🔒', x, y: y - 10, t0: performance.now(), color: UI_THEME.muted });
 }
 
 // ---------- Fin de tour ----------
@@ -1920,6 +1989,18 @@ function actionBouton(action) {
     // ne fait qu'ouvrir/fermer. Une panne réseau n'atteint jamais le reste du jeu.
     case 'login': startAuth(); break;
     case 'logout': logout(); break;
+    // Menu hamburger (31/07) : bascule l'ouverture du drawer latéral
+    // (Compte/Apparence/Langues). hamburgerT0 anime le glissement d'ouverture.
+    case 'toggleHamburger':
+      if (state.ui) {
+        state.ui.hamburgerOpen = !state.ui.hamburgerOpen;
+        if (state.ui.hamburgerOpen) state.ui.hamburgerT0 = performance.now();
+      }
+      break;
+    case 'toggleTheme':
+      basculerTheme();
+      if (state.menu) state.menu.themeMode = themeMode;
+      break;
     // Retour au menu (spectateur).
     case 'retourMenu': retourMenu(); break;
     // Abandonner la partie (PvP, PvAI). L'abandonneur perd.
@@ -1937,6 +2018,12 @@ function actionBouton(action) {
       }
       if (state.mode === 'pvai' && state.ai) finPartie(state.ai.player);
       else finPartie(1 - state.turn);
+      break;
+    // Onglets du dashboard menu : changement de panneau sans lancer de partie.
+    case 'selectMode':
+      if (state.phase === 'menu' && state.menu && ['pvp', 'pvw', 'pvai'].includes(action.mode)) {
+        state.menu.activeMode = action.mode;
+      }
       break;
     // Cycle 1 — menu d'accueil.
     case 'pickMode': {
@@ -2093,14 +2180,28 @@ function actionBouton(action) {
       break;
   }
 }
-
 function boutonSous(x, y) {
   if (!state.ui || !state.ui.buttons) return null; // Sécurité
-  for (let i = state.ui.buttons.length - 1; i >= 0; i--) {  
+  for (let i = state.ui.buttons.length - 1; i >= 0; i--) {
     const b = state.ui.buttons[i];
     if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
   }
   return null;
+}
+
+function mettreAJourPointeur(e, { clearPress = false } = {}) {
+  if (!state.ui) return null;
+  const { x, y } = souris(e);
+  const ui = state.ui;
+  ui.pointer = { x, y, inside: !clearPress };
+  const b = clearPress ? null : boutonSous(x, y);
+  canvas.style.cursor = b && b.enabled ? 'pointer' : 'default';
+  if (clearPress) ui.pressedId = null;
+  return b;
+}
+
+function libererBoutonPresse() {
+  if (state.ui) state.ui.pressedId = null;
 }
 
 function souris(e) {
@@ -2111,13 +2212,53 @@ function souris(e) {
   };
 }
 
+canvas.addEventListener('mousemove', (e) => {
+  mettreAJourPointeur(e);
+});
+
+canvas.addEventListener('mouseleave', () => {
+  if (!state.ui) return;
+  state.ui.pointer = { x: -1, y: -1, inside: false };
+  state.ui.pressedId = null;
+  canvas.style.cursor = 'default';
+});
+
+window.addEventListener('mouseup', libererBoutonPresse);
+
 canvas.addEventListener('mousedown', (e) => {
   if (e.button === 2) return; // géré par contextmenu
   const { x, y } = souris(e);
+  if (state.ui) state.ui.pointer = { x, y, inside: true };
 
   // 1) Boutons d'UI (prioritaires, valides même en animation pour restart).
   const b = boutonSous(x, y);
-  if (b) { if (b.enabled) actionBouton(b.action); return; }
+  if (b) {
+    // Drawer hamburger — voile (scrim) : un clic sur un bouton HORS du panneau
+    // (élément couvert par le voile) referme le drawer SANS déclencher l'élément.
+    if (state.ui && state.ui.hamburgerOpen && b.action && b.action.kind !== 'toggleHamburger') {
+      const pnl = state.ui.hamburgerPanel;
+      const dansPanneau = pnl && x >= pnl.x && x <= pnl.x + pnl.w && y >= pnl.y && y <= pnl.y + pnl.h;
+      if (!dansPanneau) { state.ui.hamburgerOpen = false; return; }
+    }
+    if (b.enabled) {
+      if (state.ui) state.ui.pressedId = b.id;
+      actionBouton(b.action);
+    }
+    // Drawer : un bouton ACTIVÉ dans le panneau (Connexion, Déconnexion, thème)
+    // referme après l'action. La ligne désactivée « Français » garde le panneau
+    // ouvert — l'action y est de toute façon ignorée (enabled=false).
+    if (state.ui && state.ui.hamburgerOpen && b.enabled && b.action && b.action.kind !== 'toggleHamburger') {
+      state.ui.hamburgerOpen = false;
+    }
+    return;
+  }
+  // Clic en dehors de tout bouton : referme le drawer hamburger, SAUF si le clic
+  // reste dans le panneau ouvert (zone inerte : en-têtes, espaces entre boutons).
+  if (state.ui && state.ui.hamburgerOpen) {
+    const pnl = state.ui.hamburgerPanel;
+    const dansPanneau = pnl && x >= pnl.x && x <= pnl.x + pnl.w && y >= pnl.y && y <= pnl.y + pnl.h;
+    if (!dansPanneau) state.ui.hamburgerOpen = false;
+  }
 
   if (state.phase === 'animating' || state.phase === 'gameover' || state.phase === 'replay') return;
   // Promotion en attente de choix : un clic hors du panneau (les boutons sont déjà
@@ -2222,6 +2363,8 @@ canvas.addEventListener('contextmenu', (e) => {
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    // Menu hamburger : Échap referme le panneau avant toute autre action.
+    if (state.ui && state.ui.hamburgerOpen) { state.ui.hamburgerOpen = false; return; }
     if (state.phase === 'replays') { retourMenu(); return; }
     if (PHASES_CIBLAGE.includes(state.phase)) {
       state.phase = 'play'; state.ruTargets = [];
@@ -2265,8 +2408,23 @@ function loop(now) {
   // Injecte l'état compte (réf. vivante) pour le rendu du bandeau menu, sans coupler
   // le rendu à account.js. Toujours défini avant render, y compris après un retourMenu().
   state.account = getAccount();
+  // Les états de partie/replay sont recréés indépendamment du menu : recopier
+  // la préférence globale garantit que le bandeau garde le bon libellé partout.
+  state.themeMode = themeMode;
   state._hasReplays = hasReplays(); // pour la liste REPLAYS du menu (render.js)
-  if (state.phase === 'menu' || state.phase === 'replays') state._replayList = getReplayList();
+  if (state.phase === 'menu' || state.phase === 'replays') {
+    state._replayList = getReplayList();
+    // La feuille de partie du dashboard lit le replay complet le plus récent,
+    // tandis que l'historique conserve les synthèses pour rester léger.
+    const latest = state._replayList[0];
+    const nextReplayKey = latest && typeof latest.key === 'string' ? latest.key : null;
+    // Ne relit le replay complet que lorsque la partie la plus récente change.
+    // La boucle du menu tourne à chaque frame ; éviter 60 lectures localStorage/s.
+    if (nextReplayKey !== state._dashboardReplayKey) {
+      state._dashboardReplayKey = nextReplayKey;
+      state._dashboardReplay = nextReplayKey ? loadReplayByKey(nextReplayKey) : null;
+    }
+  }
 
   // Matchmaking : sync l'état online → state.matchmaking pour le rendu.
   // Le lobby est purement local : on ne recopie AUCUN champ réseau (sinon une erreur
@@ -2286,6 +2444,9 @@ function loop(now) {
   // PvP en ligne (W2) : synchro des coups entrants + horloge + chute de drapeau.
   if (state.mode === 'pvw') pvwTick();
 
+  // Le dashboard reste pleine largeur ; les écrans qui affichent réellement
+  // un plateau utilisent une largeur plus compacte sur desktop.
+  canvas.classList.toggle('game-screen', !!state.board);
   render(ctx, state, now);
   requestAnimationFrame(loop);
 }

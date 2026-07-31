@@ -205,38 +205,113 @@ export const PANEL_X = OX + BOARD + 30; // début du panneau latéral
 export const CANVAS_W = 1000;
 export const CANVAS_H = 900;
 
-// --- Palette pastel (DA §2) ---
-export const C_BRUME = '#EDEFF7';   // fond général de l'écran
-export const C_CARTE = '#FCF8F3';   // fond des panneaux/boutons
-export const C_ENCRE = '#1A1A1A';   // contours et texte par défaut
-export const C_SAUGE = '#ADCBA6';   // accent de statut (badge « à vous »)
-export const C_IVOIRE_BOIS = '#ffffff';
+// --- Thème UI centralisé (source unique de vérité) ---
+// Pour changer l'habillage global, modifier uniquement ces valeurs. Les écrans
+// Menu, Decks, Replays, matchmaking et les boutons communs les consomment via
+// les alias sémantiques ci-dessous ; les couleurs du plateau restent séparées.
+// Deux habillages UI. Le plateau et ses signaux de gameplay restent hors de ces
+// palettes : ils conservent leurs propres constantes plus bas.
+export const UI_THEMES = {
+  dark: {
+    // Palette graphite, ardoise et accents désaturés.
+    background: '#202326',
+    panel: '#2A2D31',
+    panelAlt: '#34383D',
+    card: '#30343A',
+    field: '#25292D',
+    text: '#ECEBE7',
+    muted: '#AEB3B8',
+    border: 'rgba(236, 235, 231, 0.18)',
+    shadow: '#151719',
+    primary: '#6F8F7A',
+    primaryDark: '#526B5C',
+    secondary: '#8A9CAF',
+    secondaryLight: '#B7C2CD',
+    danger: '#B86F6B',
+    dangerDark: '#7E4B4A',
+    dangerText: '#F4EDEA',
+    wine: '#4A5058',
+    wineDark: '#363B42',
+    amber: '#B69B63',
+    amberLight: '#D0BC8C',
+    amberDark: '#7D6A43',
+    buttonText: '#1E211F',
+    disabled: '#34383D',
+    disabledText: '#8A9097',
+    disabledBorder: 'rgba(236, 235, 231, 0.10)',
+    overlay: 'rgba(12, 14, 16, 0.84)',
+    subtext: '#C5C9CC',
+  },
+  light: {
+    // Version claire : ivoire, gris minéral et accents sauge/laiton.
+    background: '#F2F1EE',
+    panel: '#FFFFFF',
+    panelAlt: '#E8E9E7',
+    card: '#F7F7F4',
+    field: '#E6E8E6',
+    text: '#25282A',
+    muted: '#667078',
+    border: 'rgba(37, 40, 42, 0.18)',
+    shadow: '#C8CBC8',
+    primary: '#5E806B',
+    primaryDark: '#45614F',
+    secondary: '#63778A',
+    secondaryLight: '#93A4B3',
+    danger: '#A45D59',
+    dangerDark: '#874743',
+    dangerText: '#FFFFFF',
+    wine: '#59616A',
+    wineDark: '#424950',
+    amber: '#A17E3F',
+    amberLight: '#C5A96F',
+    amberDark: '#715829',
+    buttonText: '#25282A',
+    disabled: '#E1E3E0',
+    disabledText: '#8A9097',
+    disabledBorder: 'rgba(37, 40, 42, 0.12)',
+    overlay: 'rgba(20, 24, 28, 0.52)',
+    subtext: '#54616B',
+  },
+};
+
+// Objet stable consommé par Canvas et par main.js : Object.assign permet de
+// changer de thème à chaud sans casser les références importées par render.js.
+export const UI_THEME = { ...UI_THEMES.dark };
+
+// --- Palette historique du plateau et du chrome de partie ---
+// Ces tokens restent séparés du thème UI global : ils servent aux cases, pièces
+// et feedbacks de gameplay, qui ont leurs propres contraintes de contraste.
+export const C_BRUME = '#202326';             // fond graphite entre les cases
+export const C_CARTE = '#ECEBE7';             // contraste clair du plateau
+export const C_ENCRE = '#202326';             // contours graphite profond
+export const C_SAUGE = '#6F8F7A';             // accent sauge (badge « à vous »)
+export const C_IVOIRE_BOIS = '#B69B63';       // cadre laiton du plateau
 
 // Couleurs échiquier / pièces (DA §9).
-export const C_CLAIR = '#FBF6F0';   // Ivoire — case claire
-export const C_FONCE = '#8a6b8c';   // Prune — case sombre
-export const C_SEL = 'rgba(232, 238, 231, 0.25)';  // Sauge translucide — case sélectionnée
-export const C_MOVE = 'rgba(26, 26, 26, 0.28)';    // Encre translucide — point coup légal
-export const C_CAP = 'rgba(217, 107, 90, 0.65)';   // Alerte — anneau capture
-export const C_RUEE = 'rgba(240, 177, 94, 0.9)';   // Info Actif — cible Ruée
+export const C_CLAIR = '#f0ede9';   // Ivoire chaud — case claire
+export const C_FONCE = '#6B3A52';   // Prune vin — case sombre
+export const C_SEL = 'rgba(227, 192, 127, 0.28)';  // Or translucide — sélection
+export const C_MOVE = 'rgba(26, 18, 32, 0.34)';     // Encre translucide — coup légal
+export const C_CAP = 'rgba(196, 106, 106, 0.72)';   // Alerte — anneau capture
+export const C_RUEE = 'rgba(227, 192, 127, 0.92)';  // Or — cible Ruée
 
 // Remplissage pastel du disque de pièce par camp (DA §9).
-export const REMPLI_PIECE = ['#f2efd9', '#623526'];
+export const REMPLI_PIECE = ['#F2E8D8', '#4A2032'];
 
 // Accents par joueur (DA §7/§9). Joueur 1 = owner 0 (Bleu Poudré), Joueur 2 = owner 1 (Corail).
-export const ACCENT = ['#f3a135', '#a7a4a3'];
+export const ACCENT = ['#E3C07F', '#747876'];
 export const NOM_JOUEUR = ['Joueur 1', 'Joueur 2'];
 
 // --- Tons additionnels pour l'habillage chrome (HUD, panneaux, boutons) ---
 // Prolonge la palette pastel du plateau au reste de l'écran (DA §2/§9).
-export const C_ENCRE_DOUX = '#786F60';        // texte secondaire, sur fond clair
-export const C_ENCRE_PALE = '#8f6526';        // texte tertiaire / désactivé
-export const C_CARTE_BORD = 'rgba(26,20,15,0.10)'; // liseré discret des cartes
-export const C_OMBRE = 'rgba(60,45,30,0.16)'; // ombre portée douce
-export const C_AMBRE = '#e7bd14';             // accent chaleureux (pouvoirs actifs, écus)
-export const C_AMBRE_FONCE = '#8A5A22';       // texte sur fond ambre clair
-export const C_TERRACOTTA = '#B5573F';        // prix inabordable / alerte douce
-export const C_SAUGE_FONCE = '#5E8A52';       // validation (« achetée »)
-// Doré Clair — deuxième ton du duo doré (burst de victoire, DA §11.5). Nouveau en v2.
-export const C_AMBRE_CLAIR = '#F4D58D';
-export const C_ENCRE_sub = '#c8d7e7'
+export const C_ENCRE_DOUX = '#AEB3B8';        // texte secondaire neutre
+export const C_ENCRE_PALE = '#8A9097';        // texte tertiaire / désactivé
+export const C_CARTE_BORD = 'rgba(236,235,231,0.12)'; // liseré chrome discret
+export const C_OMBRE = 'rgba(21,23,25,0.24)';  // ombre graphite
+export const C_AMBRE = '#B69B63';             // accent laiton sobre
+export const C_AMBRE_FONCE = '#7D6A43';       // texte sur accent laiton
+export const C_TERRACOTTA = '#B86F6B';        // alerte de gameplay
+export const C_SAUGE_FONCE = '#526B5C';       // validation (« achetée »)
+// Laiton clair — accent de victoire et de confirmation.
+export const C_AMBRE_CLAIR = '#D0BC8C';
+export const C_ENCRE_sub = '#B7C2CD';
