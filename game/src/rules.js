@@ -83,8 +83,10 @@ function coupsCavalier(board, p) {
 function coupsFou(board, p) {
   const m = [];
   glisse(m, board, p, DIAG);                    // coup de base
-  if (p.upgrades.includes('pas-de-cote')) {      // + ajout indépendant
-    for (const [dr, dc] of ORTHO) pousse(m, board, p, p.r + dr, p.c + dc);
+  // Pas de côté [D] (demande user 31/07) : le fou se déplace comme un cavalier
+  // (8 sauts en L), en plus de sa glisse diagonale de base.
+  if (p.upgrades.includes('pas-de-cote')) {
+    for (const [dr, dc] of KNIGHT) pousse(m, board, p, p.r + dr, p.c + dc);
   }
   // Folie [D] : usage unique, la prochaine attaque se déplace comme une dame.
   // On ajoute tous les déplacements (capture + vides) dans les 8 directions.
@@ -279,6 +281,18 @@ export function ciblesRuee(board, p) {
     if (q && q.owner !== p.owner) t.push({ r: p.r + dr, c: p.c + dc });
   }
   return t;
+}
+
+// Cibles de Vétéran (pion) : le pion ENNEMI se trouvant directement en face
+// (même colonne, une rangée devant). Décision utilisateur 31/07 : ne cible QUE
+// les pions adverses (pas les autres pièces). Le pion vétéran ne bouge pas — il
+// capture le pion qui lui fait face (GDD §6). Direction = celle de la marche.
+export function ciblesVet(board, p) {
+  const dir = p.owner === 0 ? -1 : 1;
+  const r = p.r + dir;
+  const q = caseAt(board, r, p.c);
+  if (q && q.owner !== p.owner && q.type === 'P') return [{ r, c: p.c }];
+  return [];
 }
 
 // Cibles du Rayon sacré : sur chacune des 4 diagonales du fou, la 1re pièce

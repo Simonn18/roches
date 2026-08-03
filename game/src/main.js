@@ -2,13 +2,17 @@
 // MVP (GDD §9) : hot-seat 2 joueurs, économie d'écus, 1 amélioration par type de pièce.
 // Cycle 1 IA (design/spec-ia.md) : menu d'accueil, mode PvAI optionnel, hook bot dummy.
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=107';
-import { coupsLegaux, ciblesRuee, ciblesRayon, DIRS8 } from './rules.js?v=111';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=115';
-import { iaDecideTour } from './ai.js?v=107';
+import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=113';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=136';
+import { iaDecideTour } from './ai.js?v=109';
 import { initReplay, recordMove, recordPurchase, recordPower, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=107';
 import { updateBook } from './opening.js?v=107';
 import { demarrerTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
   rejouerEtape, tutorielPermet } from './tutorial.js?v=107';
+import { demarrerApprendre, demarrerPuzzles, demarrerMiniJeu, demarrerPuzzle,
+  reinitialiserMiniJeu, reinitialiserPuzzle, verifierMiniJeu, verifierPuzzle,
+  marquerMiniJeuReussi, marquerPuzzleReussi, TOTAL_LEARN_GAMES, TOTAL_PUZZLES,
+  apprendreEstDebloque, apprendrePuzzleEstDebloque } from './learn.js?v=5';
 import { initAccount, startAuth, logout, getAccount, getSupabaseClient } from './account.js?v=107';
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue,
@@ -20,7 +24,7 @@ import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck
 import {
   UPGRADES, UPGRADES_PAR_TYPE, VALEUR_PIECE, REVENU_PAR_COUP,
   MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT, UI_THEME, UI_THEMES,
-} from './constants.js?v=107';
+} from './constants.js?v=108';
 import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js?v=107';
 // Phase A.5 v2 Phase 3 : import des TAILLES_DE_PLATEAU depuis la maison canonique
 // (zero-dep, cf. tailles.js + commit ba30d273). `TAILLES` n'est pas directement utilisé
@@ -163,7 +167,7 @@ function menuState() {
              // fallback std côté engine pour modes hors scope hot-seat (§7.2).
              // Le toggle « showVariant » déplie l'accordéon au menu d'accueil.
              showVariant: false,
-             activeMode: 'pvp',
+             activeMode: 'pvw',
              economie: 'standard',
              combat: 'standard',
              taille: DEFAULT_TAILLE,   // 'std' par défaut (legacy MVP v2 byte-équivalent)
@@ -442,7 +446,7 @@ function reporterResultatPvP() {
 // Directions orthogonales (pour Rempart : blindage des alliés adjacents).
 const ORTHO = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 // Phases de ciblage d'un pouvoir actif (clic = choix d'une cible).
-const PHASES_CIBLAGE = ['ruee-target', 'rayon-target', 'decret-target', 'cavalerie-target', 'cavalerie-push', 'echange-target'];
+const PHASES_CIBLAGE = ['ruee-target', 'rayon-target', 'decret-target', 'cavalerie-target', 'cavalerie-push', 'echange-target', 'vet-target'];
 
 // Vrai si la pièce est sous S.H.T. et ne peut utiliser aucune amélioration.
 function ameliorationsBloquees(p) {
@@ -527,14 +531,16 @@ function finDeTour() {
   // Tutoriel : pas d'adversaire — le tour revient toujours au joueur (les pièces
   // corail sont un décor piloté par les étapes). Sans ce garde, le tour passerait
   // au camp 1 que personne ne contrôle et le tutoriel resterait figé.
-  state.turn = state.mode === 'tutorial' ? 0 : 1 - state.turn;
+  state.turn = (state.mode === 'tutorial' || state.mode === 'learn') ? 0 : 1 - state.turn;
   state.chain = null;
   state.selected = null;
   state.legalMoves = [];
   state.panelPiece = null;
   state.ruTargets = [];
   state._cavEnemyCell = null;
-  state.phase = 'play';
+  state.phase = state.mode === 'learn'
+    ? (state.learnKind === 'puzzle' ? 'puzzle-game' : 'learn-game')
+    : 'play';
   // Début du tour du nouveau joueur actif (GDD §5.4).
   for (const row of state.board) {
     for (const p of row) {
@@ -841,6 +847,47 @@ function executerRuee(cell) {
   state.ruTargets = [];
   if (roiPris) { finPartie(state.turn); return; }
   finDeTour(); // Ruée consomme le tour
+}
+
+// Vétéran (pion) : capture le pion ENNEMI directement en face du pion, sans bouger.
+// Même modèle que la Ruée (GDD §6) : actif, cooldown 4, consomme le tour.
+function activerVet() {
+  const pion = state.selected;
+  if (!pion || pion.type !== 'P' || !pion.upgrades.includes('vet')) return;
+  if ((pion.cooldowns.vet || 0) > 0) return;
+  const cibles = ciblesVet(state.board, pion);
+  if (!cibles.length) return; // rien à charger
+  state.ruTargets = cibles;
+  state.phase = 'vet-target';
+}
+
+function executerVet(cell) {
+  const pion = state.selected;
+  const cible = state.board[cell.r][cell.c];
+  if (!cible) { state.phase = 'play'; state.ruTargets = []; return; }
+  pion.cooldowns.vet = UPGRADES['vet'].cooldown;
+
+  if (cible.shield) {
+    cible.shield = false;
+    addFlash(cell.r, cell.c, 'cyan');
+    // Capture annulée : pas de bonus. Le revenu de base passe par v.revenueBase.
+    const credite = crediterCoup(state.turn, REVENU_PAR_COUP, 0, cell, false);
+    recordPower(state, pion, 'Vétéran', cell, credite);
+    pvwEmitPower(pion, 'Vétéran', cell);
+    state.ruTargets = [];
+    finDeTour();
+    return;
+  }
+  // Cible toujours un pion (ciblesVet filtre q.type === 'P') → jamais de roi à capturer.
+  const bonus = VALEUR_PIECE[cible.type];
+  state.capturesDep[state.turn] += valeurDepartage(cible); // départage GDD §8.3
+  state.board[cell.r][cell.c] = null; // le pion ne bouge pas
+  addFlash(cell.r, cell.c, 'red');
+  const credite = crediterCoup(state.turn, REVENU_PAR_COUP, bonus, cell, true);
+  recordPower(state, pion, 'Vétéran', cell, credite);
+  pvwEmitPower(pion, 'Vétéran', cell);
+  state.ruTargets = [];
+  finDeTour(); // Vétéran consomme le tour
 }
 
 // Rayon sacré (fou) : capture à distance la 1re pièce adverse sur une diagonale,
@@ -1530,6 +1577,7 @@ function applyRemotePower(msg, opp) {
   switch (msg.power) {
     case 'Ruée': executerRuee(target); break;
     case 'Rayon sacré': executerRayon(target); break;
+    case 'Vétéran': executerVet(target); break;
     case 'Rempart': activerRempart(); break;
     case 'Mariage stratégique': activerSacrifice(); break;
     default: console.warn('[online] pouvoir inconnu', msg.power);
@@ -1562,7 +1610,7 @@ function pvwDepartageWinner() {
   return null;
 }
 function valeurDepartage(p) {
-  if (p.type === 'P' && p.upgrades.includes('vet')) return 3;       // Vétéran (GDD §6)
+  // Vétéran n'octroie plus de bonus de valeur : devenu actif (capture en face, GDD §6).
   if (p.type === 'R' && p.upgrades.includes('forteresse')) return 8; // Forteresse (GDD §6)
   return VALEUR_PIECE[p.type];
 }
@@ -1802,7 +1850,7 @@ function peutChoisirVariante() {
 function actionBouton(action) {
   // S.H.T. : aucune amélioration (pouvoirs actifs) ne peut être utilisée par une
   // pièce sous le debuff du roi pendant 2 tours.
-  if (['ruee', 'rayon', 'rempart', 'sacrifice', 'decret', 'sht', 'hypnose', 'cavalerie', 'echange'].includes(action.kind)) {
+  if (['ruee', 'rayon', 'rempart', 'sacrifice', 'decret', 'sht', 'hypnose', 'cavalerie', 'echange', 'vet'].includes(action.kind)) {
     if (state.selected && ameliorationsBloquees(state.selected)) return;
   }
   switch (action.kind) {
@@ -1827,14 +1875,24 @@ function actionBouton(action) {
       state.phase = 'play';
       deselectionner();
       break;
-    case 'buy':
+    case 'buy': {
       // Tutoriel : seule la carte de l'étape est achetable (refus = tremblement).
       if (!tutorielPermet(state, { type: 'buy', id: action.id })) {
         state.buzz = performance.now(); state.buzzId = action.id;
         break;
       }
+      const puzzlePiece = state.mode === 'learn' && state.learnKind === 'puzzle'
+        ? state.panelPiece : null;
+      const upgradesBefore = puzzlePiece ? puzzlePiece.upgrades.length : 0;
       acheter(action.id);
+      // L'achat doit être réel et porter sur la carte attendue : les puzzles ne
+      // se valident jamais sur un simple clic de catalogue.
+      if (puzzlePiece && puzzlePiece.upgrades.length > upgradesBefore
+          && action.id === state.puzzleUpgrade) {
+        state.puzzlePurchased = true;
+      }
       break;
+    }
     // Pouvoirs actifs : en tutoriel, seul le pouvoir prévu par l'étape répond.
     case 'ruee': if (tutorielPermet(state, { type: 'power', kind: 'ruee' })) activerRuee(); break;
     case 'rayon': if (tutorielPermet(state, { type: 'power', kind: 'rayon' })) activerRayon(); break;
@@ -1845,6 +1903,7 @@ function actionBouton(action) {
     case 'hypnose': if (tutorielPermet(state, { type: 'power', kind: 'hypnose' })) activerHypnose(); break;
     case 'cavalerie': if (tutorielPermet(state, { type: 'power', kind: 'cavalerie' })) activerCavalerie(); break;
     case 'echange': if (tutorielPermet(state, { type: 'power', kind: 'echange' })) activerEchange(); break;
+    case 'vet': if (tutorielPermet(state, { type: 'power', kind: 'vet' })) activerVet(); break;
     // Décliner un enchaînement (Double coup / Second galop) : pas de cooldown posé.
     case 'downloadReplay': downloadReplayMD(state); break;
     // Écran REPLAYS dédié (plein écran, comme le lobby en ligne) — remplace
@@ -1908,11 +1967,12 @@ function actionBouton(action) {
         const root = state.decksRoot || sanitizeRoot(loadDecks());
         const { type, cat } = state._deckEditor;
         // action.id peut être null (= vider le slot) — setSlot accepte null.
+        // 31/07 (demande user) : on applique l'amélioration SANS quitter le picker
+        // (le slot choisi est mis en surbrillance en direct). Seul « ← Retour »
+        // (cancelPick) ferme l'écran DECKS/picker.
         const next = setSlot(root, type, cat, action.id);
         saveDecks(next);
         state.decksRoot = next;
-        state._deckEditor = null;
-        state.phase = 'decks';
       }
       break;
     case 'cancelPick':
@@ -2003,6 +2063,59 @@ function actionBouton(action) {
       break;
     // Retour au menu (spectateur).
     case 'retourMenu': retourMenu(); break;
+    // Mode APPRENDRE : démonstrations + parcours de puzzles tactiques.
+    case 'apprendre':
+      if (state.phase === 'menu') demarrerApprendre(state);
+      break;
+    case 'openPuzzles':
+      if (state.mode === 'learn' && state.phase === 'learn-hub') demarrerPuzzles(state);
+      break;
+    case 'classicHub':
+      if (state.mode === 'learn') demarrerApprendre(state);
+      break;
+    case 'learnStart':
+      if (state.phase === 'learn-hub' && apprendreEstDebloque(state, action.index)) {
+        demarrerMiniJeu(state, action.index);
+      }
+      break;
+    case 'puzzleStart':
+      if (state.phase === 'puzzle-hub' && apprendrePuzzleEstDebloque(state, action.index)) {
+        demarrerPuzzle(state, action.index);
+      }
+      break;
+    case 'learnRestart':
+      if (state.phase === 'learn-game' || state.phase === 'learn-success') {
+        reinitialiserMiniJeu(state);
+      }
+      break;
+    case 'puzzleRestart':
+      if (state.phase === 'puzzle-game' || state.phase === 'puzzle-success') {
+        reinitialiserPuzzle(state);
+      }
+      break;
+    case 'learnHub':
+      if (state.mode === 'learn') {
+        if (state.learnKind === 'puzzle') demarrerPuzzles(state);
+        else demarrerApprendre(state);
+      }
+      break;
+    case 'puzzleHub':
+      if (state.mode === 'learn') demarrerPuzzles(state);
+      break;
+    case 'learnNext':
+      if (state.mode === 'learn' && state.learnIndex != null) {
+        const nextIndex = state.learnIndex + 1;
+        if (nextIndex < TOTAL_LEARN_GAMES) demarrerMiniJeu(state, nextIndex);
+        else demarrerApprendre(state);
+      }
+      break;
+    case 'puzzleNext':
+      if (state.mode === 'learn' && state.puzzleIndex != null) {
+        const nextIndex = state.puzzleIndex + 1;
+        if (nextIndex < TOTAL_PUZZLES) demarrerPuzzle(state, nextIndex);
+        else demarrerPuzzles(state);
+      }
+      break;
     // Abandonner la partie (PvP, PvAI). L'abandonneur perd.
     case 'tutoriel': demarrerTutoriel(state); break;
     case 'tutorialContinue': forcerAvancement(state); break;
@@ -2184,6 +2297,13 @@ function boutonSous(x, y) {
   if (!state.ui || !state.ui.buttons) return null; // Sécurité
   for (let i = state.ui.buttons.length - 1; i >= 0; i--) {
     const b = state.ui.buttons[i];
+    if (b.shape === 'circle') {
+      const cx = b.x + b.w / 2;
+      const cy = b.y + b.h / 2;
+      const radius = b.hitRadius ?? Math.min(b.w, b.h) / 2;
+      if (Math.hypot(x - cx, y - cy) <= radius) return b;
+      continue;
+    }
     if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
   }
   return null;
@@ -2260,7 +2380,8 @@ canvas.addEventListener('mousedown', (e) => {
     if (!dansPanneau) state.ui.hamburgerOpen = false;
   }
 
-  if (state.phase === 'animating' || state.phase === 'gameover' || state.phase === 'replay') return;
+  if (state.phase === 'animating' || state.phase === 'gameover' || state.phase === 'replay'
+      || state.phase === 'learn-success' || state.phase === 'puzzle-success') return;
   // Promotion en attente de choix : un clic hors du panneau (les boutons sont déjà
   // passés au hit-test ci-dessus) ANNULE et rend la sélection (GDD §5.1.b).
   if (state.phase === 'promotion') {
@@ -2304,6 +2425,10 @@ canvas.addEventListener('mousedown', (e) => {
   }
   if (state.phase === 'echange-target') {
     if (surCible) executerEchange(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    return;
+  }
+  if (state.phase === 'vet-target') {
+    if (surCible) executerVet(cell); else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
 
@@ -2401,6 +2526,23 @@ function update(now) {
     const fini = etapeSuivante(state);
     if (fini) state.phase = 'tutorial-done';
   }
+
+  // APPRENDRE : une réussite termine uniquement le scénario courant. Le joueur
+  // peut ensuite recommencer, revenir au hub ou retourner au menu principal.
+  if (state.mode === 'learn' && state.phase === 'learn-game'
+      && !state.anim && verifierMiniJeu(state)) {
+    state.learnProgress = marquerMiniJeuReussi(state);
+    state.learnSuccess = true;
+    state.learnMessage = 'Situation maîtrisée';
+    state.phase = 'learn-success';
+  }
+  if (state.mode === 'learn' && state.learnKind === 'puzzle'
+      && state.phase === 'puzzle-game' && !state.anim && verifierPuzzle(state)) {
+    state.puzzleProgress = marquerPuzzleReussi(state);
+    state.learnSuccess = true;
+    state.learnMessage = 'Puzzle résolu';
+    state.phase = 'puzzle-success';
+  }
 }
 
 function loop(now) {
@@ -2437,6 +2579,7 @@ function loop(now) {
       state.matchmaking.error = ol.error;
       state.matchmaking.band = ol.band;
       state.matchmaking.variant = ol.variant; // privé : variante imposée/héritée (affichage)
+      state.matchmaking.taille = ol.taille;   // taille plateau confirmée (badge CLASSÉ)
       if (ol.privateCode) state.matchmaking.privateCode = ol.privateCode;
     }
   }

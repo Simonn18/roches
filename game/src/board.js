@@ -10,7 +10,7 @@
 //           Note : états du moteur qui bouclent sur 8 hardcodé (coupsLegaux/
 //           evalBoard dans rules.js et ai.js) généraliseront en Phase A.5 v3.
 
-import { SOLDE_DEPART } from './constants.js?v=107';
+import { SOLDE_DEPART } from './constants.js?v=108';
 import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=107';
 // Note Phase A.5 v2 polish : `TAILLES` n'est PAS importé ici — les call sites
 // qui en ont besoin (render.js pour le bouton TAILLE DE PLATEAU, plus tard
@@ -30,7 +30,7 @@ export function creerPiece(type, owner, r, c) {
     r, c,            // position, tenue synchro avec le plateau
     upgrades: [],    // ids d'améliorations achetées
     shield: false,   // absorbe la prochaine capture (Forteresse, Bouclier, Monture, Couronne, Parade, Majesté)
-    cooldowns: {},   // { ruee, Rayon, Tele, second, sacrifice } en tours du joueur
+    cooldowns: {},   // { ruee, Rayon, Tele, second, sacrifice, vet } en tours du joueur
     debuffs: {},     // { sht, root, hypnoseAura } en tours restants
     doubleCoupUsed: false,  // Double coup (usage unique) consommé
     decretUsed: false,      // Décret (usage unique) consommé
@@ -126,7 +126,8 @@ export function creerEtat(options) {
 
     // Valeur de départage du matériel CAPTURÉ par chaque camp (GDD §8.3, fix W3) :
     // accumulée à chaque capture avec valeurDepartage(cible) — trace les bonus [S]
-    // (Vétéran/Forteresse) des pièces déjà capturées, insensible aux promotions.
+    // (Forteresse) des pièces déjà capturées (Vétéran est devenu actif le 31/07,
+    // plus de bonus de valeur), insensible aux promotions.
     // Déterministe des deux côtés en ligne (chaque client applique tous les coups).
     capturesDep: [0, 0],
 

@@ -24,8 +24,8 @@ export const UPGRADES = {
     desc: 'Annule la prochaine capture subie'
   },
   'vet':{
-    id: 'vet', nom: 'Vétéran',cat:'S',cout:5,piece: 'P',
-    desc: 'Le pion vaut **3 points** au départage au lieu de 1'
+    id: 'vet', nom: 'Vétéran',cat:'A',cout:5,piece: 'P', cooldown: 4,
+    desc: "Actif : capture le pion ennemi se trouvant directement en face du pion, sans bouger (consomme le tour)."
   },
   
   'second': {
@@ -43,7 +43,7 @@ export const UPGRADES = {
 
   'pas-de-cote': {
     id: 'pas-de-cote', nom: 'Pas de côté', cat: 'D', cout: 6, piece: 'B',
-    desc: "Déplacement d'une case orthogonale.",
+    desc: "Le fou peut se déplacer comme un cavalier (saut en L), en plus de sa diagonale.",
   },
   'Rayon': {
     id: 'Rayon', nom: 'Rayon sacré', cat: 'A', cout: 10, piece: 'B', cooldown: 4,
