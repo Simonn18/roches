@@ -22,7 +22,7 @@ import { creerPlateau } from './board.js?v=107';
 // Phase A.5 v2 Phase 3 : TAILLE DE PLATEAU chips itèrent sur TAILLES (maison canonique
 // zero-dep de tailles.js). Pas de cycle : tailles.js n'importe aucun autre module.
 import { TAILLES } from './tailles.js?v=107';
-import { DIRS8, coupsLegaux, roiEnEchec, ciblesVet } from './rules.js?v=113';
+import { DIRS8, coupsLegaux, roiEnEchec, ciblesVet } from './rules.js?v=115';
 import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal } from './tutorial.js?v=107';
 // Deck editor UI (recovery 29/07 [23:30]) : couche DONNÉES pure — loadDecks/getActiveDeck/
 // setSlot sont utilisés par main.js (handlers) et render.js (lecture seule du deck actif
@@ -943,15 +943,60 @@ function dessineEchiquier(ctx, state, now) {
     ctx.fillText(String(__ROWS - absR), OX - 6, OY + r * __CELL_SIZE + 16);
   }
 
-  // Flashes de case (capture terracotta / bris de blindage sauge) — forme tuile.
+  // Flashes de case (capture terracotta / bris de blindage sauge / récompense or) — forme tuile.
   for (const f of state.flashes) {
     const k = 1 - (now - f.t0) / DUREE_FLASH;
     if (k <= 0) continue;
     tilePathVue(ctx, state, f.r, f.c);
     ctx.fillStyle = f.color === 'red'
       ? `rgba(181,87,63,${0.55 * k})`
-      : `rgba(79,167,156,${0.55 * k})`;
+      : f.color === 'gold'
+        ? `rgba(227,192,127,${0.68 * k})`
+        : `rgba(79,167,156,${0.55 * k})`;
     ctx.fill();
+  }
+
+  // Cases bonus de la Chasse : une case par camp, réservée à ses pièces.
+  // Le halo et le petit symbole restent sous les pièces et les coups légaux pour
+  // conserver la lisibilité du moteur. La couleur suit le camp visuel en ligne,
+  // mais le mode Chasse reste volontairement local.
+  if ((state.mode === 'hunt' || state.mode === 'replay') && state.huntBonuses) {
+    const nowPulse = 0.5 + 0.5 * Math.sin(now / 360);
+    state.huntBonuses.forEach((bonus, owner) => {
+      if (!bonus) return;
+      const { x, y } = cellCenterVue(state, bonus.r, bonus.c);
+      tilePathVue(ctx, state, bonus.r, bonus.c);
+      ctx.save();
+      ctx.globalAlpha = 0.18 + nowPulse * 0.12;
+      ctx.fillStyle = owner === 0 ? '#E3C07F' : '#B86F6B';
+      ctx.fill();
+      ctx.globalAlpha = 0.78 + nowPulse * 0.18;
+      ctx.beginPath(); ctx.arc(x, y, Math.max(10, __CELL_SIZE * 0.22 + nowPulse * 3), 0, Math.PI * 2);
+      ctx.lineWidth = 3; ctx.strokeStyle = owner === 0 ? '#D0BC8C' : '#D58A84'; ctx.stroke();
+      ctx.fillStyle = owner === 0 ? '#7D6A43' : '#7E4B4A';
+      ctx.font = `700 ${Math.max(12, Math.round(__CELL_SIZE * 0.24))}px ${F_DISPLAY}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('✦', x, y + 1);
+      ctx.restore();
+    });
+  }
+
+  // Cases gelées par Épine : l'emplacement reste lié aux coordonnées enregistrées
+  // sur le pion source, même si celui-ci a ensuite bougé.
+  for (const row of state.board) {
+    for (const p of row) {
+      if (!p || !p.epineZone || p.epineZone.turns <= 0) continue;
+      tilePathVue(ctx, state, p.epineZone.r, p.epineZone.c);
+      ctx.save();
+      ctx.fillStyle = 'rgba(91, 192, 235, 0.18)';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(91, 192, 235, 0.86)';
+      ctx.stroke();
+      const ep = cellCenterVue(state, p.epineZone.r, p.epineZone.c);
+      ctx.beginPath(); ctx.arc(ep.x, ep.y, Math.max(8, __CELL_SIZE * 0.16), 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(91, 192, 235, 0.95)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // Case sélectionnée — forme tuile.
@@ -987,6 +1032,12 @@ function dessineEchiquier(ctx, state, now) {
       ctx.save();
       ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2);
       ctx.setLineDash([4, 3]); ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE; ctx.stroke();
+      ctx.restore();
+    } else if (mv.pasDiag || mv.grandSaut || mv.hauteFuite) {
+      // Déplacements bonus : anneau ambre pointillé, sans ambiguïté avec le coup de base.
+      ctx.save();
+      ctx.beginPath(); ctx.arc(x, y, Math.max(10, __CELL_SIZE * 0.18), 0, Math.PI * 2);
+      ctx.setLineDash([5, 3]); ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE; ctx.stroke();
       ctx.restore();
     } else {
       ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2);
@@ -1280,6 +1331,17 @@ function dessinePanneau(ctx, state, now) {
     // (ou cette pièce elle-même) est sous le debuff S.H.T.
     const powersBlocked = sel.debuffs && sel.debuffs.sht > 0;
 
+    // Pouvoir actif : Épine (pion) — gèle les coordonnées de la case actuelle.
+    if (sel.type === 'P' && sel.upgrades.includes('epine')) {
+      const cd = sel.cooldowns.epine || 0;
+      const pret = !powersBlocked && cd === 0 && !sel.epineZone && state.phase === 'play'
+        && tutorielPermet(state, { type: 'power', kind: 'epine' });
+      bouton(state, ctx, x, y, w, 34, 'Épine', { kind: 'epine' },
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText,
+          sub: sel.epineZone ? `case gelée ${sel.epineZone.turns} tour(s)` : (cd > 0 ? `recharge ${cd}` : 'gèle sa case 2 tours') });
+      y += 42;
+    }
+
     // Pouvoir actif : Vétéran (pion) — capture le pion ennemi en face.
     if (sel.type === 'P' && sel.upgrades.includes('vet')) {
       const cd = sel.cooldowns.vet || 0;
@@ -1408,7 +1470,7 @@ function dessinePanneau(ctx, state, now) {
       bouton(state, ctx, __PANEL_X_RUNTIME + w - 140, btnY, 130, 32, '◀  Retour',
         { kind: 'retourMenu' },
         { color: UI_THEME.primary, textColor: UI_THEME.text });
-    } else if (state.mode === 'pvp' || state.mode === 'pvai' || state.mode === 'pvw') {
+    } else if (state.mode === 'pvp' || state.mode === 'pvai' || state.mode === 'pvw' || state.mode === 'hunt') {
       bouton(state, ctx, __PANEL_X_RUNTIME + w - 140, btnY, 130, 32, 'Abandonner',
         { kind: 'abandonner' },
         { color: UI_THEME.danger, textColor: UI_THEME.text });
@@ -1453,7 +1515,7 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
   const hintTuto = state.mode === 'tutorial' ? tutorielHint(state) : null;
   for (const id of upgradesForPiece(state.activeDeck, p.type, UPGRADES_PAR_TYPE[p.type])) {
     const u = UPGRADES[id];
-    const bientot = !!u.nonImplemente; // effet pas encore codé (GDD) : carte grisée neutre
+    const bientot = !!u.nonImplemente; // garde de compatibilité pour les cartes futures
     // Tutoriel : les cartes hors étape sont verrouillées (grisées + cadenas).
     const verrou = state.mode === 'tutorial' && !tutorielPermet(state, { type: 'buy', id });
     const deja = p.upgrades.includes(id);
@@ -2485,7 +2547,8 @@ function dessineMenuDashboard(ctx, state) {
       dbText('VS', contentX + contentW / 2, contentY + 39, `700 11px ${F_DB}`, C.goldBright, 'center');
       dbText('JOUEUR 2', contentX + contentW - 170, contentY + 39, `600 18px ${F_DB_BRAND}`, C.text, 'center');
       dbText('Partie locale · chacun son tour', contentX + contentW / 2, contentY + 72, `11px ${F_DB}`, C.muted, 'center');
-      dbCta(contentX + contentW - 220, contentY + 93, 190, 36, 'Jouer', { kind: 'pickMode', mode: 'pvp' }, { fill: C.gold, stroke: C.goldBright, shadow: C.wineDark });
+      dbCta(contentX + 24, contentY + 93, 196, 36, 'Jouer classique', { kind: 'pickMode', mode: 'pvp' }, { fill: C.card, stroke: C.border, shadow: C.wineDark });
+      dbCta(contentX + contentW - 244, contentY + 93, 220, 36, 'Chasse aux améliorations', { kind: 'pickMode', mode: 'hunt' }, { fill: C.gold, stroke: C.goldBright, shadow: C.wineDark });
     } else if (activeMode === 'pvw') {
       dbText('PRÊT À CHERCHER UN ADVERSAIRE', contentX + 30, contentY + 38, `700 13px ${F_DB}`, C.text);
       dbText('Classement estimé · partie en ligne', contentX + 30, contentY + 66, `11px ${F_DB}`, C.muted);

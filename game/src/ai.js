@@ -8,7 +8,7 @@
 //   d'achat « émergente » (achat-en-coup-complet) est RETIRÉE.
 // Pouvoirs actifs (ex-règles D-E) : hors-scope v1/v2 (le bot achète, ne déclenche pas).
 // Invariant préservé : la recherche travaille sur des CLONES, l'état réel n'est jamais muté.
-import { coupsLegaux, DIRS8 } from './rules.js?v=113';
+import { coupsLegaux, DIRS8 } from './rules.js?v=115';
 import { VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=108';
 import { upgradesForPiece } from './decks.js?v=107';
 import { getBookBonus } from './opening.js?v=107';
@@ -28,6 +28,7 @@ function clonePiece(p) {
     decretUsed: p.decretUsed,
     sacrificeArmed: p.sacrificeArmed,
     rempartGranted: p.rempartGranted,
+    epineZone: p.epineZone ? { ...p.epineZone } : null,
     aBouge: p.aBouge, // condition du roque (GDD §5.1.b) — la recherche doit la voir
   };
 }
@@ -42,6 +43,8 @@ function applyMove(board, piece, move) {
   piece.c = move.c;
   board[move.r][move.c] = piece;
   piece.aBouge = true;
+  if (move.grandSaut) piece.cooldowns['grand-saut'] = UPGRADES['grand-saut'].cooldown;
+  if (move.hauteFuite) piece.cooldowns['haute-fuite'] = UPGRADES['haute-fuite'].cooldown;
   // Roque (GDD §5.1.b) : la tour suit dans la simulation aussi, sinon l'éval juge
   // une position fausse (tour restée dans le coin).
   if (move.castle) {
@@ -481,6 +484,43 @@ function alphaBetaSearch(board, aiPlayer) {
 }
 
 // ---------------------------------------------------------------------------
+// PHASE POUVOIR ACTIF — choix d'un pouvoir à activer (remplace le coup du tour).
+// Les pouvoirs actifs consomment le tour (GDD §6) : l'IA choisit donc entre activer
+// un pouvoir OU déplacer une pièce, jamais les deux dans le même tour.
+// ---------------------------------------------------------------------------
+
+// Épine (pion) : gèle la case où se trouve le pion pendant 2 tours adverses.
+// L'IA l'active uniquement si la case gelée bloque réellement un ennemi : au moins
+// une pièce adverse adjacente au pion (elle ne pourra plus entrer sur cette case
+// pendant 2 tours). Conservateur : jamais d'activation « au hasard ».
+function pouvoirEpineUtile(board, aiPlayer) {
+  for (let r = 0; r < board.length; r++) {
+    for (let c = 0; c < board[r].length; c++) {
+      const p = board[r][c];
+      if (!p || p.owner !== aiPlayer || p.type !== 'P') continue;
+      if (!p.upgrades.includes('epine')) continue;
+      if ((p.cooldowns.epine || 0) > 0 || p.epineZone) continue;
+      for (const [dr, dc] of DIRS8) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nr >= board.length || nc < 0 || nc >= board[nr].length) continue;
+        const q = board[nr][nc];
+        if (q && q.owner !== aiPlayer) return p; // un ennemi adjacent : gel utile
+      }
+    }
+  }
+  return null;
+}
+
+// Point d'entrée de la phase pouvoir. Renvoie null (pas de pouvoir) ou
+// { piece } : la pièce réelle à sélectionner avant d'activer le pouvoir.
+export function choisirPouvoirIA(state) {
+  const aiPlayer = (state.ai && state.ai.player !== undefined) ? state.ai.player : state.turn;
+  const epine = pouvoirEpineUtile(state.board, aiPlayer);
+  if (epine) return { kind: 'epine', piece: epine };
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Point d'entrée
 // ---------------------------------------------------------------------------
 
@@ -541,10 +581,26 @@ export function iaDecideTour(state) {
     mouvement = { piece: realPiece, move: mouvement.move };
   }
 
-  if (!mouvement && !achats.length) {
+  // -------- PHASE 3 : pouvoir actif éventuel (remplace le coup) --------
+  // Décision sur l'état RÉEL PRÉ-ACHAT (iaDecideTour ne mute jamais) : une Épine
+  // achetée CE tour n'est donc pas encore en main au moment de choisirPouvoirIA →
+  // elle ne sera activable qu'au tour SUIVANT (report conservateur assumé). Si un
+  // pouvoir est retenu, il consomme le tour → on n'exécute pas de mouvement.
+  let pouvoir = null;
+  try {
+    pouvoir = choisirPouvoirIA(state);
+  } catch (e) {
+    console.warn('[AI] choix pouvoir failed:', e);
+    pouvoir = null;
+  }
+  if (pouvoir) {
+    mouvement = null;
+  }
+
+  if (!mouvement && !achats.length && !pouvoir) {
     console.warn('[AI] no move found, skipping turn');
     return null;
   }
 
-  return { achats, mouvement, pouvoir: null };
+  return { achats, mouvement, pouvoir };
 }

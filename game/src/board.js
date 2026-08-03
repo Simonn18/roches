@@ -30,7 +30,8 @@ export function creerPiece(type, owner, r, c) {
     r, c,            // position, tenue synchro avec le plateau
     upgrades: [],    // ids d'améliorations achetées
     shield: false,   // absorbe la prochaine capture (Forteresse, Bouclier, Monture, Couronne, Parade, Majesté)
-    cooldowns: {},   // { ruee, Rayon, Tele, second, sacrifice, vet } en tours du joueur
+    cooldowns: {},   // { ruee, Rayon, Tele, second, sacrifice, vet, epine, grand-saut } en tours du joueur
+    epineZone: null, // { r, c, owner, turns } — case gelée par Épine
     debuffs: {},     // { sht, root, hypnoseAura } en tours restants
     doubleCoupUsed: false,  // Double coup (usage unique) consommé
     decretUsed: false,      // Décret (usage unique) consommé
@@ -120,6 +121,9 @@ export function creerEtat(options) {
     legalMoves: [],          // [{ r, c, capture, tele? }]
     panelPiece: null,        // pièce dont le panneau d'amélioration est ouvert
     ruTargets: [],           // cibles d'un ciblage en cours (Ruée / Rayon / Décret)
+    huntBonuses: null,       // cases bonus réservées à chaque camp en mode Chasse
+    huntCollected: [0, 0],   // nombre de cases bonus récupérées par camp
+    huntLastAward: null,     // dernière amélioration tirée par une case bonus
 
     replay: null,            // enregistrement de partie (replay.js)
     chain: null,             // enchaînement en attente : { piece, type: 'double-coup' | 'second-galop' }

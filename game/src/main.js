@@ -2,10 +2,11 @@
 // MVP (GDD §9) : hot-seat 2 joueurs, économie d'écus, 1 amélioration par type de pièce.
 // Cycle 1 IA (design/spec-ia.md) : menu d'accueil, mode PvAI optionnel, hook bot dummy.
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=107';
-import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=113';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=136';
-import { iaDecideTour } from './ai.js?v=109';
-import { initReplay, recordMove, recordPurchase, recordPower, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=107';
+import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=115';
+import { initialiserChasse, recolterChasse } from './hunt.js?v=2';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=139';
+import { iaDecideTour } from './ai.js?v=111';
+import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=108';
 import { updateBook } from './opening.js?v=107';
 import { demarrerTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
   rejouerEtape, tutorielPermet } from './tutorial.js?v=107';
@@ -238,12 +239,18 @@ function commencerPartie(mode, difficultyOrOptions) {
   // private = taille imposée par le créateur via createPrivate).
   // Modes locaux : on prend state.menu.taille directement.
   const tailleInput = state.menu && state.menu.taille;
-  const tailleEffective = (mode === 'pvp' || mode === 'pvai' || mode === 'spectator')
+  const tailleEffective = (mode === 'pvp' || mode === 'pvai' || mode === 'spectator' || mode === 'hunt')
     ? (tailleInput || DEFAULT_TAILLE)
     : DEFAULT_TAILLE;
   state = creerEtat({ mode, difficulty: (difficultyOrOptions && difficultyOrOptions.difficulty) || 1, variantId, taille: tailleEffective });
   state.activeDeck = getActiveDeck(loadDecks());
   initReplay(state);
+  if (mode === 'hunt') {
+    initialiserChasse(state);
+    // Le replay doit pouvoir afficher les deux cases réservées dès son ouverture,
+    // avant même la première récolte.
+    state.replay.huntBonuses = state.huntBonuses.map((cell) => cell ? { ...cell } : null);
+  }
   if (mode === 'spectator') planifierCoupIA();
 }
 
@@ -290,6 +297,13 @@ function commencerReplay(replayData) {
     buzz: 0,
     replay: null,
     replayData,
+    // État minimal du mode Chasse nécessaire à la lecture des récompenses
+    // enregistrées dans les événements `hunt-award`.
+    huntBonuses: replayData.huntBonuses
+      ? replayData.huntBonuses.map((cell) => cell ? { ...cell } : null)
+      : [null, null],
+    huntCollected: [0, 0],
+    huntLastAward: null,
     replayIndex: -1,
     replayPlaying: true,
     replaySpeed: 2,
@@ -317,6 +331,27 @@ function avancerReplay() {
   state._replayTimer = setTimeout(() => avancerReplay(), delay);
 }
 
+function avancerTourReplay(owner) {
+  state.turn = 1 - owner;
+  for (const row of state.board) {
+    for (const p of row) {
+      if (!p) continue;
+      if (p.epineZone && p.epineZone.owner !== state.turn) {
+        p.epineZone.turns--;
+        if (p.epineZone.turns <= 0) p.epineZone = null;
+      }
+      if (p.owner !== state.turn) continue;
+      for (const key of Object.keys(p.cooldowns)) {
+        if (p.cooldowns[key] > 0) p.cooldowns[key]--;
+      }
+      for (const key of Object.keys(p.debuffs)) {
+        if (p.debuffs[key] > 0) p.debuffs[key]--;
+        if (p.debuffs[key] <= 0) delete p.debuffs[key];
+      }
+    }
+  }
+}
+
 function executerEvenementReplay(e) {
   if (e.type === 'move') {
     const from = fromAlgebraic(e.from, state.board);
@@ -332,6 +367,9 @@ function executerEvenementReplay(e) {
     // Déplacement
     state.board[from.r][from.c] = null;
     piece.r = to.r; piece.c = to.c;
+    piece.aBouge = true;
+    if (e.grandSaut) piece.cooldowns['grand-saut'] = UPGRADES['grand-saut'].cooldown;
+    if (e.hauteFuite) piece.cooldowns['haute-fuite'] = UPGRADES['haute-fuite'].cooldown;
     state.board[to.r][to.c] = piece;
     // Roque (GDD §5.1.b) : rejoue aussi le déplacement de la tour.
     if (e.castle) {
@@ -357,6 +395,7 @@ function executerEvenementReplay(e) {
     const credite = e.gain != null ? e.gain : (REVENU_PAR_COUP + (e.bonus || 0));
     const { x, y } = centreVue(to.r, to.c);
     state.popups.push({ text: `+${credite}`, x, y: y - 20, t0: performance.now(), color: UI_THEME.amberLight });
+    avancerTourReplay(e.owner);
   } else if (e.type === 'purchase') {
     const pos = fromAlgebraic(e.pos, state.board);
     if (!pos) return;
@@ -366,18 +405,52 @@ function executerEvenementReplay(e) {
     if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(e.upgrade)) piece.shield = true;
     piece._goldT = performance.now();
     state.ecus[e.owner] -= e.cost;
+  } else if (e.type === 'hunt-award') {
+    // Une récompense de Chasse est une action distincte du déplacement qui l'a
+    // déclenchée : on restaure l'amélioration sur la pièce et la nouvelle case
+    // bonus pour que la suite du replay reste fidèle.
+    const pos = fromAlgebraic(e.pos, state.board);
+    const piece = pos && state.board[pos.r] ? state.board[pos.r][pos.c] : null;
+    if (!piece || piece.owner !== e.owner) return;
+    if (e.upgrade && !piece.upgrades.includes(e.upgrade)) piece.upgrades.push(e.upgrade);
+    if (e.upgrade && ['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(e.upgrade)) {
+      piece.shield = true;
+    }
+    if (!state.huntBonuses) state.huntBonuses = [null, null];
+    if (!state.huntCollected) state.huntCollected = [0, 0];
+    state.huntCollected[e.owner] = (state.huntCollected[e.owner] || 0) + 1;
+    state.huntBonuses[e.owner] = e.nextCell ? { ...e.nextCell } : null;
+    state.huntLastAward = {
+      owner: e.owner,
+      piece,
+      upgradeId: e.upgrade || null,
+      cell: e.cell ? { ...e.cell } : null,
+      nextCase: e.nextCell ? { ...e.nextCell } : null,
+    };
+    piece._goldT = performance.now();
   } else if (e.type === 'power') {
-    // Feedback visuel uniquement (flash cyan sur la pièce si trouvable).
-    const mr = state.board.length, mc = state.board[0].length;
-    for (let r = 0; r < mr; r++) {
-      for (let c = 0; c < mc; c++) {
-        const p = state.board[r][c];
-        if (p && p.type === e.piece && p.owner === e.owner) {
-          state.flashes.push({ r, c, t0: performance.now(), color: 'cyan' });
-          break;
+    // Les anciens replays n'ont pas de position : on conserve leur recherche
+    // tolérante. Les nouveaux événements ciblent précisément la pièce source.
+    const pos = e.pos ? e.pos : null;
+    const source = pos && state.board[pos.r] ? state.board[pos.r][pos.c] : null;
+    let found = source && source.owner === e.owner && source.type === e.piece ? source : null;
+    if (!found) {
+      for (const row of state.board) {
+        for (const p of row) {
+          if (p && p.type === e.piece && p.owner === e.owner) { found = p; break; }
         }
+        if (found) break;
       }
     }
+    if (found) {
+      if (e.power === 'Épine') {
+        found.cooldowns.epine = UPGRADES.epine.cooldown;
+        found.epineZone = { r: found.r, c: found.c, owner: found.owner, turns: 3 };
+      }
+      state.flashes.push({ r: found.r, c: found.c, t0: performance.now(), color: 'cyan' });
+    }
+    // Tous les pouvoirs actifs consomment le tour dans le moteur actuel.
+    avancerTourReplay(e.owner);
   }
 }
 
@@ -544,18 +617,24 @@ function finDeTour() {
   // Début du tour du nouveau joueur actif (GDD §5.4).
   for (const row of state.board) {
     for (const p of row) {
-      if (p && p.owner === state.turn) {
-        // Rempart : le blindage temporaire expire au prochain tour du joueur (GDD §6 Tour).
-        if (p.rempartGranted) { p.rempartGranted = false; if (p.shield) p.shield = false; }
-        // Décrément des cooldowns.
-        for (const k of Object.keys(p.cooldowns)) {
-          if (p.cooldowns[k] > 0) p.cooldowns[k]--;
-        }
-        // Décrément des debuffs.
-        for (const k of Object.keys(p.debuffs)) {
-          if (p.debuffs[k] > 0) p.debuffs[k]--;
-          if (p.debuffs[k] <= 0) delete p.debuffs[k];
-        }
+      if (!p) continue;
+      // Épine compte les tours du camp adverse, même si le pion source a bougé.
+      // Le gel est donc décrémenté séparément de l'entretien de la pièce active.
+      if (p.epineZone && p.epineZone.owner !== state.turn) {
+        p.epineZone.turns--;
+        if (p.epineZone.turns <= 0) p.epineZone = null;
+      }
+      if (p.owner !== state.turn) continue;
+      // Rempart : le blindage temporaire expire au prochain tour du joueur (GDD §6 Tour).
+      if (p.rempartGranted) { p.rempartGranted = false; if (p.shield) p.shield = false; }
+      // Décrément des cooldowns.
+      for (const k of Object.keys(p.cooldowns)) {
+        if (p.cooldowns[k] > 0) p.cooldowns[k]--;
+      }
+      // Décrément des debuffs.
+      for (const k of Object.keys(p.debuffs)) {
+        if (p.debuffs[k] > 0) p.debuffs[k]--;
+        if (p.debuffs[k] <= 0) delete p.debuffs[k];
       }
     }
   }
@@ -623,6 +702,22 @@ function planifierCoupIA() {
           acheter(a.upgradeId);
         }
         state.panelPiece = null;
+      }
+
+      // Pouvoir actif choisi par l'IA (ex. Épine) : consomme le tour (GDD §6).
+      // Le pouvoir est exécuté au lieu du mouvement — jamais les deux dans le même
+      // tour, ce qui préserve le déterminisme du moteur (hash lockstep en ligne).
+      if (tour.pouvoir && tour.pouvoir.piece) {
+        const powerPiece = state.board[tour.pouvoir.piece.r]
+          ? state.board[tour.pouvoir.piece.r][tour.pouvoir.piece.c]
+          : null;
+        if (powerPiece && powerPiece.owner === state.turn) {
+          state.selected = powerPiece;
+          if (tour.pouvoir.kind === 'epine') activerEpine();
+          else { state.selected = null; finDeTour(); }
+          return;
+        }
+        // Pièce introuvable : on retombe sur le mouvement (le coup reste valide).
       }
 
       if (tour.mouvement) {
@@ -735,6 +830,8 @@ function jouerCoup(piece, mv) {
   state.board[mv.r][mv.c] = piece;
   piece.aBouge = true; // condition du roque (GDD §5.1.b)
   if (mv.tele) piece.cooldowns.Tele = UPGRADES['Tele'].cooldown; // Téléportation : cooldown 5 (GDD §7)
+  if (mv.grandSaut) piece.cooldowns['grand-saut'] = UPGRADES['grand-saut'].cooldown;
+  if (mv.hauteFuite) piece.cooldowns['haute-fuite'] = UPGRADES['haute-fuite'].cooldown;
 
   // Roque (GDD §5.1.b) : la tour accompagne le roi dans le même coup (repositionnée
   // instantanément, assumé v1 — le roi porte l'animation de glissement).
@@ -782,6 +879,20 @@ function jouerCoup(piece, mv) {
 
   demarrerAnim(piece, from, { r: mv.r, c: mv.c }, () => {
     if (roiPris) { finPartie(state.turn); return; }
+    if (state.mode === 'hunt') {
+      const award = recolterChasse(state, piece);
+      if (award) {
+        addFlash(award.cell.r, award.cell.c, 'gold');
+        if (award.upgradeId) {
+          const { x, y } = centreVue(piece.r, piece.c);
+          state.popups.push({
+            text: `✦ ${award.upgrade.nom}`,
+            x, y: y - 28, t0: performance.now(), color: UI_THEME.amberLight,
+          });
+          recordHuntAward(state, piece, award.upgradeId, award.cell, award.nextCase);
+        }
+      }
+    }
     resoudreApresCoup(piece, true, bonus > 0);
   });
 }
@@ -888,6 +999,22 @@ function executerVet(cell) {
   pvwEmitPower(pion, 'Vétéran', cell);
   state.ruTargets = [];
   finDeTour(); // Vétéran consomme le tour
+}
+
+// Épine (pion) : gèle la case où se trouve le pion pendant les deux prochains
+// tours adverses. La zone reste attachée au pion même s'il se déplace ensuite.
+function activerEpine() {
+  const pion = state.selected;
+  if (!pion || pion.type !== 'P' || !pion.upgrades.includes('epine')) return;
+  if ((pion.cooldowns.epine || 0) > 0 || pion.epineZone) return;
+  pion.cooldowns.epine = UPGRADES.epine.cooldown;
+  // +1 car finDeTour décrémente immédiatement au passage sur le camp adverse.
+  pion.epineZone = { r: pion.r, c: pion.c, owner: pion.owner, turns: 3 };
+  pion._goldT = performance.now();
+  addFlash(pion.r, pion.c, 'cyan');
+  recordPower(state, pion, 'Épine');
+  pvwEmitPower(pion, 'Épine', null);
+  finDeTour();
 }
 
 // Rayon sacré (fou) : capture à distance la 1re pièce adverse sur une diagonale,
@@ -1402,7 +1529,10 @@ function commencerPartiePvP() {
 // rejouées via EXACTEMENT les mêmes fonctions moteur (jouerCoup/acheter/executer*) — miroir
 // de planifierCoupIA. Aucune modification de rules.js/board.js.
 
-function toAlg(r, c) { return 'abcdefgh'[c] + (8 - r); }
+function toAlg(r, c, board = state.board) {
+  const rows = board && board.length ? board.length : 8;
+  return String.fromCharCode(97 + c) + (rows - r);
+}
 
 // Hash d'état 32 bits (FNV-1a) sur une chaîne canonique (§5.4). N'utilise JAMAIS piece.id
 // (le compteur PROCHAIN_ID de board.js diverge entre clients ayant joué un nombre de parties
@@ -1410,8 +1540,8 @@ function toAlg(r, c) { return 'abcdefgh'[c] + (8 - r); }
 // Exclut tout le cosmétique (anim/popups/flashes/_goldT/ui).
 function hashState(s) {
   let str = '';
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
+  for (let r = 0; r < s.board.length; r++) {
+    for (let c = 0; c < s.board[r].length; c++) {
       const p = s.board[r][c];
       if (!p) { str += '.'; continue; }
       const cds = Object.keys(p.cooldowns).filter((k) => p.cooldowns[k] > 0)
@@ -1420,7 +1550,8 @@ function hashState(s) {
       str += `${p.owner}${p.type}${p.shield ? 1 : 0}${p.sacrificeArmed ? 1 : 0}`
         + `${p.decretUsed ? 1 : 0}${p.doubleCoupUsed ? 1 : 0}${p.rempartGranted ? 1 : 0}`
         + `${p.aBouge ? 1 : 0}` // condition du roque (GDD §5.1.b) — divergence = coups légaux divergents
-        + `[${cds}][${up}]`;
+        + `[${cds}][${up}]`
+        + (p.epineZone ? `{${p.epineZone.r},${p.epineZone.c},${p.epineZone.turns}}` : '{}');
     }
   }
   str += `|${s.ecus[0]}|${s.ecus[1]}|${s.turn}|`;
@@ -1470,6 +1601,9 @@ function pvwEmitMove(piece, from, to, capturedType, bonus, mv) {
     kind: 'move', owner: piece.owner, piece: piece.type,
     from: toAlg(from.r, from.c), to: toAlg(to.r, to.c),
     captured: capturedType || null, bonus: bonus || 0, chain: !!state.chain,
+    pasDiag: !!(mv && mv.pasDiag),
+    grandSaut: !!(mv && mv.grandSaut),
+    hauteFuite: !!(mv && mv.hauteFuite),
     // Promotion (GDD §5.1.b) : au point d'émission piece.type EST déjà le type promu.
     promo: mv && mv.promotion ? piece.type : null,
   });
@@ -1578,6 +1712,7 @@ function applyRemotePower(msg, opp) {
     case 'Ruée': executerRuee(target); break;
     case 'Rayon sacré': executerRayon(target); break;
     case 'Vétéran': executerVet(target); break;
+    case 'Épine': activerEpine(); break;
     case 'Rempart': activerRempart(); break;
     case 'Mariage stratégique': activerSacrifice(); break;
     default: console.warn('[online] pouvoir inconnu', msg.power);
@@ -1639,10 +1774,10 @@ function makePiece(d) {
     shield: !!d.shield,
     cooldowns: d.cooldowns ? { ...d.cooldowns } : {},
     doubleCoupUsed: !!d.doubleCoupUsed,
-    decretUsed: !!d.decretUsed,
-    sacrificeArmed: !!d.sacrificeArmed,
-    rempartGranted: !!d.rempartGranted,
-  };
+    decretUsed: !!d.decretUsed,      sacrificeArmed: !!d.sacrificeArmed,
+      rempartGranted: !!d.rempartGranted,
+      epineZone: d.epineZone ? { ...d.epineZone } : null,
+    };
 }
 
 // Snapshot d'état complet et sérialisable (§7.3). Le survivant l'émet au retour de
@@ -1659,6 +1794,7 @@ function pvwBuildSnapshot() {
         r, c, owner: q.owner, type: q.type, upgrades: q.upgrades,
         shield: q.shield, cooldowns: q.cooldowns, doubleCoupUsed: q.doubleCoupUsed,
         decretUsed: q.decretUsed, sacrificeArmed: q.sacrificeArmed, rempartGranted: q.rempartGranted,
+        epineZone: q.epineZone ? { ...q.epineZone } : null,
       });
     }
   }
@@ -1850,7 +1986,7 @@ function peutChoisirVariante() {
 function actionBouton(action) {
   // S.H.T. : aucune amélioration (pouvoirs actifs) ne peut être utilisée par une
   // pièce sous le debuff du roi pendant 2 tours.
-  if (['ruee', 'rayon', 'rempart', 'sacrifice', 'decret', 'sht', 'hypnose', 'cavalerie', 'echange', 'vet'].includes(action.kind)) {
+  if (['ruee', 'rayon', 'rempart', 'sacrifice', 'decret', 'sht', 'hypnose', 'cavalerie', 'echange', 'vet', 'epine'].includes(action.kind)) {
     if (state.selected && ameliorationsBloquees(state.selected)) return;
   }
   switch (action.kind) {
@@ -1904,6 +2040,7 @@ function actionBouton(action) {
     case 'cavalerie': if (tutorielPermet(state, { type: 'power', kind: 'cavalerie' })) activerCavalerie(); break;
     case 'echange': if (tutorielPermet(state, { type: 'power', kind: 'echange' })) activerEchange(); break;
     case 'vet': if (tutorielPermet(state, { type: 'power', kind: 'vet' })) activerVet(); break;
+    case 'epine': if (tutorielPermet(state, { type: 'power', kind: 'epine' })) activerEpine(); break;
     // Décliner un enchaînement (Double coup / Second galop) : pas de cooldown posé.
     case 'downloadReplay': downloadReplayMD(state); break;
     // Écran REPLAYS dédié (plein écran, comme le lobby en ligne) — remplace
@@ -2116,7 +2253,7 @@ function actionBouton(action) {
         else demarrerPuzzles(state);
       }
       break;
-    // Abandonner la partie (PvP, PvAI). L'abandonneur perd.
+    // Abandonner la partie (PvP, PvAI, Chasse). L'abandonneur perd.
     case 'tutoriel': demarrerTutoriel(state); break;
     case 'tutorialContinue': forcerAvancement(state); break;
     case 'tutorialRestart': rejouerEtape(state); break;

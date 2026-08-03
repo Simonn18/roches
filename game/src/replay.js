@@ -1,7 +1,7 @@
 // roychec — enregistrement de partie (replay) pour tutoriel / analyse.
 // Hooké dans main.js (jouerCoup, acheter, pouvoirs, finPartie).
 // Sortie : markdown téléchargeable + localStorage (max 20 parties).
-import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP } from './constants.js?v=108';
+import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP } from './constants.js?v=109';
 import { VARIANT_PRESETS, ECONOMIES, COMBATS, DEFAULT_VARIANT } from './variants.js?v=107';
 // Phase A.5 v2 : toAlgebraic doit connaître la hauteur du plateau pour encoder
 // correctement les rangées sous forme algébrique (8 - r sur plateau 8×N).
@@ -33,7 +33,7 @@ function formatDuration(ms) {
   return m > 0 ? `${m} min ${s % 60} s` : `${s} s`;
 }
 
-const MODE_LABEL = { pvp: '1J vs 2J (Hot-seat)', pvai: 'Humain vs IA', spectator: 'Spectateur (IA vs IA)' };
+const MODE_LABEL = { pvp: '1J vs 2J (Hot-seat)', hunt: 'Chasse aux améliorations', pvai: 'Humain vs IA', spectator: 'Spectateur (IA vs IA)' };
 
 // ---------------------------------------------------------------------------
 // API publique
@@ -52,6 +52,7 @@ export function initReplay(state) {
     // Phase A.5 v2 : la taille du plateau est nécessaire pour recréer un board
     // fidèle dans l'opening book (hash dynamique) et pour décoder les replays.
     taille: state.taille || DEFAULT_TAILLE,
+    huntBonuses: null,
     events: [],
     stats: {
       purchases: { 0: [], 1: [] },
@@ -89,6 +90,10 @@ export function recordMove(state, piece, from, to, capturedType, bonus, mv, gain
     // gain effectif (fidéle à la variante utilisée). Null = replay pré-v3.
     gain: gain != null ? gain : null,
     chain: !!state.chain,
+    // Métadonnées des déplacements issus des nouvelles cartes bonus.
+    pasDiag: !!(mv && mv.pasDiag),
+    grandSaut: !!(mv && mv.grandSaut),
+    hauteFuite: !!(mv && mv.hauteFuite),
     promo: mv && mv.promotion ? piece.type : null,
     castle: mv && mv.castle
       ? { rookFrom: toAlgebraic(mv.castle.rookFrom.r, mv.castle.rookFrom.c, state.board),
@@ -127,8 +132,28 @@ export function recordPower(state, piece, powerType, targetPos, gain) {
     owner: piece.owner,
     piece: piece.type,
     power: powerType,
+    // Position de la pièce au moment du pouvoir : utile pour rejouer Épine
+    // précisément, sans ambiguïté si plusieurs pièces ont le même type.
+    pos: piece ? { r: piece.r, c: piece.c } : null,
     target: targetPos || null,
     gain: gain != null ? gain : null,
+  });
+}
+
+// Enregistre une récompense gratuite du mode Chasse. La position de la nouvelle
+// case est conservée pour que le replay puisse reproduire le plateau bonus.
+export function recordHuntAward(state, piece, upgradeId, cell, nextCell) {
+  if (!state.replay) return;
+  const r = state.replay;
+  r.events.push({
+    idx: r.events.length,
+    type: 'hunt-award',
+    owner: piece.owner,
+    piece: piece.type,
+    pos: toAlgebraic(piece.r, piece.c, state.board),
+    upgrade: upgradeId,
+    cell: cell ? { ...cell } : null,
+    nextCell: nextCell ? { ...nextCell } : null,
   });
 }
 
@@ -194,6 +219,8 @@ export function toMarkdown(state) {
     } else if (e.type === 'power') {
       const target = e.target ? ` → ${toAlgebraic(e.target.r, e.target.c, boardRows)}` : '';
       md += `| ${e.idx + 1} | ${joueur} | ⚡ ${e.power} | ${PIECE_NOM[e.piece]}${target} (consomme le tour) |\n`;
+    } else if (e.type === 'hunt-award') {
+      md += `| ${e.idx + 1} | ${joueur} | ✦ Chasse | ${PIECE_NOM[e.piece]} reçoit ${e.upgrade || 'aucune'} sur ${e.pos} |\n`;
     }
   }
   md += '\n';

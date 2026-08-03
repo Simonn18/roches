@@ -5,6 +5,13 @@ import { inB, caseAt } from './board.js?v=107';
 const KNIGHT = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
 const DIAG = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
 const ORTHO = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+// Grand saut : décalages de 3×1 ou 3×2, dans toutes les orientations.
+const GRAND_SAUT = [
+  [-3, -1], [-3, 1], [-3, -2], [-3, 2],
+  [3, -1], [3, 1], [3, -2], [3, 2],
+  [-1, -3], [1, -3], [-2, -3], [2, -3],
+  [-1, 3], [1, 3], [-2, 3], [2, 3],
+];
 export const DIRS8 = [...DIAG, ...ORTHO];
 
 // Types affectés par la Zone de contrôle (valeur ≤ 3 ; tour, dame et roi exemptés).
@@ -65,9 +72,18 @@ function coupsPion(board, p) {
       m.push({ r: p.r - dir, c: p.c, capture: false });
     }
   }
+  // Pas diagonal [D] : avance d'une case en diagonale, mais uniquement sur
+  // une case vide — ce n'est pas une capture diagonale supplémentaire.
+  if (p.upgrades.includes('pas-diag')) {
+    for (const dc of [-1, 1]) {
+      if (caseAt(board, p.r + dir, p.c + dc) === null) {
+        m.push({ r: p.r + dir, c: p.c + dc, capture: false, pasDiag: true });
+      }
+    }
+  }
   // Promotion (GDD §5.1.b) : tout coup ARRIVANT sur la dernière rangée adverse est
   // marqué — le choix de pièce (promo) est résolu par main.js (panneau / IA / réseau).
-  const derniere = p.owner === 0 ? 0 : 7;
+  const derniere = p.owner === 0 ? 0 : board.length - 1;
   for (const mv of m) if (mv.r === derniere) mv.promotion = true;
   return m;
 }
@@ -75,6 +91,31 @@ function coupsPion(board, p) {
 function coupsCavalier(board, p) {
   const m = [];
   for (const [dr, dc] of KNIGHT) pousse(m, board, p, p.r + dr, p.c + dc);
+  // Grand saut [D] : bond de 3×1 ou 3×2. Le saut ne capture jamais et
+  // demande une case intermédiaire libre pour éviter de traverser un obstacle.
+  if (p.upgrades.includes('grand-saut') && (p.cooldowns['grand-saut'] || 0) === 0) {
+    for (const [dr, dc] of GRAND_SAUT) {
+      // L'intermédiaire est toujours un pas de cavalier vers la destination :
+      // on réduit la composante LONGUE (3 → 2, ou 2 → 1) et on conserve la
+      // composante courte. 3×1 → 2×1, 3×2 → 1×2, 2×3 → 2×1, 1×3 → 1×2.
+      const absR = Math.abs(dr), absC = Math.abs(dc);
+      const long = absR >= absC ? absR : absC;   // 3 ou 2
+      const short = absR >= absC ? absC : absR;  // 1 ou 2
+      // Longue réduction : 3×1 → 2, 3×2 → 1, 2×3 → 1, 1×3 → 2.
+      const step = (long === 3 && short === 1) ? 2 : 1;
+      const iR = absR >= absC
+        ? Math.sign(dr) * step
+        : Math.sign(dr) * short;
+      const iC = absC >= absR
+        ? Math.sign(dc) * step
+        : Math.sign(dc) * short;
+      const intermediate = caseAt(board, p.r + iR, p.c + iC);
+      const destination = caseAt(board, p.r + dr, p.c + dc);
+      if (intermediate === null && destination === null) {
+        m.push({ r: p.r + dr, c: p.c + dc, capture: false, grandSaut: true });
+      }
+    }
+  }
   // Second galop : l'enchaînement d'un 2e saut est géré comme un post-coup
   // (modèle Double coup, voir main.js), pas comme des cases jouables ici.
   return m;
@@ -184,6 +225,20 @@ function coupsRoi(board, p) {
       });
     }
   }
+  // Haute fuite [D] : bond de 3 cases en ligne droite (ortho ou diagonale).
+  // Jamais de capture : les deux cases intermédiaires et l'arrivée sont vides.
+  if (p.upgrades.includes('haute-fuite')) {
+    for (const [dr, dc] of [...DIAG, ...ORTHO]) {
+      const r1 = p.r + dr, c1 = p.c + dc;
+      const r2 = p.r + 2 * dr, c2 = p.c + 2 * dc;
+      const r3 = p.r + 3 * dr, c3 = p.c + 3 * dc;
+      if (caseAt(board, r1, c1) === null
+          && caseAt(board, r2, c2) === null
+          && caseAt(board, r3, c3) === null) {
+        m.push({ r: r3, c: c3, capture: false, hauteFuite: true });
+      }
+    }
+  }
   // Passe royal [D] : bond de 2 cases en ligne droite (ortho ou diagonale).
   // Jamais de capture : la case intermédiaire ET la case d'arrivée doivent être vides.
   if (p.upgrades.includes('passe-royale')) {
@@ -204,8 +259,8 @@ function coupsRoi(board, p) {
 // équipé de l'aura Hypnose (debuffs.hypnoseAura > 0). Renvoie un Set de clés "r,c".
 export function zonesInterdites(board, owner) {
   const s = new Set();
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
+  for (let r = 0; r < board.length; r++) {
+    for (let c = 0; c < board[r].length; c++) {
       const q = board[r][c];
       if (!q || q.owner === owner || q.type !== 'B' || !(q.debuffs && q.debuffs.hypnoseAura > 0)) continue;
       for (let dr = -3; dr <= 3; dr++) {
@@ -215,6 +270,20 @@ export function zonesInterdites(board, owner) {
           if (inB(board, nr, nc)) s.add(nr + ',' + nc);
         }
       }
+    }
+  }
+  return s;
+}
+
+// Cases gelées par Épine : contrairement à Hypnose, l'effet bloque toutes les
+// pièces adverses, y compris les pièces majeures et les captures.
+export function casesEpines(board, owner) {
+  const s = new Set();
+  for (let r = 0; r < board.length; r++) {
+    for (let c = 0; c < board[r].length; c++) {
+      const p = board[r][c];
+      if (!p || p.owner === owner || !p.epineZone || p.epineZone.turns <= 0) continue;
+      s.add(`${p.epineZone.r},${p.epineZone.c}`);
     }
   }
   return s;
@@ -234,6 +303,9 @@ export function coupsLegaux(board, p) {
     case 'K': m = coupsRoi(board, p); break;
     default: return [];
   }
+  // Épine bloque toute arrivée adverse sur sa case, quelle que soit la pièce.
+  const epines = casesEpines(board, p.owner);
+  if (epines.size) m = m.filter((mv) => !epines.has(`${mv.r},${mv.c}`));
   // Zone de contrôle : une pièce faible (P/N/B) ne peut pas TERMINER un
   // déplacement sur une case sous aura adverse (déplacements et téléportation ;
   // Ruée / Rayon sacré, qui ne déplacent pas, ne passent pas par ici).
