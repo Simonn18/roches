@@ -2,8 +2,8 @@
 // Les scénarios préparent des plateaux, puis réutilisent le moteur réel de main.js.
 // Aucun réseau, replay ou trophée n'est impliqué dans ce mode.
 import { creerPiece } from './board.js?v=109';
-import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=107';
-import { coupsLegaux } from './rules.js?v=116';
+import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=108';
+import { coupsLegaux, roiEnEchec } from './rules.js?v=116';
 import { CELL, OX, OY } from './constants.js?v=109';
 
 const STORAGE_KEY = 'roychec-learn-progress';
@@ -247,11 +247,12 @@ function scenarioPuzzleCouronne(state) {
   const b = plateauVide();
   const dame = creerPiece('Q', 0, 4, 4);
   const pion = creerPiece('P', 1, 5, 3);
-  const roiAdverse = creerPiece('K', 1, 5, 4);
+  const roiAdverse = creerPiece('K', 1, 6, 3);
   const roiAllie = creerPiece('K', 0, 7, 7);
-  // La dame peut prendre le pion en d3, dans le rayon du roi adverse en e3.
-  // Celui-ci tentera ensuite de la reprendre : Couronne absorbe cette capture.
-  b[4][4] = dame; b[5][3] = pion; b[5][4] = roiAdverse; b[7][7] = roiAllie;
+  // La dame peut prendre le pion en d3, dans le rayon du roi adverse en d2.
+  // Après la capture, le roi tentera réellement d'aller de d2 à d3 : Couronne
+  // absorbe cette reprise et la dame survit sur d3.
+  b[4][4] = dame; b[5][3] = pion; b[6][3] = roiAdverse; b[7][7] = roiAllie;
   baseScenario(state, b, 9);
 }
 
@@ -266,6 +267,24 @@ function scenarioPuzzleMariage(state) {
   b[7][4] = roi; b[5][4] = reine; b[0][4] = roiAdverse;
   b[1][7] = pion;
   baseScenario(state, b, 12);
+}
+
+function scenarioPuzzleEchange(state) {
+  const b = plateauVide();
+  const tour = creerPiece('R', 0, 4, 1);
+  const pion = creerPiece('P', 0, 4, 4);
+  const roiAdverse = creerPiece('K', 1, 0, 4);
+  const tourAdverse = creerPiece('R', 1, 0, 2);
+  const pionTempo = creerPiece('P', 1, 1, 7);
+  const roiAllie = creerPiece('K', 0, 7, 7);
+  // La tour est à gauche en b4, avec deux cases libres entre elle et le pion
+  // allié en e4. Le roi e8 n'est donc pas dans sa ligne au départ. Une tour
+  // noire en c8 garde le décor sous pression sans bloquer la solution.
+  // Après l'Échange, la tour prend e4 et ouvre la colonne jusqu'au roi e8.
+  b[4][1] = tour; b[4][4] = pion;
+  b[0][4] = roiAdverse; b[0][2] = tourAdverse;
+  b[1][7] = pionTempo; b[7][7] = roiAllie;
+  baseScenario(state, b, 9);
 }
 
 export const LEARN_GAMES = [
@@ -595,11 +614,11 @@ export const PUZZLES = [
     id: 'puzzle-couronne', title: 'Le bouclier royal', upgrade: 'Couronne', upgradeId: 'couronne',
     category: 'PUZZLE · STAT', cost: 9, color: '#9BCB8C',
     text: 'La dame doit capturer un pion placé dans le rayon du roi adverse.',
-    detail: 'Achète Couronne, capture le pion en d3 avec la dame, puis vois le roi tenter une reprise absorbée par le bouclier royal.',
+    detail: 'Achète Couronne, capture le pion en d3 avec la dame, puis vois le roi en d2 tenter une vraie reprise absorbée par le bouclier royal.',
     objective: 'Capturer sous la protection de Couronne', setup: scenarioPuzzleCouronne,
     hint: (state) => ({ cells: state.puzzlePurchased ? [{ r: 5, c: 3 }] : [{ r: 4, c: 4 }] }),
-    failMessage: 'La dame doit prendre le pion en d3 : Couronne est nécessaire pour survivre à la reprise du roi en e3.',
-    response: { from: { r: 5, c: 4 }, to: { r: 5, c: 3 }, capture: true, shieldedCapture: true,
+    failMessage: 'La dame doit prendre le pion en d3 : Couronne est nécessaire pour survivre à la reprise du roi en d2.',
+    response: { from: { r: 6, c: 3 }, to: { r: 5, c: 3 }, capture: true, shieldedCapture: true,
       text: 'Le roi tente la reprise : Couronne absorbe la capture.', color: '#4FA79C' },
     check: (state) => state.puzzlePurchased && state.puzzleResponseDone && state.puzzleShieldUsed
       && state.board[5][3]?.type === 'Q'
@@ -619,6 +638,22 @@ export const PUZZLES = [
       && state.board[5][4]?.type === 'Q'
       && state.board[5][4].debuffs.root > 0
       && state.board[7][4]?.type === 'K',
+  },
+  {
+    id: 'puzzle-echange', title: 'La tour en embuscade', upgrade: 'Échange', upgradeId: 'echange',
+    category: 'PUZZLE · ACTIF', cost: 9, color: '#F0B15E',
+    text: 'Un pion bloque la tour, mais sa place ouvre une ligne d’échec vers le roi adverse.',
+    detail: 'Achète Échange, sélectionne la tour en b4, échange-la avec le pion en e4 et ouvre la colonne jusqu’au roi en e8.',
+    objective: 'Mettre le roi adverse en échec par Échange', setup: scenarioPuzzleEchange,
+    hint: (state) => state.phase === 'echange-target'
+      ? { cells: [{ r: 4, c: 4 }] }
+      : { cells: [{ r: 4, c: 1 }] },
+    failMessage: 'La tour doit échanger sa place avec le pion en e4 pour ouvrir la colonne et mettre le roi en échec.',
+    response: { from: { r: 1, c: 7 }, to: { r: 2, c: 7 }, text: 'Le pion avance, mais le roi reste sous échec.', color: '#B86F6B' },
+    power: 'echange', check: (state) => state.puzzlePurchased && state.puzzleResponseDone
+      && state.board[4][4]?.type === 'R'
+      && state.board[4][4].upgrades.includes('echange')
+      && roiEnEchec(state.board, 1),
   },
 ];
 

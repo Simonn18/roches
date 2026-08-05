@@ -17,7 +17,7 @@ import {
   UI_THEME, REMPLI_PIECE,C_ENCRE_sub,
   PVW_CADENCES, cadenceLabel,
 } from './constants.js?v=109';
-import { VARIANT_PRESETS, ECONOMIES, COMBATS, variantLabel, variantIdFromMenu } from './variants.js?v=107';
+import { VARIANT_PRESETS, ECONOMIES, COMBATS, variantLabel, variantIdFromMenu } from './variants.js?v=108';
 import { creerPlateau } from './board.js?v=109';
 // Phase A.5 v2 Phase 3 : TAILLE DE PLATEAU chips itèrent sur TAILLES (maison canonique
 // zero-dep de tailles.js). Pas de cycle : tailles.js n'importe aucun autre module.
@@ -29,7 +29,7 @@ import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal
 // pour l'affichage). Aucune dépendance inverse.
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
-  apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=15';
+  apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=19';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -2474,7 +2474,7 @@ function dessineMenuDashboard(ctx, state) {
     dbText(`${total} actions · ${duration}`, x + 16, y + h - 18, `10px ${F_DB}`, C.muted);
     if (replay && typeof state._dashboardReplayKey === 'string'
         && state._dashboardReplayKey.length > 0) {
-      dbControl(x + w - 88, y + h - 32, 72, 24, 'Rejouer',
+      dbControl(x + w - 88, y + h - 32, 72, 24, 'Replay',
         { kind: 'startReplay', key: state._dashboardReplayKey },
         { fill: C.gold, font: `700 9px ${F_DB}`, radius: 7 });
     }
@@ -2612,7 +2612,7 @@ function dessineMenuDashboard(ctx, state) {
 
     const tailleY = combatY + 28;
     const tailleW = (contentW - optionLabelW - optionGap * 2 - 8) / 3;
-    dbText('TAILLE', optionX, tailleY + 12, `700 9px ${F_DB}`, C.muted);
+    dbText('PLATEAU', optionX, tailleY + 12, `700 9px ${F_DB}`, C.muted);
     [['std', '8 × 8'], ['l15', '15 × 8'], ['bonus', 'PLATEAU BONUS']].forEach(([id, label], i) => dbControl(
       optionX + optionLabelW + i * (tailleW + optionGap), tailleY, tailleW, 24,
       label, { kind: 'pickTaille', value: id },
@@ -3401,9 +3401,15 @@ function dessineLearnHub(ctx, state) {
 function dessinePuzzleHub(ctx, state) {
   const cx = CANVAS_W / 2;
   const completed = new Set(state.puzzleProgress?.completed || []);
+  // Sept puzzles : le dernier nœud prolonge le zigzag sur la droite.
+  // Parcours en escalier : on part en bas à gauche, puis on monte
+  // progressivement vers la droite. Chaque puzzle rejoint directement le
+  // précédent, sans saut visuel ni croisement du chemin.
   const positions = [
-    { x: 180, y: 235 }, { x: 520, y: 235 },
-    { x: 860, y: 235 }, { x: 520, y: 470 },
+    { x: 150, y: 620 }, { x: 150, y: 470 },
+    { x: 350, y: 470 }, { x: 350, y: 320 },
+    { x: 550, y: 320 }, { x: 550, y: 170 },
+    { x: 780, y: 170 },
   ];
   const nodeW = 64, nodeH = 64, nodeRadius = 28;
 
@@ -3460,9 +3466,9 @@ function dessinePuzzleHub(ctx, state) {
   ctx.fillStyle = UI_THEME.text; ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(`${doneCount}/${TOTAL_PUZZLES} puzzles résolus`, cx, 590);
-  bouton(state, ctx, 32, 635, 220, 34, '← Parcours classique', { kind: 'classicHub' },
+  bouton(state, ctx, 32, 700, 220, 34, '← Parcours classique', { kind: 'classicHub' },
     { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
-  bouton(state, ctx, cx - 110, 635, 220, 34, '← Menu principal', { kind: 'retourMenu' },
+  bouton(state, ctx, cx - 110, 700, 220, 34, '← Menu principal', { kind: 'retourMenu' },
     { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
 }
 
@@ -3505,7 +3511,7 @@ function dessineLearnPanel(ctx, state, now) {
       { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: `${game.upgrade} · ${game.cost} écus` });
   }
   if (hint && state.selected && game.power && state.learnPurchased) {
-    const actionByPower = { ruee: 'ruee', rayon: 'rayon', vet: 'vet', hypnose: 'hypnose', decret: 'decret' };
+    const actionByPower = { ruee: 'ruee', rayon: 'rayon', vet: 'vet', hypnose: 'hypnose', decret: 'decret', echange: 'echange' };
     const kind = actionByPower[game.power];
     if (kind) bouton(state, ctx, x, OY + 214, w, 38, game.power.toUpperCase(), { kind },
       { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'activer maintenant' });
@@ -3562,7 +3568,7 @@ function dessinePuzzlePanel(ctx, state, now) {
       ctx.fillStyle = UI_THEME.primaryDark; ctx.font = `700 12px ${F_TEXTE}`;
       ctx.fillText(`✓ ${puzzle.upgrade} acheté — résous la position`, x, OY + 246);
       if (state.selected && puzzle.power && state.phase === 'play') {
-        const actionByPower = { ruee: 'ruee', sacrifice: 'sacrifice' };
+        const actionByPower = { ruee: 'ruee', sacrifice: 'sacrifice', echange: 'echange' };
         const kind = actionByPower[puzzle.power];
         if (kind) bouton(state, ctx, x, OY + 266, w, 38, puzzle.power.toUpperCase(), { kind },
           { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'activer maintenant' });

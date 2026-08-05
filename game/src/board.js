@@ -11,7 +11,7 @@
 //           evalBoard dans rules.js et ai.js) généraliseront en Phase A.5 v3.
 
 import { SOLDE_DEPART } from './constants.js?v=109';
-import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=107';
+import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=108';
 // Note Phase A.5 v2 polish : `TAILLES` n'est PAS importé ici — les call sites
 // qui en ont besoin (render.js pour le bouton TAILLE DE PLATEAU, plus tard
 // online.js pour le lockstep header) importeront directement depuis './tailles.js'.

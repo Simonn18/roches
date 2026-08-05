@@ -7,7 +7,7 @@ import {
   demarrerPuzzle,
   learnPermet,
   puzzleReponse,
-} from '../game/src/learn.js?v=15';
+} from '../game/src/learn.js?v=19';
 import { coupsLegaux, roiEnEchec } from '../game/src/rules.js?v=116';
 
 const SOLUTIONS = [
@@ -104,14 +104,45 @@ describe('Puzzles tactiques — lignes et refus des mauvais coups', () => {
   test('le puzzle Couronne protège la reine lors de la reprise du roi', () => {
     const { state, piece } = etatPuzzle(4);
     assert.equal(state.board[5][3]?.type, 'P');
-    assert.equal(state.board[5][4]?.type, 'K');
+    assert.equal(state.board[6][3]?.type, 'K');
+    assert.equal(state.board[6][3]?.owner, 1);
     assert.ok(coupsLegaux(state.board, piece)
       .some((move) => move.r === 5 && move.c === 3 && move.capture));
+    // Simule la vraie capture : le pion quitte d3 avant la tentative du roi.
     piece.r = 5; piece.c = 3;
     state.board[4][4] = null;
     state.board[5][3] = piece;
-    assert.ok(coupsLegaux(state.board, state.board[5][4])
+    assert.ok(coupsLegaux(state.board, state.board[6][3])
       .some((move) => move.r === 5 && move.c === 3 && move.capture));
+  });
+
+  test('le puzzle 7 échange la tour avec le pion et met le roi en échec', () => {
+    const { state, piece } = etatPuzzle(6);
+    assert.equal(PUZZLES[6].id, 'puzzle-echange');
+    assert.equal(piece.type, 'R');
+    assert.equal(state.board[4][4]?.type, 'P');
+    assert.equal(state.board[0][2]?.type, 'R');
+    assert.equal(state.board[0][2]?.owner, 1);
+    assert.equal(piece.r, 4);
+    assert.equal(piece.c, 1);
+    assert.equal(roiEnEchec(state.board, 1), false);
+    assert.equal(learnPermet(state, { type: 'power', kind: 'echange', piece }), true);
+    state.phase = 'echange-target';
+    assert.equal(learnPermet(state, {
+      type: 'target', piece, cell: { r: 4, c: 4 },
+    }), true);
+
+    // Reproduit l'échange exécuté par main.js : la tour prend e4,
+    // le pion prend b4, puis la colonne ouverte met le roi e8 en échec.
+    const pawn = state.board[4][4];
+    state.board[4][1] = pawn;
+    state.board[4][4] = piece;
+    pawn.r = 4; pawn.c = 1;
+    piece.r = 4; piece.c = 4;
+    assert.equal(roiEnEchec(state.board, 1), true);
+    assert.equal(state.board[4][4], piece);
+    assert.equal(state.board[4][1], pawn);
+    assert.equal(PUZZLES[6].power, 'echange');
   });
 
   test('le puzzle Mariage immobilise la reine qui menace le roi', () => {
@@ -120,6 +151,20 @@ describe('Puzzles tactiques — lignes et refus des mauvais coups', () => {
     assert.equal(roiEnEchec(state.board, 0), true);
     assert.equal(Math.max(Math.abs(piece.r - state.board[5][4].r), Math.abs(piece.c - state.board[5][4].c)), 2);
     assert.equal(PUZZLES[5].power, 'sacrifice');
+  });
+
+  test('la réponse du puzzle 7 pointe vers le pion adverse', () => {
+    const { state } = etatPuzzle(6);
+    const response = puzzleReponse(state);
+    assert.deepEqual(response.from, { r: 1, c: 7 });
+    assert.deepEqual(response.to, { r: 2, c: 7 });
+  });
+
+  test('la réponse Couronne part bien du roi en d2', () => {
+    const { state } = etatPuzzle(4);
+    const response = puzzleReponse(state);
+    assert.deepEqual(response.from, { r: 6, c: 3 });
+    assert.deepEqual(response.to, { r: 5, c: 3 });
   });
 
   test('chaque réponse adverse pointe vers une pièce ennemie et une case libre', () => {

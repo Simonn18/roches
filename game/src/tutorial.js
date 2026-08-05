@@ -10,7 +10,7 @@ import { UPGRADES, CELL, OX, OY } from './constants.js?v=109';
 // state.variant pour que crediterCoup() (rewiré dans le lot variantes) lise
 // v.revenueBase / v.plafond / v.captureMul sans crasher. capturesDep pour
 // la même raison — jouée par jouerCoup() à chaque capture, cf. fix W3.
-import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=107';
+import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=108';
 
 function plateauVide() {
   return Array.from({ length: 8 }, () => Array(8).fill(null));
