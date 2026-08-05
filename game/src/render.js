@@ -16,20 +16,20 @@ import {
   C_AMBRE, C_AMBRE_FONCE, C_TERRACOTTA, C_SAUGE_FONCE, C_AMBRE_CLAIR, DECK_ACCENT,
   UI_THEME, REMPLI_PIECE,C_ENCRE_sub,
   PVW_CADENCES, cadenceLabel,
-} from './constants.js?v=108';
+} from './constants.js?v=109';
 import { VARIANT_PRESETS, ECONOMIES, COMBATS, variantLabel, variantIdFromMenu } from './variants.js?v=107';
-import { creerPlateau } from './board.js?v=107';
+import { creerPlateau } from './board.js?v=109';
 // Phase A.5 v2 Phase 3 : TAILLE DE PLATEAU chips itèrent sur TAILLES (maison canonique
 // zero-dep de tailles.js). Pas de cycle : tailles.js n'importe aucun autre module.
-import { TAILLES } from './tailles.js?v=107';
-import { DIRS8, coupsLegaux, roiEnEchec, ciblesVet } from './rules.js?v=115';
+import { TAILLES } from './tailles.js?v=108';
+import { DIRS8, coupsLegaux, roiEnEchec, ciblesVet } from './rules.js?v=116';
 import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal } from './tutorial.js?v=107';
 // Deck editor UI (recovery 29/07 [23:30]) : couche DONNÉES pure — loadDecks/getActiveDeck/
 // setSlot sont utilisés par main.js (handlers) et render.js (lecture seule du deck actif
 // pour l'affichage). Aucune dépendance inverse.
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
-  apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque } from './learn.js?v=5';
+  apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=15';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -958,22 +958,25 @@ function dessineEchiquier(ctx, state, now) {
 
   // Cases bonus de la Chasse : une case par camp, réservée à ses pièces.
   // Le halo et le petit symbole restent sous les pièces et les coups légaux pour
-  // conserver la lisibilité du moteur. La couleur suit le camp visuel en ligne,
-  // mais le mode Chasse reste volontairement local.
-  if ((state.mode === 'hunt' || state.mode === 'replay') && state.huntBonuses) {
+  // conserver la lisibilité du moteur. La couleur reprend celle du camp visuel
+  // associé à la pièce concernée, y compris en PvP en ligne.
+  if ((state.bonusMode || state.mode === 'hunt' || state.mode === 'replay') && state.huntBonuses) {
     const nowPulse = 0.5 + 0.5 * Math.sin(now / 360);
     state.huntBonuses.forEach((bonus, owner) => {
       if (!bonus) return;
+      const vOwner = campVisuel(state, owner);
       const { x, y } = cellCenterVue(state, bonus.r, bonus.c);
       tilePathVue(ctx, state, bonus.r, bonus.c);
       ctx.save();
+      // Même palette que les pièces : campVisuel respecte aussi la rotation du
+      // PvP en ligne, où le joueur local est toujours affiché en bas.
       ctx.globalAlpha = 0.18 + nowPulse * 0.12;
-      ctx.fillStyle = owner === 0 ? '#E3C07F' : '#B86F6B';
+      ctx.fillStyle = REMPLI_PIECE[vOwner];
       ctx.fill();
       ctx.globalAlpha = 0.78 + nowPulse * 0.18;
       ctx.beginPath(); ctx.arc(x, y, Math.max(10, __CELL_SIZE * 0.22 + nowPulse * 3), 0, Math.PI * 2);
-      ctx.lineWidth = 3; ctx.strokeStyle = owner === 0 ? '#D0BC8C' : '#D58A84'; ctx.stroke();
-      ctx.fillStyle = owner === 0 ? '#7D6A43' : '#7E4B4A';
+      ctx.lineWidth = 3; ctx.strokeStyle = ACCENT[vOwner]; ctx.stroke();
+      ctx.fillStyle = ACCENT[vOwner];
       ctx.font = `700 ${Math.max(12, Math.round(__CELL_SIZE * 0.24))}px ${F_DISPLAY}`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('✦', x, y + 1);
       ctx.restore();
@@ -1021,20 +1024,21 @@ function dessineEchiquier(ctx, state, now) {
     }
   }
 
-  // Coups légaux. Phase A.5 v2 Phase 4 : capture ring CELL/2 → __CELL_SIZE/2 (l15 = 25 px).
+  // Coups potentiels. En mode Apprendre, tous les coups du moteur sont affichés
+  // avec exactement les mêmes marqueurs et couleurs que sur un plateau normal.
+  // Le verrouillage reste uniquement logique : un clic sur une mauvaise cible est
+  // refusé par main.js et affiche le feedback ACTION GUIDÉE.
   for (const mv of state.legalMoves) {
     const { x, y } = cellCenterVue(state, mv.r, mv.c);
     if (mv.capture) {
       ctx.beginPath(); ctx.arc(x, y, __CELL_SIZE / 2 - 4, 0, Math.PI * 2);
       ctx.lineWidth = 5; ctx.strokeStyle = C_CAP; ctx.stroke();
     } else if (mv.tele) {
-      // Téléportation : anneau ambre pointillé pour distinguer du déplacement normal.
       ctx.save();
       ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2);
       ctx.setLineDash([4, 3]); ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE; ctx.stroke();
       ctx.restore();
     } else if (mv.pasDiag || mv.grandSaut || mv.hauteFuite) {
-      // Déplacements bonus : anneau ambre pointillé, sans ambiguïté avec le coup de base.
       ctx.save();
       ctx.beginPath(); ctx.arc(x, y, Math.max(10, __CELL_SIZE * 0.18), 0, Math.PI * 2);
       ctx.setLineDash([5, 3]); ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE; ctx.stroke();
@@ -1521,7 +1525,10 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
     const deja = p.upgrades.includes(id);
     const plein = p.upgrades.length >= MAX_UPGRADES_PAR_PIECE;
     const abordable = solde >= u.cout;
-    const achetable = !bientot && !verrou && !deja && !plein && abordable;
+    const learnVerrou = state.mode === 'learn'
+      && !learnPermet(state, { type: 'buy', id });
+    const achetable = !bientot && !verrou && !learnVerrou && !deja && !plein && abordable;
+    const learnButtonDisabled = state.mode === 'learn' && !achetable;
     const premium = u.cout >= 12;            // tier « carte chère » (DA §11.1.b) — signal de rareté
     const h = 62;
     const dx = (trembler && state.buzzId === id) ? (Math.random() * 6 - 3) : 0;
@@ -1530,7 +1537,7 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
     // Hitbox : toute la carte (w×62). Inchangée par rapport au code corrigé (commit e2fb50be) ;
     // la pastille de coût déborde au-dessus de cette zone mais reste purement décorative
     // (le clic d'achat se fait sur le corps de la carte). Le clic est refusé (buzz) côté acheter().
-    state.ui.buttons.push({ x: cx0, y, w, h, action: { kind: 'buy', id }, enabled: true, radius: 8 });
+    state.ui.buttons.push({ x: cx0, y, w, h, action: { kind: 'buy', id }, enabled: !learnButtonDisabled, radius: 8 });
 
     // Fond de carte selon l'état (priorité : bientôt/verrou > achetée > premium > standard, DA §11.1).
     let bg;
@@ -1839,23 +1846,35 @@ function dessineGameOver(ctx, state, now) {
       { color: UI_THEME.primary, textColor: UI_THEME.text, sub: 'chercher un autre adversaire', enabled: !rmLaunching });
   }
 
-  // Bouton Revanche (PvP uniquement, §9.4) : au-dessus du bouton Menu.
+  // Revanche PvP (partie en ligne) : proposition sortante ou notification
+  // entrante avec décision explicite du deuxième joueur.
   if (pvw && !voided) {
-    btnY -= 54;
     const rm = state.pvw.rematch || {};
-    if (rm.expired) {
-      bouton(state, ctx, cx - 130, btnY, 260, 46, 'Adversaire parti', { kind: 'noop' },
-        { enabled: false });
-    } else if (rm.launching) {
-      bouton(state, ctx, cx - 130, btnY, 260, 46, 'Revanche en cours…', { kind: 'noop' },
-        { enabled: false });
-    } else if (rm.offeredByMe) {
-      bouton(state, ctx, cx - 130, btnY, 260, 46, 'En attente de l\'adversaire…', { kind: 'noop' },
-        { enabled: false });
+    if (rm.incomingOffer) {
+      btnY -= 54;
+      ctx.fillStyle = UI_THEME.amber;
+      ctx.font = `700 14px ${F_TEXTE}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(`${state.pvw.oppPseudo || 'L\'adversaire'} propose une revanche`, cx, btnY - 20);
+      bouton(state, ctx, cx - 130, btnY, 124, 46, '✓ Accepter', { kind: 'acceptRematch' },
+        { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'couleurs inversées' });
+      bouton(state, ctx, cx + 6, btnY, 124, 46, '✕ Refuser', { kind: 'declineRematch' },
+        { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'rester au menu' });
     } else {
-      const sub = rm.offeredByOpp ? 'l\'adversaire propose une revanche !' : 'couleurs inversées';
-      bouton(state, ctx, cx - 130, btnY, 260, 46, '🔁 Revanche', { kind: 'rematch' },
-        { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub });
+      btnY -= 54;
+      if (rm.expired || rm.declined) {
+        bouton(state, ctx, cx - 130, btnY, 260, 46, rm.declined ? 'Revanche refusée' : 'Adversaire parti', { kind: 'noop' },
+          { enabled: false });
+      } else if (rm.launching) {
+        bouton(state, ctx, cx - 130, btnY, 260, 46, 'Revanche en cours…', { kind: 'noop' },
+          { enabled: false });
+      } else if (rm.offeredByMe) {
+        bouton(state, ctx, cx - 130, btnY, 260, 46, 'En attente de l\'adversaire…', { kind: 'noop' },
+          { enabled: false });
+      } else {
+        bouton(state, ctx, cx - 130, btnY, 260, 46, '🔁 Revanche', { kind: 'rematch' },
+          { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'couleurs inversées' });
+      }
     }
   }
 
@@ -2547,8 +2566,7 @@ function dessineMenuDashboard(ctx, state) {
       dbText('VS', contentX + contentW / 2, contentY + 39, `700 11px ${F_DB}`, C.goldBright, 'center');
       dbText('JOUEUR 2', contentX + contentW - 170, contentY + 39, `600 18px ${F_DB_BRAND}`, C.text, 'center');
       dbText('Partie locale · chacun son tour', contentX + contentW / 2, contentY + 72, `11px ${F_DB}`, C.muted, 'center');
-      dbCta(contentX + 24, contentY + 93, 196, 36, 'Jouer classique', { kind: 'pickMode', mode: 'pvp' }, { fill: C.card, stroke: C.border, shadow: C.wineDark });
-      dbCta(contentX + contentW - 244, contentY + 93, 220, 36, 'Chasse aux améliorations', { kind: 'pickMode', mode: 'hunt' }, { fill: C.gold, stroke: C.goldBright, shadow: C.wineDark });
+      dbCta(contentX + (contentW - 220) / 2, contentY + 93, 220, 36, 'Jouer', { kind: 'pickMode', mode: 'pvp' }, { fill: C.card, stroke: C.border, shadow: C.wineDark });
     } else if (activeMode === 'pvw') {
       dbText('PRÊT À CHERCHER UN ADVERSAIRE', contentX + 30, contentY + 38, `700 13px ${F_DB}`, C.text);
       dbText('Classement estimé · partie en ligne', contentX + 30, contentY + 66, `11px ${F_DB}`, C.muted);
@@ -2593,13 +2611,13 @@ function dessineMenuDashboard(ctx, state) {
     ));
 
     const tailleY = combatY + 28;
-    const tailleW = (contentW - optionLabelW - optionGap - 8) / 2;
+    const tailleW = (contentW - optionLabelW - optionGap * 2 - 8) / 3;
     dbText('TAILLE', optionX, tailleY + 12, `700 9px ${F_DB}`, C.muted);
-    [['std', '8 × 8'], ['l15', '15 × 8']].forEach(([id, label], i) => dbControl(
+    [['std', '8 × 8'], ['l15', '15 × 8'], ['bonus', 'PLATEAU BONUS']].forEach(([id, label], i) => dbControl(
       optionX + optionLabelW + i * (tailleW + optionGap), tailleY, tailleW, 24,
       label, { kind: 'pickTaille', value: id },
       { fill: id === varTail ? C.gold : C.field, selected: id === varTail, radius: 7,
-        font: `700 9px ${F_DB}`, textColor: id === varTail ? C.bg : C.text },
+        font: `700 ${id === 'bonus' ? 7 : 9}px ${F_DB}`, textColor: id === varTail ? C.bg : C.text },
     ));
   }
 
@@ -2755,47 +2773,10 @@ function dessineMatchmaking(ctx, state) {
         { color: c.s === 300 ? UI_THEME.amber : UI_THEME.card, textColor: c.s === 300 ? UI_THEME.buttonText : UI_THEME.text, sub: c.sub });
     });
 
-    // Variante (GDD §7.2 v3.1) — partie PRIVÉE uniquement : le créateur impose,
-    // l'ami en hérite. Chips identiques au menu local, sélection partagée via
-    // state.menu (pickEconomie/pickCombat autorisés ici par peutChoisirVariante).
-    // La file publique reste Standard × Standard : aucun chip côté 'search'.
-    let retourY = 432;
-    if (mm.pendingAction === 'private') {
-      const varEco = (state.menu && state.menu.economie) || 'standard';
-      const varCbt = (state.menu && state.menu.combat) || 'standard';
-      ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-      ctx.fillText('VARIANTE  —  ton ami hérite de ton choix', cx, 408);
-      // Rangée ÉCONOMIE (3 chips 92×26) puis COMBAT (2 chips 142×26), style menu.
-      const rows = [
-        { list: ECONOMIES, w: 92, kind: 'pickEconomie', sel: varEco, y: 416 },
-        { list: COMBATS,   w: 142, kind: 'pickCombat',   sel: varCbt, y: 450 },
-      ];
-      for (const row of rows) {
-        const total = row.list.length * row.w + (row.list.length - 1) * 8;
-        row.list.forEach((it, i) => {
-          const x = cx - total / 2 + i * (row.w + 8);
-          const sel = row.sel === it.id;
-          state.ui.buttons.push({
-            x, y: row.y, w: row.w, h: 26,
-            action: { kind: row.kind, value: it.id }, enabled: true, radius: 8,
-          });
-          const selColor = row.kind === 'pickCombat' && it.id === 'elimX2' ? UI_THEME.danger
-            : (row.kind === 'pickCombat' ? UI_THEME.primary : UI_THEME.amber);
-          ctx.fillStyle = ombreBouton(sel ? selColor : UI_THEME.card);
-          roundRect(ctx, x, row.y + 3, row.w, 26, 8); ctx.fill();
-          ctx.fillStyle = sel ? selColor : UI_THEME.card;
-          roundRect(ctx, x, row.y, row.w, 26, 8); ctx.fill();
-          ctx.lineWidth = sel ? 3 : 1.5; ctx.strokeStyle = sel ? UI_THEME.border : UI_THEME.border;
-          roundRect(ctx, x, row.y, row.w, 26, 8); ctx.stroke();
-          ctx.fillStyle = sel && row.kind === 'pickCombat' ? UI_THEME.text : (sel ? UI_THEME.buttonText : UI_THEME.text);
-          ctx.font = `11px ${F_DISPLAY}`;
-          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText(it.label.toUpperCase(), x + row.w / 2, row.y + 13);
-        });
-      }
-      retourY = 500;
-    }
+    // Les variantes historiques ÉCUS/COMBAT ont été retirées de la création privée.
+    // Une partie « Jouer avec un ami » démarre désormais en Standard × Standard ;
+    // le Plateau bonus reste sélectionnable séparément via TAILLE DE PLATEAU.
+    const retourY = 432;
 
     // Retour au lobby (aucun réseau engagé à ce stade).
     bouton(state, ctx, cx - wB / 2, retourY, wB, hB, '← Retour',
@@ -2821,8 +2802,8 @@ function dessineMatchmaking(ctx, state) {
     ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
     ctx.fillText(`Temps écoulé : ${elapsed}s  ·  Niveau : ${bandLabel}  ·  ⏱ ${cadenceLabel(mm.cadence || 300)}`, cx, 270);
 
-    // Badge CLASSÉ / HORS COMPÉTITION : config déjà engagée (variante standard forcée,
-    // taille transmise à findMatch).
+    // Badge CLASSÉ / HORS COMPÉTITION : la file bonus est publique mais dédiée,
+    // et reste volontairement hors classement.
     dessineBadgeClasse(ctx, state, cx, 296, 'pvp_standard',
       mm.taille || (state.menu && state.menu.taille) || 'std');
 
@@ -3489,6 +3470,22 @@ function dessineLearnPanel(ctx, state, now) {
   const x = __PANEL_X_RUNTIME, w = CANVAS_W - x - 16;
   const game = LEARN_GAMES[state.learnIndex];
   if (!game) return;
+
+  // Une fois la pièce sélectionnée, on ouvre le vrai catalogue d'achat :
+  // l'utilisateur doit voir et cliquer la carte d'amélioration attendue.
+  if (state.panelPiece && state.phase !== 'gameover') {
+    ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('ACHAT · APPRENDRE', x, OY + 8);
+    ctx.fillStyle = game.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
+    ctx.fillText(`${game.title.toUpperCase()} · ${game.upgrade.toUpperCase()}`, x, OY + 30);
+    dessineCatalogue(ctx, state, x, OY + 48, w, now);
+    bouton(state, ctx, x, CANVAS_H - 92, w, 34, '↻ Recommencer', { kind: 'learnRestart' },
+      { color: UI_THEME.card, textColor: UI_THEME.text });
+    bouton(state, ctx, x, CANVAS_H - 50, w, 34, '← Menu APPRENDRE', { kind: 'learnHub' },
+      { color: UI_THEME.primary, textColor: UI_THEME.text });
+    return;
+  }
   ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   ctx.fillText('APPRENDRE', x, OY + 8);
@@ -3503,7 +3500,11 @@ function dessineLearnPanel(ctx, state, now) {
   learnWrap(ctx, `Objectif : ${game.objective}`, x + 14, OY + 158, w - 28, 15, 2);
 
   const hint = apprendreHint(state);
-  if (hint && state.selected && game.power) {
+  if (state.selected && !state.learnPurchased && game.upgradeId) {
+    bouton(state, ctx, x, OY + 214, w, 38, 'Acheter l’amélioration', { kind: 'ameliorer' },
+      { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: `${game.upgrade} · ${game.cost} écus` });
+  }
+  if (hint && state.selected && game.power && state.learnPurchased) {
     const actionByPower = { ruee: 'ruee', rayon: 'rayon', vet: 'vet', hypnose: 'hypnose', decret: 'decret' };
     const kind = actionByPower[game.power];
     if (kind) bouton(state, ctx, x, OY + 214, w, 38, game.power.toUpperCase(), { kind },
@@ -3511,11 +3512,11 @@ function dessineLearnPanel(ctx, state, now) {
   }
   if (state.selected) {
     ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
-    ctx.fillText('Pièce sélectionnée · joue sur le plateau', x, OY + 278);
+    ctx.fillText(state.learnPurchased ? 'Amélioration achetée · joue sur le plateau' : 'Pièce sélectionnée · achète d’abord l’amélioration', x, OY + 278);
   }
   bouton(state, ctx, x, CANVAS_H - 92, w, 34, '↻ Recommencer', { kind: 'learnRestart' },
     { color: UI_THEME.card, textColor: UI_THEME.text });
-  bouton(state, ctx, x, CANVAS_H - 50, w, 34, '← Hub APPRENDRE', { kind: 'learnHub' },
+  bouton(state, ctx, x, CANVAS_H - 50, w, 34, '← Menu APPRENDRE', { kind: 'learnHub' },
     { color: UI_THEME.primary, textColor: UI_THEME.text });
 }
 
@@ -3547,6 +3548,11 @@ function dessinePuzzlePanel(ctx, state, now) {
     learnWrap(ctx, puzzle.text, x + 14, OY + 104, w - 28, 17, 4);
     ctx.fillStyle = UI_THEME.amber; ctx.font = `700 11px ${F_TEXTE}`;
     learnWrap(ctx, `Objectif : ${puzzle.objective}`, x + 14, OY + 176, w - 28, 15, 2);
+    if (state.puzzleFeedback) {
+      ctx.fillStyle = UI_THEME.dangerText || '#F4EDEA';
+      ctx.font = `700 11px ${F_TEXTE}`;
+      learnWrap(ctx, state.puzzleFeedback, x + 14, OY + 210, w - 28, 15, 3);
+    }
 
     if (state.selected && !state.puzzlePurchased) {
       bouton(state, ctx, x, OY + 246, w, 38, 'Acheter la solution', { kind: 'ameliorer' },
@@ -3556,7 +3562,7 @@ function dessinePuzzlePanel(ctx, state, now) {
       ctx.fillStyle = UI_THEME.primaryDark; ctx.font = `700 12px ${F_TEXTE}`;
       ctx.fillText(`✓ ${puzzle.upgrade} acheté — résous la position`, x, OY + 246);
       if (state.selected && puzzle.power && state.phase === 'play') {
-        const actionByPower = { ruee: 'ruee' };
+        const actionByPower = { ruee: 'ruee', sacrifice: 'sacrifice' };
         const kind = actionByPower[puzzle.power];
         if (kind) bouton(state, ctx, x, OY + 266, w, 38, puzzle.power.toUpperCase(), { kind },
           { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'activer maintenant' });
@@ -3566,7 +3572,7 @@ function dessinePuzzlePanel(ctx, state, now) {
 
   bouton(state, ctx, x, CANVAS_H - 92, w, 34, '↻ Recommencer', { kind: 'puzzleRestart' },
     { color: UI_THEME.card, textColor: UI_THEME.text });
-  bouton(state, ctx, x, CANVAS_H - 50, w, 34, '← Hub puzzles',
+  bouton(state, ctx, x, CANVAS_H - 50, w, 34, '← Menu puzzles',
     { kind: 'puzzleHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
 }
 
@@ -3584,7 +3590,7 @@ function dessinePuzzleSuccess(ctx, state) {
   ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
   learnWrap(ctx, puzzle.detail, cx, py + 116, pw - 44, 18, 4);
   bouton(state, ctx, px + 20, py + ph - 56, 118, 36, 'Rejouer', { kind: 'puzzleRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text });
-  bouton(state, ctx, px + 156, py + ph - 56, 118, 36, 'Hub', { kind: 'puzzleHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
+  bouton(state, ctx, px + 156, py + ph - 56, 118, 36, 'Menu', { kind: 'puzzleHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
   const next = state.puzzleIndex + 1 < TOTAL_PUZZLES;
   bouton(state, ctx, px + 292, py + ph - 56, 118, 36, next ? 'Suivant' : 'Terminé',
     next ? { kind: 'puzzleNext' } : { kind: 'puzzleHub' },
@@ -3605,7 +3611,7 @@ function dessineLearnSuccess(ctx, state) {
   ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
   learnWrap(ctx, game.detail, cx, py + 116, pw - 44, 18, 4);
   bouton(state, ctx, px + 20, py + ph - 56, 112, 36, 'Rejouer', { kind: 'learnRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text });
-  bouton(state, ctx, px + 148, py + ph - 56, 112, 36, 'Hub', { kind: 'learnHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
+  bouton(state, ctx, px + 148, py + ph - 56, 112, 36, 'Menu', { kind: 'learnHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
   const next = state.learnIndex + 1 < LEARN_GAMES.length;
   bouton(state, ctx, px + 276, py + ph - 56, 114, 36, next ? 'Suivant' : 'Menu',
     next ? { kind: 'learnNext' } : { kind: 'retourMenu' },
@@ -3626,7 +3632,7 @@ export function render(ctx, state, now) {
     return;
   }
 
-  // Hub APPRENDRE — écran autonome, sans plateau ni réseau.
+  // Menu APPRENDRE — écran autonome, sans plateau ni réseau.
   if (state.phase === 'learn-hub') {
     dessineLearnHub(ctx, state);
     finaliserBoutons(ctx, state);

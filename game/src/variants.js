@@ -8,7 +8,7 @@
 //
 // Implémenté par gameplay-dev sur spec du game-designer 12/07.
 
-import { REVENU_PAR_COUP } from './constants.js?v=108';
+import { REVENU_PAR_COUP } from './constants.js?v=109';
 
 // --- Catalogues des deux axes orthogonaux ---
 

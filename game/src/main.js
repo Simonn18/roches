@@ -1,37 +1,37 @@
 // roychec — point d'entrée : boucle de jeu, entrées souris/clavier, logique de tour.
 // MVP (GDD §9) : hot-seat 2 joueurs, économie d'écus, 1 amélioration par type de pièce.
 // Cycle 1 IA (design/spec-ia.md) : menu d'accueil, mode PvAI optionnel, hook bot dummy.
-import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=107';
-import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=115';
-import { initialiserChasse, recolterChasse } from './hunt.js?v=2';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=139';
+import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
+import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
+import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=154';
 import { iaDecideTour } from './ai.js?v=111';
-import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=108';
+import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
 import { demarrerTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
   rejouerEtape, tutorielPermet } from './tutorial.js?v=107';
 import { demarrerApprendre, demarrerPuzzles, demarrerMiniJeu, demarrerPuzzle,
   reinitialiserMiniJeu, reinitialiserPuzzle, verifierMiniJeu, verifierPuzzle,
-  marquerMiniJeuReussi, marquerPuzzleReussi, TOTAL_LEARN_GAMES, TOTAL_PUZZLES,
-  apprendreEstDebloque, apprendrePuzzleEstDebloque } from './learn.js?v=5';
+  marquerMiniJeuReussi, marquerPuzzleReussi, marquerPuzzleReponse, puzzleReponse,
+  TOTAL_LEARN_GAMES, TOTAL_PUZZLES,
+  apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=15';
 import { initAccount, startAuth, logout, getAccount, getSupabaseClient } from './account.js?v=107';
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue,
-  report as onlineReport, requestResync, sendResync, setSeq as onlineSetSeq, clearInbox as onlineClearInbox,
-  sendRematch, rematch as onlineRematch, inboxHasGap } from './online.js?v=107';
+  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=110';
 // Deck editor (recovery 29/07 [23:30]) : API complète de decks.js (couche DONNÉES).
 // loadDecks/saveDecks étaient déjà importés ; on ajoute les helpers d'id/active/clone.
 import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import {
   UPGRADES, UPGRADES_PAR_TYPE, VALEUR_PIECE, REVENU_PAR_COUP,
   MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT, UI_THEME, UI_THEMES,
-} from './constants.js?v=108';
+} from './constants.js?v=109';
 import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js?v=107';
 // Phase A.5 v2 Phase 3 : import des TAILLES_DE_PLATEAU depuis la maison canonique
 // (zero-dep, cf. tailles.js + commit ba30d273). `TAILLES` n'est pas directement utilisé
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
-import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=107';
+import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
 
 const canvas = document.getElementById('jeu');
 canvas.width = CANVAS_W;
@@ -110,6 +110,18 @@ const PVW_TEMPS_INITIAL = 300;   // secondes par joueur (fallback si cadence abs
 const PVW_RECO_WINDOW = 30;      // fenêtre de reconnexion (s) avant victoire par abandon (§7.2)
 const PVW_GAP_RESYNC_MS = 2000;  // trou de seq persistant → demande de resync (§5.6/§7.3)
 
+// Le Plateau bonus partage le même seed dans une partie en ligne : le matchId
+// Supabase est commun aux deux clients et évite tout tirage local divergent.
+function seedChasseDepuisMatch(matchId) {
+  const text = String(matchId || 'roychec-bonus');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
 // État initial : menu d'accueil (SPEC §1.4). Pas de plateau tant que
 // l'utilisateur n'a pas choisi un mode (PvP / PvAI + difficulté).
 let state = menuState();
@@ -182,19 +194,20 @@ function commencerPartie(mode, difficultyOrOptions) {
     // Mode PvP en ligne (spec-pvp-online). difficultyOrOptions = { side, matchId, oppPseudo, oppTrophies, cadence, variant }.
     const opts = difficultyOrOptions || {};
     const tempsInitial = (opts.cadence | 0) || PVW_TEMPS_INITIAL;
-    // Variante (GDD §7.2 v3.1) : uniquement les parties PRIVÉES (« Jouer avec un ami »)
-    // — le créateur impose, le rejoignant hérite via pvp_join_code, la revanche la copie.
-    // La file publique passe toujours DEFAULT_VARIANT (online.js force 'pvp_standard').
+    // Variante (GDD §7.2 v3.1) : le public et le privé utilisent la variante
+    // sélectionnée au menu ; la file publique reste Standard × Standard.
     // Les DEUX clients reçoivent le même id serveur → économies identiques → hash §5.4 OK.
-    // Phase A.5 v2 Phase 3 : taille du plateau en ligne. PUBLIC STANDARD-ONLY
-    // (GDD §7.2 strict file publique = 8×8 pour le Elo) ; PRIVÉ accepte la taille
-    // sélectionnée par le créateur (cf. schemas `pvp_create_private` size param).
-    // Le lockstep online FORCE côté serveur : cross-taille hash discordant →
-    // match voided (§3.4 dégradation gracieuse). Pour l'instant Phase 3 : on
-    // passe opts.taille si fourni (privé), sinon std (public).
+    // La taille est une clé de file côté serveur : bonus peut donc jouer en public,
+    // mais uniquement contre un autre joueur bonus (hors classement).
+    // Le serveur filtre la file par taille : aucun client bonus ne rencontre
+    // un client std/l15, ce qui garantit le lockstep et le même tirage bonus.
     const tailleOnline = opts.taille || DEFAULT_TAILLE;
-    state = creerEtat({ mode: 'pvw', difficulty: 1, variantId: opts.variant || DEFAULT_VARIANT, taille: tailleOnline });
+    const bonusSeed = tailleOnline === 'bonus' ? seedChasseDepuisMatch(opts.matchId) : undefined;
+    state = creerEtat({ mode: 'pvw', difficulty: 1, variantId: opts.variant || DEFAULT_VARIANT, taille: tailleOnline, huntRngSeed: bonusSeed });
     state.activeDeck = getActiveDeck(loadDecks());
+    if (state.bonusMode) {
+      initialiserChasse(state);
+    }
     state.pvw = {
       side: opts.side != null ? opts.side : 0,   // 0 = Bleu = trait, 1 = Corail
       matchId: opts.matchId || null,
@@ -223,6 +236,10 @@ function commencerPartie(mode, difficultyOrOptions) {
       rematch: null,                  // { offeredByMe, offeredByOpp, declined } — revanche (§9.4)
     };
     initReplay(state);
+    if (state.bonusMode) {
+      state.replay.huntBonuses = state.huntBonuses.map((cell) => cell ? { ...cell } : null);
+      state.replay.huntRngSeed = state.huntRngSeed;
+    }
     startPlaying();                   // online.js : passage en partie, remise seq/inbox à 0
     return;
   }
@@ -242,14 +259,18 @@ function commencerPartie(mode, difficultyOrOptions) {
   const tailleEffective = (mode === 'pvp' || mode === 'pvai' || mode === 'spectator' || mode === 'hunt')
     ? (tailleInput || DEFAULT_TAILLE)
     : DEFAULT_TAILLE;
-  state = creerEtat({ mode, difficulty: (difficultyOrOptions && difficultyOrOptions.difficulty) || 1, variantId, taille: tailleEffective });
+  // En local, le tirage reste différent à chaque partie. Le seed partagé par
+  // matchId est réservé aux parties PvP en ligne bonus.
+  const huntSeed = null;
+  state = creerEtat({ mode, difficulty: (difficultyOrOptions && difficultyOrOptions.difficulty) || 1, variantId, taille: tailleEffective, huntRngSeed: huntSeed });
   state.activeDeck = getActiveDeck(loadDecks());
   initReplay(state);
-  if (mode === 'hunt') {
+  if (state.bonusMode) {
     initialiserChasse(state);
     // Le replay doit pouvoir afficher les deux cases réservées dès son ouverture,
     // avant même la première récolte.
     state.replay.huntBonuses = state.huntBonuses.map((cell) => cell ? { ...cell } : null);
+    state.replay.huntRngSeed = state.huntRngSeed;
   }
   if (mode === 'spectator') planifierCoupIA();
 }
@@ -304,6 +325,8 @@ function commencerReplay(replayData) {
       : [null, null],
     huntCollected: [0, 0],
     huntLastAward: null,
+    bonusMode: replayData.taille === 'bonus',
+    huntRngSeed: replayData.huntRngSeed >>> 0,
     replayIndex: -1,
     replayPlaying: true,
     replaySpeed: 2,
@@ -531,11 +554,23 @@ function ameliorationsBloquees(p) {
 // verrouillés ne sont même pas affichés — le joueur ne voit que le chemin prévu.
 function coupsAutorises(piece) {
   const ms = coupsLegaux(state.board, piece);
-  if (state.mode !== 'tutorial') return ms;
-  return ms.filter((m) => tutorielPermet(state, { type: 'move', piece, move: m }));
+  if (state.mode === 'tutorial') {
+    return ms.filter((m) => tutorielPermet(state, { type: 'move', piece, move: m }));
+  }
+  if (state.mode === 'learn') {
+    // Apprendre montre tous les déplacements que la pièce pourrait faire.
+    // Le clic est filtré séparément par learnPermet() : les points non attendus
+    // restent visibles mais verrouillés pour rendre la règle compréhensible.
+    return ms;
+  }
+  return ms;
 }
 
 function selectionner(piece) {
+  if (state.mode === 'learn' && !learnPermet(state, { type: 'select', piece })) {
+    refusApprendre(piece);
+    return;
+  }
   state.selected = piece;
   state.legalMoves = coupsAutorises(piece);
   state.panelPiece = null;
@@ -599,7 +634,101 @@ function refusTutoriel(cell) {
   state.popups.push({ text: '🔒', x, y: y - 10, t0: performance.now(), color: UI_THEME.muted });
 }
 
+function refusApprendre(pieceOrCell) {
+  const cell = pieceOrCell && pieceOrCell.r != null
+    ? pieceOrCell
+    : state.learnExpectedPiece;
+  if (!cell) return;
+  const { x, y } = centreVue(cell.r, cell.c);
+  state.popups.push({ text: '🔒 ACTION GUIDÉE', x, y: y - 10, t0: performance.now(), color: UI_THEME.muted });
+  state.buzz = performance.now();
+}
+
+function autorisePouvoir(kind) {
+  const tutorialOk = tutorielPermet(state, { type: 'power', kind });
+  const learnOk = state.mode !== 'learn'
+    || learnPermet(state, { type: 'power', kind, piece: state.selected });
+  if (!tutorialOk || !learnOk) {
+    if (state.mode === 'learn') refusApprendre(state.selected);
+    return false;
+  }
+  return true;
+}
+
 // ---------- Fin de tour ----------
+function planifierReponsePuzzle() {
+  if (state.mode !== 'learn' || state.learnKind !== 'puzzle'
+      || !state.puzzlePurchased || state.puzzleResponseDone || state.puzzleResponsePending) return;
+  const response = puzzleReponse(state);
+  if (!response) return;
+  const piece = state.board[response.from.r] && state.board[response.from.r][response.from.c];
+  const target = state.board[response.to.r]?.[response.to.c] || null;
+  const blockedCapture = !!response.shieldedCapture;
+  if (!piece || piece.owner !== 1 || (!blockedCapture && target)) return;
+  // Même si la ligne est scénarisée, elle doit rester un vrai coup du moteur :
+  // une position tactique ne doit jamais être réparée par une mutation arbitraire.
+  const legal = blockedCapture
+    ? target && target.owner !== piece.owner
+      && coupsLegaux(state.board, piece).some((move) => move.r === response.to.r && move.c === response.to.c)
+    : coupsLegaux(state.board, piece).some((move) => move.r === response.to.r && move.c === response.to.c);
+  if (!legal) {
+    state.puzzleResponsePending = false;
+    state.puzzleFeedback = 'La réponse adverse ne peut pas être jouée dans cette position. Recommence le puzzle.';
+    return;
+  }
+
+  state.puzzleResponsePending = true;
+  state.phase = 'animating';
+  const termineReponse = () => {
+    marquerPuzzleReponse(state);
+    state.puzzleFeedback = response.text || '';
+    state.flashes.push({ r: response.to.r, c: response.to.c, t0: performance.now(), color: response.color || '#B86F6B' });
+    state.popups.push({
+      text: response.text || 'Réponse adverse',
+      x: centreVue(response.to.r, response.to.c).x,
+      y: centreVue(response.to.r, response.to.c).y - 24,
+      t0: performance.now(),
+      color: response.color || '#B86F6B',
+    });
+    state.phase = 'puzzle-game';
+  };
+  // Une capture absorbée par Couronne est mise en scène sans modifier la position
+  // logique du roi adverse : il approche la reine, puis revient sur sa case.
+  if (blockedCapture) {
+    target.shield = false;
+    state.puzzleShieldUsed = true;
+    state.anim = {
+      piece,
+      from: centreVue(response.from.r, response.from.c),
+      to: centreVue(response.to.r, response.to.c),
+      t0: performance.now(),
+      onDone() {
+        state.anim = {
+          piece,
+          from: centreVue(response.to.r, response.to.c),
+          to: centreVue(response.from.r, response.from.c),
+          t0: performance.now(),
+          onDone: termineReponse,
+        };
+      },
+    };
+    return;
+  }
+
+  state.board[response.from.r][response.from.c] = null;
+  piece.r = response.to.r;
+  piece.c = response.to.c;
+  piece.aBouge = true;
+  state.board[response.to.r][response.to.c] = piece;
+  state.anim = {
+    piece,
+    from: centreVue(response.from.r, response.from.c),
+    to: centreVue(response.to.r, response.to.c),
+    t0: performance.now(),
+    onDone: termineReponse,
+  };
+}
+
 function finDeTour() {
   // Tutoriel : pas d'adversaire — le tour revient toujours au joueur (les pièces
   // corail sont un décor piloté par les étapes). Sans ce garde, le tour passerait
@@ -637,6 +766,9 @@ function finDeTour() {
         if (p.debuffs[k] <= 0) delete p.debuffs[k];
       }
     }
+  }
+  if (state.mode === 'learn' && state.learnKind === 'puzzle') {
+    planifierReponsePuzzle();
   }
   // Hook IA : si c'est maintenant le tour du bot, planifier son coup.
   planifierCoupIA();
@@ -879,7 +1011,7 @@ function jouerCoup(piece, mv) {
 
   demarrerAnim(piece, from, { r: mv.r, c: mv.c }, () => {
     if (roiPris) { finPartie(state.turn); return; }
-    if (state.mode === 'hunt') {
+    if (state.bonusMode) {
       const award = recolterChasse(state, piece);
       if (award) {
         addFlash(award.cell.r, award.cell.c, 'gold');
@@ -1139,8 +1271,8 @@ function activerSHT() {
   finDeTour(); // consomme le tour
 }
 
-// Hypnose (fou) : les pièces ennemies (hors roi/reine) ne peuvent se déplacer dans un
-// rayon de 3 cases autour du fou pendant 2 tours.
+// Hypnose (fou) : les pièces ennemies (hors roi/reine) ne peuvent se déplacer dans
+// une case adjacente au fou pendant 2 tours.
 function activerHypnose() {
   const fou = state.selected;
   if (!fou || fou.type !== 'B' || !fou.upgrades.includes('hypnose')) return;
@@ -1373,6 +1505,10 @@ function executerEchange(cell) {
 
 // ---------- Achat ----------
 function ouvrirPanneau(piece) {
+  if (state.mode === 'learn' && !learnPermet(state, { type: 'panel', piece })) {
+    refusApprendre(piece);
+    return;
+  }
   state.selected = piece;
   state.legalMoves = coupsLegaux(state.board, piece);
   state.panelPiece = piece;
@@ -1388,6 +1524,10 @@ function deckUpgrades(type) {
 function acheter(id) {
   const p = state.panelPiece;
   if (!p) { console.warn('[acheter] no panelPiece'); return; }
+  if (state.mode === 'learn' && !learnPermet(state, { type: 'buy', id })) {
+    refusApprendre(p);
+    return;
+  }
   if (ameliorationsBloquees(p)) return; // S.H.T. : la pièce ne peut rien acheter
   const u = UPGRADES[id];
   if (!u || u.piece !== p.type) { console.warn('[acheter] unknown/invalid upgrade', id, p.type); return; }
@@ -1456,8 +1596,8 @@ function lancerRecherchePublique() {
   state.matchmaking.searchStart = Date.now();
   state.matchmaking.error = null;
   initOnline(supabase);
-  // [00:10] Passe la taille du plateau sélectionnée au menu (user peut choisir l15
-  // pour l'EN LIGNE aussi, ne reste plus limité à std côté file publique).
+  // Passe la taille du plateau sélectionnée au menu. Chaque taille possède une
+  // file publique séparée côté serveur ; bonus est hors classement.
   findMatch(
     state.matchmaking.cadence || PVW_TEMPS_INITIAL,
     variantIdFromMenu(state),
@@ -1473,14 +1613,12 @@ function lancerPartiePrivee() {
   initOnline(getSupabaseClient());
   state.matchmaking.mode = 'private_create';
   state.matchmaking.error = null;
-  state.matchmaking.privateCode = null;
-  // Variante (GDD §7.2 v3.1) : le créateur impose celle sélectionnée sur l'écran
-  // cadence (chips ÉCONOMIE/COMBAT, mémorisées en state.menu comme au menu local).
-  // Taille (GDD §7.2 v3.5) : créateur impose l15 si sélectionné — ce delta.
+  state.matchmaking.privateCode = null;    // Les boutons de variantes ont été retirés du lobby privé : la variante
+    // vient déjà du menu principal. La taille reste imposée par le créateur.
+
   createPrivate(
-    state.matchmaking.cadence || PVW_TEMPS_INITIAL,
-    variantIdFromMenu(state),
-    state.menu && state.menu.taille ? state.menu.taille : DEFAULT_TAILLE
+    state.matchmaking.cadence || PVW_TEMPS_INITIAL,      variantIdFromMenu(state),
+      state.menu && state.menu.taille ? state.menu.taille : DEFAULT_TAILLE
   ).then((code) => {
     if (code) state.matchmaking.privateCode = code;
   });
@@ -1556,6 +1694,10 @@ function hashState(s) {
   }
   str += `|${s.ecus[0]}|${s.ecus[1]}|${s.turn}|`;
   str += s.chain ? `${s.chain.piece.r}${s.chain.piece.c}${s.chain.type}` : '-';
+  if (s.bonusMode) {
+    str += `|bonus:${s.taille}|${s.huntRngSeed >>> 0}|${JSON.stringify(s.huntBonuses || [])}`
+      + `|${JSON.stringify(s.huntCollected || [0, 0])}`;
+  }
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   return (h >>> 0).toString(16);
@@ -1786,8 +1928,8 @@ function makePiece(d) {
 function pvwBuildSnapshot() {
   const p = state.pvw;
   const pieces = [];
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
+  for (let r = 0; r < state.board.length; r++) {
+    for (let c = 0; c < state.board[r].length; c++) {
       const q = state.board[r][c];
       if (!q) continue;
       pieces.push({
@@ -1802,9 +1944,13 @@ function pvwBuildSnapshot() {
     pieces,
     ecus: [state.ecus[0], state.ecus[1]],
     capturesDep: [state.capturesDep[0], state.capturesDep[1]], // départage §8.3 (fix W3)
-    turn: state.turn,
-    chain: state.chain ? { r: state.chain.piece.r, c: state.chain.piece.c, type: state.chain.type } : null,
-    clocks: [pvwLiveClock(0), pvwLiveClock(1)],
+    turn: state.turn,      chain: state.chain ? { r: state.chain.piece.r, c: state.chain.piece.c, type: state.chain.type } : null,
+      taille: state.taille,
+      bonusMode: !!state.bonusMode,
+      huntRngSeed: state.huntRngSeed >>> 0,
+      huntBonuses: state.huntBonuses ? state.huntBonuses.map((cell) => cell ? { ...cell } : null) : null,
+      huntCollected: state.huntCollected ? [...state.huntCollected] : [0, 0],
+      clocks: [pvwLiveClock(0), pvwLiveClock(1)],
     activeClock: state.turn,
     seq: getOnline().seq,
     hash: hashState(state),
@@ -1816,9 +1962,17 @@ function pvwBuildSnapshot() {
 function pvwApplySnapshot(snap) {
   const p = state.pvw;
   if (!p || p.ended || !snap || !Array.isArray(snap.pieces)) return;
-  const board = Array.from({ length: 8 }, () => Array(8).fill(null));
+  if (snap.taille && snap.taille !== state.taille) {
+    console.warn('[online] snapshot taille incompatible, resync rejeté', { local: state.taille, remote: snap.taille });
+    return;
+  }
+  if (!!snap.bonusMode !== !!state.bonusMode) {
+    console.warn('[online] snapshot bonus incompatible, resync rejeté');
+    return;
+  }
+  const board = Array.from({ length: state.board.length }, () => Array(state.board[0].length).fill(null));
   for (const d of snap.pieces) {
-    if (d.r < 0 || d.r > 7 || d.c < 0 || d.c > 7) continue;
+    if (d.r < 0 || d.r >= board.length || d.c < 0 || d.c >= board[0].length) continue;
     board[d.r][d.c] = makePiece(d);
   }
   state.board = board;
@@ -1826,6 +1980,10 @@ function pvwApplySnapshot(snap) {
   // Départage §8.3 : valeurs de vérité du survivant (backward compat : snapshot pré-v20 sans champ).
   if (Array.isArray(snap.capturesDep)) state.capturesDep = [snap.capturesDep[0], snap.capturesDep[1]];
   state.turn = snap.turn;
+  if (snap.bonusMode) state.bonusMode = true;
+  if (snap.huntRngSeed != null) state.huntRngSeed = snap.huntRngSeed >>> 0;
+  if (Array.isArray(snap.huntBonuses)) state.huntBonuses = snap.huntBonuses.map((cell) => cell ? { ...cell } : null);
+  if (Array.isArray(snap.huntCollected)) state.huntCollected = [...snap.huntCollected];
   state.selected = null; state.legalMoves = []; state.panelPiece = null; state.ruTargets = [];
   state.anim = null; state.phase = 'play';
   // Chaîne éventuelle en cours chez le survivant.
@@ -1889,14 +2047,54 @@ function onRematchMsg(msg) {
   const p = state.pvw;
   if (!p || !p.ended) return;
   if (!p.rematch) p.rematch = {};
-  if (msg.phase === 'offer' || msg.phase === 'accept') {
+  if (msg.phase === 'offer') {
+    // Proposition entrante : elle reste visible jusqu'à une décision explicite.
     p.rematch.offeredByOpp = true;
-    verifierRevanche();
+    p.rematch.incomingOffer = true;
+    p.rematch.declined = false;
+    return;
   }
+  if (msg.phase === 'accept') {
+    p.rematch.offeredByOpp = true;
+    p.rematch.incomingOffer = false;
+    verifierRevanche();
+    return;
+  }
+  if (msg.phase === 'decline') {
+    p.rematch.declined = true;
+    p.rematch.incomingOffer = false;
+    p.rematch.offeredByOpp = false;
+    return;
+  }
+  if (msg.phase === 'expire') {
+    p.rematch.expired = true;
+    p.rematch.incomingOffer = false;
+    p.rematch.offeredByOpp = false;
+  }
+}
+
+function accepterRevanche() {
+  const p = state.pvw;
+  if (!p || !p.ended || !p.rematch || !p.rematch.incomingOffer
+      || p.rematch.expired || p.rematch.declined) return;
+  p.rematch.incomingOffer = false;
+  p.rematch.offeredByMe = true;
+  p.rematch.declined = false;
+  sendRematch('accept');
+  verifierRevanche();
+}
+
+function refuserRevanche() {
+  const p = state.pvw;
+  if (!p || !p.ended || !p.rematch || !p.rematch.incomingOffer) return;
+  p.rematch.incomingOffer = false;
+  p.rematch.declined = true;
+  p.rematch.offeredByOpp = false;
+  sendRematch('decline');
 }
 function verifierRevanche() {
   const p = state.pvw;
-  if (!p || !p.rematch || p.rematch.launching) return;
+  if (!p || !p.rematch || p.rematch.launching || p.rematch.expired || p.rematch.declined) return;
   if (p.rematch.offeredByMe && p.rematch.offeredByOpp) {
     p.rematch.launching = true;
     const prevId = p.matchId || getOnline().matchId;
@@ -1926,7 +2124,10 @@ function pvwTick() {
   // Revanche en attente : timeout 20 s si l'adversaire ne répond pas (§9.4).
   if (p.ended && p.rematch && p.rematch.offeredByMe && !p.rematch.offeredByOpp
       && !p.rematch.launching && !p.rematch.expired) {
-    if ((performance.now() - p.rematch.t0) / 1000 > 20) p.rematch.expired = true;
+    if ((performance.now() - p.rematch.t0) / 1000 > 20) {
+      p.rematch.expired = true;
+      sendRematch('expire');
+    }
   }
 
   // Désync détectée (hash discordant, §3.4) : tenter un resync ; au-delà de 2 essais, annuler.
@@ -1992,13 +2193,17 @@ function actionBouton(action) {
   switch (action.kind) {
     case 'ameliorer':
       if (state.selected && !ameliorationsBloquees(state.selected)
-          && tutorielPermet(state, { type: 'panel', piece: state.selected })) {
+          && tutorielPermet(state, { type: 'panel', piece: state.selected })
+          && (state.mode !== 'learn' || learnPermet(state, { type: 'panel', piece: state.selected }))) {
         ouvrirPanneau(state.selected);
+      } else if (state.mode === 'learn' && state.selected) {
+        refusApprendre(state.selected);
       }
       break;
     case 'closePanel': state.panelPiece = null; break;
     // Promotion (GDD §5.1.b) : choix de pièce du panneau modal → le coup part enfin.
     case 'promoChoice': {
+      if (state.mode === 'learn') { refusApprendre(state.learnExpectedPiece); break; }
       if (state.phase !== 'promotion' || !state.promo) break;
       const { piece, mv } = state.promo;
       state.promo = null;
@@ -2012,35 +2217,44 @@ function actionBouton(action) {
       deselectionner();
       break;
     case 'buy': {
-      // Tutoriel : seule la carte de l'étape est achetable (refus = tremblement).
-      if (!tutorielPermet(state, { type: 'buy', id: action.id })) {
+      // Tutoriel et Apprendre : seule la carte attendue répond (refus = feedback).
+      if (!tutorielPermet(state, { type: 'buy', id: action.id })
+          || (state.mode === 'learn' && !learnPermet(state, { type: 'buy', id: action.id }))) {
         state.buzz = performance.now(); state.buzzId = action.id;
         break;
       }
-      const puzzlePiece = state.mode === 'learn' && state.learnKind === 'puzzle'
-        ? state.panelPiece : null;
-      const upgradesBefore = puzzlePiece ? puzzlePiece.upgrades.length : 0;
+      const learnPiece = state.mode === 'learn' ? state.panelPiece : null;
+      const upgradesBefore = learnPiece ? learnPiece.upgrades.length : 0;
       acheter(action.id);
-      // L'achat doit être réel et porter sur la carte attendue : les puzzles ne
-      // se valident jamais sur un simple clic de catalogue.
-      if (puzzlePiece && puzzlePiece.upgrades.length > upgradesBefore
-          && action.id === state.puzzleUpgrade) {
-        state.puzzlePurchased = true;
+      // L'achat doit être réel : l'amélioration n'est utilisable qu'après son
+      // débit effectif, aussi bien dans les niveaux classiques que les puzzles.
+      if (learnPiece && learnPiece.upgrades.length > upgradesBefore) {
+        state.learnPurchased = true;
+        if (state.learnKind === 'puzzle') state.puzzlePurchased = true;
+        // Le scénario Bouclier est une démonstration sans déplacement : après
+        // l'achat, repasse dans la phase contrôlée par verifierMiniJeu() afin que
+        // scenarioBouclier puisse lancer l'attaque visuelle du pion adverse.
+        if (state.learnKind === 'classic' && state.learnAutoDemo) {
+          state.panelPiece = null;
+          state.selected = null;
+          state.legalMoves = [];
+          state.phase = 'learn-game';
+        }
       }
       break;
     }
     // Pouvoirs actifs : en tutoriel, seul le pouvoir prévu par l'étape répond.
-    case 'ruee': if (tutorielPermet(state, { type: 'power', kind: 'ruee' })) activerRuee(); break;
-    case 'rayon': if (tutorielPermet(state, { type: 'power', kind: 'rayon' })) activerRayon(); break;
-    case 'rempart': if (tutorielPermet(state, { type: 'power', kind: 'rempart' })) activerRempart(); break;
-    case 'sacrifice': if (tutorielPermet(state, { type: 'power', kind: 'sacrifice' })) activerSacrifice(); break;
-    case 'decret': if (tutorielPermet(state, { type: 'power', kind: 'decret' })) activerDecret(); break;
-    case 'sht': if (tutorielPermet(state, { type: 'power', kind: 'sht' })) activerSHT(); break;
-    case 'hypnose': if (tutorielPermet(state, { type: 'power', kind: 'hypnose' })) activerHypnose(); break;
-    case 'cavalerie': if (tutorielPermet(state, { type: 'power', kind: 'cavalerie' })) activerCavalerie(); break;
-    case 'echange': if (tutorielPermet(state, { type: 'power', kind: 'echange' })) activerEchange(); break;
-    case 'vet': if (tutorielPermet(state, { type: 'power', kind: 'vet' })) activerVet(); break;
-    case 'epine': if (tutorielPermet(state, { type: 'power', kind: 'epine' })) activerEpine(); break;
+    case 'ruee': if (autorisePouvoir('ruee')) activerRuee(); break;
+    case 'rayon': if (autorisePouvoir('rayon')) activerRayon(); break;
+    case 'rempart': if (autorisePouvoir('rempart')) activerRempart(); break;
+    case 'sacrifice': if (autorisePouvoir('sacrifice')) activerSacrifice(); break;
+    case 'decret': if (autorisePouvoir('decret')) activerDecret(); break;
+    case 'sht': if (autorisePouvoir('sht')) activerSHT(); break;
+    case 'hypnose': if (autorisePouvoir('hypnose')) activerHypnose(); break;
+    case 'cavalerie': if (autorisePouvoir('cavalerie')) activerCavalerie(); break;
+    case 'echange': if (autorisePouvoir('echange')) activerEchange(); break;
+    case 'vet': if (autorisePouvoir('vet')) activerVet(); break;
+    case 'epine': if (autorisePouvoir('epine')) activerEpine(); break;
     // Décliner un enchaînement (Double coup / Second galop) : pas de cooldown posé.
     case 'downloadReplay': downloadReplayMD(state); break;
     // Écran REPLAYS dédié (plein écran, comme le lobby en ligne) — remplace
@@ -2180,8 +2394,10 @@ function actionBouton(action) {
     // SPEC §5.3 : NOUVELLE PARTIE depuis l'écran de victoire = retour au menu
     // d'accueil (pas relance directe).
     case 'restart': retourMenu(); break;
-    // Revanche PvP (§9.4) : proposer à l'adversaire (couleurs inversées si accepté).
+    // Revanche PvP (§9.4) : proposer, accepter ou refuser une revanche.
     case 'rematch': proposerRevanche(); break;
+    case 'acceptRematch': accepterRevanche(); break;
+    case 'declineRematch': refuserRevanche(); break;
     // Cycle A — compte (spec-online §5.1). L'auth/overlay vit dans account.js ; ici on
     // ne fait qu'ouvrir/fermer. Une panne réseau n'atteint jamais le reste du jeu.
     case 'login': startAuth(); break;
@@ -2310,13 +2526,10 @@ function actionBouton(action) {
         state.menu.combat = action.value;
       }
       break;
-    // Phase A.5 v2 Phase 3 : nouvelle row « TAILLE DE PLATEAU » dans l'accordéon
-    // VARIANTES. 2 chips « 8 × 8 » (std, héritage MVP v2 byte-équivalent) + « 8 × 15 »
-    // (l15 Phase A.5 — public STANDARD-only §7.2 strict, hot-seat + privé acceptés).
-    // Si user pick l15 hors hot-seat, console.warn silencieux côté commencerPartie
-    // → fallback std (l15 online est forcé côté serveur, l15 PvAI futur Phase v3).
+      // Phase A.5 : la taille de plateau est sélectionnable depuis le menu principal.
+    // En ligne, chaque taille utilise une file publique séparée ; bonus est hors classement.
     case 'pickTaille':
-      if (peutChoisirVariante() && ['std', 'l15'].includes(action.value)) {
+      if (peutChoisirVariante() && ['std', 'l15', 'bonus'].includes(action.value)) {
         state.menu.taille = action.value;
       }
       break;
@@ -2425,7 +2638,11 @@ function actionBouton(action) {
         state.matchmaking.mode = 'search';
         state.matchmaking.error = null;
         initOnline(getSupabaseClient());
-        findMatch(state.matchmaking.cadence || PVW_TEMPS_INITIAL);
+        findMatch(
+          state.matchmaking.cadence || PVW_TEMPS_INITIAL,
+          variantIdFromMenu(state),
+          state.menu && state.menu.taille ? state.menu.taille : DEFAULT_TAILLE
+        );
       }
       break;
   }
@@ -2518,7 +2735,8 @@ canvas.addEventListener('mousedown', (e) => {
   }
 
   if (state.phase === 'animating' || state.phase === 'gameover' || state.phase === 'replay'
-      || state.phase === 'learn-success' || state.phase === 'puzzle-success') return;
+      || state.phase === 'learn-success' || state.phase === 'puzzle-success'
+      || state.phase === 'learn-success-pending' || state.phase === 'puzzle-success-pending') return;
   // Promotion en attente de choix : un clic hors du panneau (les boutons sont déjà
   // passés au hit-test ci-dessus) ANNULE et rend la sélection (GDD §5.1.b).
   if (state.phase === 'promotion') {
@@ -2541,31 +2759,52 @@ canvas.addEventListener('mousedown', (e) => {
   // 2) Ciblage d'un pouvoir actif (Ruée / Rayon sacré / Décret).
   const surCible = state.ruTargets.some((t) => t.r === cell.r && t.c === cell.c);
   if (state.phase === 'ruee-target') {
-    if (surCible) executerRuee(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    const allowed = state.mode !== 'learn' || learnPermet(state, { type: 'target', cell });
+    if (surCible && allowed) executerRuee(cell);
+    else if (state.mode === 'learn') refusApprendre(cell);
+    else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
   if (state.phase === 'rayon-target') {
-    if (surCible) executerRayon(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    const allowed = state.mode !== 'learn' || learnPermet(state, { type: 'target', cell });
+    if (surCible && allowed) executerRayon(cell);
+    else if (state.mode === 'learn') refusApprendre(cell);
+    else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
   if (state.phase === 'decret-target') {
-    if (surCible) executerDecret(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    const allowed = state.mode !== 'learn' || learnPermet(state, { type: 'target', cell });
+    if (surCible && allowed) executerDecret(cell);
+    else if (state.mode === 'learn') refusApprendre(cell);
+    else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
   if (state.phase === 'cavalerie-target') {
-    if (surCible) executerCavalerie(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    const allowed = state.mode !== 'learn' || learnPermet(state, { type: 'target', cell });
+    if (surCible && allowed) executerCavalerie(cell);
+    else if (state.mode === 'learn') refusApprendre(cell);
+    else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
   if (state.phase === 'cavalerie-push') {
-    if (surCible) executerPousseeCavalerie(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    const allowed = state.mode !== 'learn' || learnPermet(state, { type: 'target', cell });
+    if (surCible && allowed) executerPousseeCavalerie(cell);
+    else if (state.mode === 'learn') refusApprendre(cell);
+    else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
   if (state.phase === 'echange-target') {
-    if (surCible) executerEchange(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    const allowed = state.mode !== 'learn' || learnPermet(state, { type: 'target', cell });
+    if (surCible && allowed) executerEchange(cell);
+    else if (state.mode === 'learn') refusApprendre(cell);
+    else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
   if (state.phase === 'vet-target') {
-    if (surCible) executerVet(cell); else { state.phase = 'play'; state.ruTargets = []; }
+    const allowed = state.mode !== 'learn' || learnPermet(state, { type: 'target', cell });
+    if (surCible && allowed) executerVet(cell);
+    else if (state.mode === 'learn') refusApprendre(cell);
+    else { state.phase = 'play'; state.ruTargets = []; }
     return;
   }
 
@@ -2576,10 +2815,15 @@ canvas.addEventListener('mousedown', (e) => {
     const mv = state.legalMoves.find((m) => m.r === cell.r && m.c === cell.c);
     if (mv) {
       // Ceinture tutoriel : les coups verrouillés sont déjà filtrés de legalMoves.
-      if (!tutorielPermet(state, { type: 'move', piece: state.selected, move: mv })) return;
+      if (!tutorielPermet(state, { type: 'move', piece: state.selected, move: mv })
+          || (state.mode === 'learn' && !learnPermet(state, { type: 'move', piece: state.selected, move: mv }))) {
+        if (state.mode === 'learn') refusApprendre(cell);
+        return;
+      }
       // Promotion (GDD §5.1.b) : le choix de pièce précède le coup — panneau modal,
       // le coup part avec mv.promo (une seule émission réseau, hash cohérent).
       if (mv.promotion && state.selected.type === 'P') {
+        if (state.mode === 'learn') { refusApprendre(cell); return; }
         state.promo = { piece: state.selected, mv };
         state.phase = 'promotion';
         return;
@@ -2588,7 +2832,11 @@ canvas.addEventListener('mousedown', (e) => {
     }
     if (state.chain) return; // enchaînement en cours : seule la pièce enchaînée agit
     if (cliquee && cliquee.owner === state.turn) {
-      if (!tutorielPermet(state, { type: 'select', piece: cliquee })) { refusTutoriel(cell); return; }
+      if (!tutorielPermet(state, { type: 'select', piece: cliquee })
+          || (state.mode === 'learn' && !learnPermet(state, { type: 'select', piece: cliquee }))) {
+        if (state.mode === 'learn') refusApprendre(cell); else refusTutoriel(cell);
+        return;
+      }
       selectionner(cliquee); return;
     }
     deselectionner();
@@ -2598,7 +2846,11 @@ canvas.addEventListener('mousedown', (e) => {
   // 4) Rien de sélectionné : sélectionner sa propre pièce (l'étape du tutoriel
   // peut restreindre à une pièce précise — les autres affichent un cadenas).
   if (cliquee && cliquee.owner === state.turn) {
-    if (!tutorielPermet(state, { type: 'select', piece: cliquee })) { refusTutoriel(cell); return; }
+    if (!tutorielPermet(state, { type: 'select', piece: cliquee })
+        || (state.mode === 'learn' && !learnPermet(state, { type: 'select', piece: cliquee }))) {
+      if (state.mode === 'learn') refusApprendre(cell); else refusTutoriel(cell);
+      return;
+    }
     selectionner(cliquee);
   }
 });
@@ -2616,7 +2868,11 @@ canvas.addEventListener('contextmenu', (e) => {
     const p = state.board[cell.r][cell.c];
     if (p && p.owner === state.turn && !ameliorationsBloquees(p)) {
       // Tutoriel : le panneau ne s'ouvre que sur la pièce prévue par l'étape.
-      if (!tutorielPermet(state, { type: 'panel', piece: p })) { refusTutoriel(cell); return; }
+      if (!tutorielPermet(state, { type: 'panel', piece: p })
+          || (state.mode === 'learn' && !learnPermet(state, { type: 'panel', piece: p }))) {
+        if (state.mode === 'learn') refusApprendre(cell); else refusTutoriel(cell);
+        return;
+      }
       ouvrirPanneau(p); return;
     }
   }
@@ -2668,9 +2924,16 @@ function update(now) {
   // peut ensuite recommencer, revenir au hub ou retourner au menu principal.
   if (state.mode === 'learn' && state.phase === 'learn-game'
       && !state.anim && verifierMiniJeu(state)) {
+    // La réussite est enregistrée tout de suite, mais le panneau attend 1 s :
+    // le joueur peut voir la fin de l'action et le plateau final.
     state.learnProgress = marquerMiniJeuReussi(state);
     state.learnSuccess = true;
     state.learnMessage = 'Situation maîtrisée';
+    state.learnSuccessAt = now;
+    state.phase = 'learn-success-pending';
+  }
+  if (state.mode === 'learn' && state.phase === 'learn-success-pending'
+      && now - (state.learnSuccessAt || now) >= 500) {
     state.phase = 'learn-success';
   }
   if (state.mode === 'learn' && state.learnKind === 'puzzle'
@@ -2678,6 +2941,11 @@ function update(now) {
     state.puzzleProgress = marquerPuzzleReussi(state);
     state.learnSuccess = true;
     state.learnMessage = 'Puzzle résolu';
+    state.learnSuccessAt = now;
+    state.phase = 'puzzle-success-pending';
+  }
+  if (state.mode === 'learn' && state.phase === 'puzzle-success-pending'
+      && now - (state.learnSuccessAt || now) >= 500) {
     state.phase = 'puzzle-success';
   }
 }

@@ -1,6 +1,6 @@
 // roychec — génération des coups légaux (GDD §5.1) + cibles de pouvoirs.
 // Pas de détection d'échec/mat : la partie se gagne en capturant le roi (GDD §8.1).
-import { inB, caseAt } from './board.js?v=107';
+import { inB, caseAt } from './board.js?v=109';
 
 const KNIGHT = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
 const DIAG = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
@@ -255,16 +255,16 @@ function coupsRoi(board, p) {
 }
 
 // Cases interdites par l'aura d'Hypnose adverse : les pièces faibles (P/N/B)
-// ne peuvent pas se déplacer dans un rayon de 3 cases autour d'un fou adverse
-// équipé de l'aura Hypnose (debuffs.hypnoseAura > 0). Renvoie un Set de clés "r,c".
+// ne peuvent pas se déplacer dans les cases adjacentes à un fou adverse équipé
+// de l'aura Hypnose (debuffs.hypnoseAura > 0). Renvoie un Set de clés "r,c".
 export function zonesInterdites(board, owner) {
   const s = new Set();
   for (let r = 0; r < board.length; r++) {
     for (let c = 0; c < board[r].length; c++) {
       const q = board[r][c];
       if (!q || q.owner === owner || q.type !== 'B' || !(q.debuffs && q.debuffs.hypnoseAura > 0)) continue;
-      for (let dr = -3; dr <= 3; dr++) {
-        for (let dc = -3; dc <= 3; dc++) {
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
           if (Math.abs(dr) + Math.abs(dc) === 0) continue;
           const nr = r + dr, nc = c + dc;
           if (inB(board, nr, nc)) s.add(nr + ',' + nc);

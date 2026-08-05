@@ -2,9 +2,9 @@
 -- supabase/schema-pvp-taille.sql — v5.10 (2026-07-29) [patched Phase A.5 v2 Phase 5.A] — base Phase A.3d (2026-07-16)
 -- ============================================================================
 -- Étend la table `matches` et les RPC PvP V2 avec la dimension du plateau
--- (8×8 'std' / 15×8 'l15'). Verrou GDD §7.2 v3.5 : la file publique en ligne
--- reste 8×8 strict (Elo + hors-compétition) ; le 15×8 est autorisé uniquement
--- en PvP PRIVÉ (créateur impose, rejoignant hérite via pvp_join_code).
+-- (8×8 'std' / 15×8 'l15' / 8×8 bonus 'bonus'). Chaque taille est une file
+-- publique séparée : les clients ne mélangent jamais leurs plateaux. Le Plateau bonus
+-- est disponible en ligne mais hors classement ; le 15×8 reste également hors classement.
 --
 -- Migration par défaut 'std' : aucun match existant n'est impacté, l'ancien
 -- UI continue de fonctionner sans toucher au RPC tant que l'option l15
@@ -22,8 +22,8 @@
 -- 1. Extension de la table `matches`
 -- ----------------------------------------------------------------------------
 ALTER TABLE public.matches
-  ADD COLUMN IF NOT EXISTS taille varchar(4) NOT NULL DEFAULT 'std'
-    CHECK (taille IN ('std', 'l15'));
+  ADD COLUMN IF NOT EXISTS taille varchar(5) NOT NULL DEFAULT 'std'
+    CHECK (taille IN ('std', 'l15', 'bonus'));
 
 CREATE INDEX IF NOT EXISTS idx_active_variant_taille_status
   ON public.matches (variant, taille, status)
@@ -32,17 +32,17 @@ CREATE INDEX IF NOT EXISTS idx_active_variant_taille_status
 -- Self-doc : v5.10 Phase 5.A — commentaire sur la colonne pour outils d'audit
 -- (admin SQL, dashboard Supabase, vault reviewer).
 COMMENT ON COLUMN public.matches.taille IS
-  'v5.10 (2026-07-29) Phase A.5 v2 Phase 5.A — dimension du plateau (std=8x8 | l15=8x15). '
+  'v5.10 (2026-07-29) Phase A.5 v2 Phase 5.A — dimension du plateau (std=8x8 | l15=8x15 | bonus=8x8 avec Chasse). '
   'PRIVÉ accepte l15 (créateur impose via pvp_create_private(p_taille), rejoignant '
-  'hérite via pvp_join_code retourne row.taille) ; PUBLIC forcée std (GDD §7.2 '
-  'v3.5 lock strict Elo, online.js findMatch force online.taille=std). '
+  'hérite via pvp_join_code retourne row.taille) ; PUBLIC utilise une file par taille '
+  '(bonus et l15 hors classement, std Standard × Standard classée). '
   'Default std → backward-compat avec tous les matchs existants pré-Phase 5.A.';
 
 -- ----------------------------------------------------------------------------
 -- 2. RPC V2 : pair-finding tenant compte de la taille
 -- ----------------------------------------------------------------------------
 -- SUB-FILE KEY = (variant, taille, cadence). Deux clients avec la même
--- cadence/variant/taille sont appariés ; toute mixité 8×8↔15×8 est rejetée
+-- cadence/variant/taille sont appariés ; toute mixité std↔l15↔bonus est rejetée
 -- côté serveur. Default 'std' partout → aucun match existant ne casse.
 --
 -- IMPORTANT (Phase A.3d fix client→server mismatch) : la fonction exposée
@@ -58,6 +58,26 @@ DROP FUNCTION IF EXISTS public.pvp_find_match(int, int, text);
 -- recreation en varchar(4). Sans ça PostgreSQL refuse le CREATE OR REPLACE
 -- (42P13 cannot change return type) parce que la signature match exactement.
 DROP FUNCTION IF EXISTS public.pvp_find_match(int, int, text, text);
+-- Une migration précédente utilisait varchar(4) ; on élargit explicitement
+-- avant de recréer les RPC qui renvoient la taille.
+ALTER TABLE public.matches ALTER COLUMN taille TYPE varchar(5);
+-- Remplace toute contrainte historique std/l15, même si PostgreSQL lui a
+-- attribué un nom différent lors d'une première exécution.
+DO $$
+DECLARE c record;
+BEGIN
+  FOR c IN
+    SELECT conname
+    FROM pg_constraint
+    WHERE conrelid = 'public.matches'::regclass
+      AND contype = 'c'
+      AND pg_get_constraintdef(oid) ILIKE '%taille%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.matches DROP CONSTRAINT %I', c.conname);
+  END LOOP;
+END $$;
+ALTER TABLE public.matches ADD CONSTRAINT matches_taille_check
+  CHECK (taille IN ('std', 'l15', 'bonus'));
 -- v5.7d (2026-07-28, hot-fix gemini valider) — TYPE composite EXPLICITE
 -- `public.pvp_find_match_result` au lieu de `RETURNS TABLE(...)` (qui est
 -- sucre syntaxique pour `RETURNS SETOF record` → PostgREST voit le pseudo-type
@@ -77,7 +97,7 @@ CREATE TYPE public.pvp_find_match_result AS (
   opp_trophies int,
   cadence int,
   variant text,
-  taille varchar(4)
+  taille varchar(5)
 );
 CREATE OR REPLACE FUNCTION public.pvp_find_match(
   p_band int DEFAULT 100,
@@ -97,8 +117,8 @@ declare
   v_var text;
   v_tai text;
 begin
-  IF p_taille NOT IN ('std','l15') THEN
-    RAISE EXCEPTION 'taille invalide: %, attendu std|l15', p_taille;
+  IF p_taille NOT IN ('std','l15','bonus') THEN
+    RAISE EXCEPTION 'taille invalide: %, attendu std|l15|bonus', p_taille;
   END IF;
 
   select pr.trophies into v_tr from profiles pr where pr.id = v_me;
@@ -127,7 +147,7 @@ begin
   limit 1;
   if v_id is not null then
     return query
-      select v_id, 0, 'ready'::text, pr.pseudo, pr.trophies,v_cad, v_var, v_tai::varchar(4)
+      select v_id, 0, 'ready'::text, pr.pseudo, pr.trophies,v_cad, v_var, v_tai::varchar(5)
       from profiles pr where pr.id = v_opp;
     return;
   end if;
@@ -159,7 +179,7 @@ begin
       delete from matches m
        where m.p1 = v_me and m.status = 'waiting' and m.private = false and m.id <> v_id;
       return query
-        select v_id, 1, 'ready'::text, pr.pseudo, pr.trophies, p_cadence, p_variant, p_taille::varchar(4)
+        select v_id, 1, 'ready'::text, pr.pseudo, pr.trophies, p_cadence, p_variant, p_taille::varchar(5)
         from profiles pr where pr.id = v_opp;
       return;
     end if;
@@ -171,7 +191,7 @@ begin
   where m.p1 = v_me and m.status = 'waiting' and m.private = false
   limit 1;
   if v_id is not null then
-    return query select v_id, 0, 'waiting'::text, null::text, null::int, p_cadence, p_variant, p_taille::varchar(4);
+    return query select v_id, 0, 'waiting'::text, null::text, null::int, p_cadence, p_variant, p_taille::varchar(5);
     return;
   end if;
 
@@ -179,7 +199,7 @@ begin
   insert into matches(p1, p1_trophies, status, cadence, variant, taille)
     values (v_me, v_tr, 'waiting', p_cadence, p_variant, p_taille)
     returning id into v_id;
-  return query select v_id, 0, 'waiting'::text, null::text, null::int, p_cadence, p_variant, p_taille::varchar(4);
+  return query select v_id, 0, 'waiting'::text, null::text, null::int, p_cadence, p_variant, p_taille::varchar(5);
 end $$;
 
 GRANT EXECUTE ON FUNCTION public.pvp_find_match(int, int, text, text) TO authenticated;
@@ -187,6 +207,12 @@ GRANT EXECUTE ON FUNCTION public.pvp_find_match(int, int, text, text) TO authent
 -- ----------------------------------------------------------------------------
 -- 3. RPC V2 : pvp_create_privateV2 — le créateur impose la taille
 -- ----------------------------------------------------------------------------
+-- Supprime aussi les anciens overloads créés par les migrations cadence/variante.
+-- Avec des valeurs par défaut, deux signatures visibles par PostgREST peuvent
+-- rendre l'appel nommé `p_taille=bonus` ambigu ou faire sélectionner l'ancien RPC.
+DROP FUNCTION IF EXISTS public.pvp_create_private();
+DROP FUNCTION IF EXISTS public.pvp_create_private(int);
+DROP FUNCTION IF EXISTS public.pvp_create_private(int, text);
 DROP FUNCTION IF EXISTS public.pvp_create_private(int, text, text);
 CREATE OR REPLACE FUNCTION public.pvp_create_private(
   p_cadence int DEFAULT 300,
@@ -204,8 +230,8 @@ declare
   v_code text;
   v_id uuid;
 begin
-  IF p_taille NOT IN ('std','l15') THEN
-    RAISE EXCEPTION 'taille invalide: %, attendu std|l15', p_taille;
+  IF p_taille NOT IN ('std','l15','bonus') THEN
+    RAISE EXCEPTION 'taille invalide: %, attendu std|l15|bonus', p_taille;
   END IF;
 
   SELECT trophies INTO v_tr FROM public.profiles WHERE id = v_me;
@@ -233,13 +259,13 @@ GRANT EXECUTE ON FUNCTION public.pvp_create_private(int, text, text) TO authenti
 -- rejoignant (pas d'override client possible). Garantit que le lockstep
 -- §5.4 reste cohérent (les deux clients jouent sur le même plateau).
 DROP FUNCTION IF EXISTS public.pvp_join_code(text);
--- v5.7b (2026-07-16, hot-fix) — RETURNS TABLE column `taille` doit être `varchar(4)`
+-- v5.7b (2026-07-16, hot-fix) — RETURNS TABLE column `taille` doit être `varchar(5)`
 -- pour matcher EXACTEMENT le type de la colonne matches.taille. L'ancien `text` lève
 -- PostgREST 400 « structure of query does not match function result type » sur
 -- column 7 (cf. logs 16/07). 3 lignes parallèles : find_match aussi bite si jamais appelé.
 CREATE OR REPLACE FUNCTION public.pvp_join_code(p_code text)
 RETURNS TABLE (
-  match_id uuid, side int, opp_pseudo text, opp_trophies int, cadence int, variant text, taille varchar(4)
+  match_id uuid, side int, opp_pseudo text, opp_trophies int, cadence int, variant text, taille varchar(5)
 )
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 declare

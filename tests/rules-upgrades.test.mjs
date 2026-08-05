@@ -2,8 +2,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { creerPiece } from '../game/src/board.js?v=107';
-import { coupsLegaux } from '../game/src/rules.js?v=115';
+import { creerPiece } from '../game/src/board.js?v=109';
+import { coupsLegaux, zonesInterdites } from '../game/src/rules.js?v=116';
 
 function plateauVide(rows = 8, cols = 8) {
   return Array.from({ length: rows }, () => Array(cols).fill(null));
@@ -77,5 +77,19 @@ describe('Améliorations des cases bonus — règles utilisables', () => {
 
     assert.equal(contient(moves, 3, 3), false);
     assert.equal(contient(moves, 3, 4), true);
+  });
+
+  test('Hypnose bloque les cases adjacentes, mais pas au-delà', () => {
+    const board = plateauVide();
+    const fou = placer(board, 'B', 0, 4, 4);
+    fou.debuffs.hypnoseAura = 1;
+    const adjacent = placer(board, 'P', 1, 2, 3);
+    const distant = placer(board, 'P', 1, 1, 2);
+    const interdites = zonesInterdites(board, 1);
+
+    assert.equal(interdites.has('3,3'), true);
+    assert.equal(interdites.has('2,3'), false);
+    assert.equal(contient(coupsLegaux(board, adjacent), 3, 3), false);
+    assert.equal(contient(coupsLegaux(board, distant), 2, 2), true);
   });
 });

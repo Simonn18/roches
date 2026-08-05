@@ -19,8 +19,9 @@
 --   · pvp_join_code   — renvoie en plus la variante du créateur (héritage).
 --   · pvp_rematch     — la revanche COPIE la variante du match précédent.
 --   · pvp_report_result — RE-CRÉÉE (remplace la version schema-pvp-w3.sql) :
---     les parties PRIVÉES ne comptent JAMAIS pour l'Elo (décision utilisateur
---     12/07, spec §4.3 v3.3). Le match est bien finalisé (status 'ended',
+--     les parties PRIVÉES et les parties publiques Plateau bonus ne comptent
+--     JAMAIS pour l'Elo (le bonus est une file publique dédiée, hors classement).
+--     Le match est bien finalisé (status 'ended',
 --     winner) mais deltas = 0 et AUCUNE écriture de profiles.trophies.
 --     Conséquence assumée : pvp_rematch crée toujours private=true, donc les
 --     REVANCHES sont non classées elles aussi (anti-farming entre amis).
@@ -272,8 +273,8 @@ begin
   end if;
 
   -- --- Concordant ---
-  if v_m.private then
-    -- PARTIE PRIVÉE (ami ou revanche) : NON CLASSÉE (décision utilisateur 12/07).
+  if v_m.private or v_m.taille = 'bonus' then
+    -- PARTIE PRIVÉE ou PLATEAU BONUS PUBLIC : NON CLASSÉE.
     -- Finalisation normale (winner, ended_at) mais deltas 0 et trophies intouchés.
     v_d1 := 0;
     v_d2 := 0;

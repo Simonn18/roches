@@ -1,9 +1,9 @@
-// roychec — mode local « Chasse aux améliorations ».
+// roychec — mode « Plateau bonus » / Chasse aux améliorations.
 // Deux cases bonus sont réservées à chaque camp. Une pièce qui atteint sa case
 // reçoit gratuitement une amélioration compatible, sans doublon, puis une nouvelle
-// case est tirée pour le même camp. Le module reste volontairement sans DOM,
-// réseau ou replay : main.js orchestre les effets de bord du moteur.
-import { UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=108';
+// case est tirée pour le même camp. Le tirage est déterministe : le mode peut donc
+// fonctionner dans le lockstep PvP privé sans désynchroniser les clients.
+import { UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=109';
 
 function casesLibres(state, interdites = []) {
   const interditesSet = new Set(interdites.filter(Boolean).map((cell) => `${cell.r},${cell.c}`));
@@ -16,11 +16,20 @@ function casesLibres(state, interdites = []) {
   return libres;
 }
 
+// PRNG compact et sérialisable : le même seed initial + le même ordre d'actions
+// produit exactement les mêmes cases et cartes sur les deux clients en ligne.
+function tirageDeterministe(state, longueur) {
+  const seed = (state.huntRngSeed >>> 0) || 0x9e3779b9;
+  let next = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+  state.huntRngSeed = next;
+  return longueur ? next % longueur : 0;
+}
+
 function nouvelleCase(state, owner, current = null) {
   const other = state.huntBonuses && state.huntBonuses[1 - owner];
   const libres = casesLibres(state, [current, other]);
   if (!libres.length) return null;
-  return libres[Math.floor(Math.random() * libres.length)];
+  return libres[tirageDeterministe(state, libres.length)];
 }
 
 export function initialiserChasse(state) {
@@ -38,7 +47,7 @@ export function caseChassePour(state, owner) {
 }
 
 export function recolterChasse(state, piece) {
-  if (!state || state.mode !== 'hunt' || !piece || !state.huntBonuses) return null;
+  if (!state || (!(state.bonusMode || state.mode === 'hunt')) || !piece || !state.huntBonuses) return null;
   const bonusCase = state.huntBonuses[piece.owner];
   if (!bonusCase || bonusCase.r !== piece.r || bonusCase.c !== piece.c) return null;
 
@@ -59,7 +68,7 @@ export function recolterChasse(state, piece) {
           && !possedees.has(id);
       });
   const upgradeId = candidates.length
-    ? candidates[Math.floor(Math.random() * candidates.length)]
+    ? candidates[tirageDeterministe(state, candidates.length)]
     : null;
   const nextCase = nouvelleCase(state, piece.owner, bonusCase);
   state.huntBonuses[piece.owner] = nextCase;

@@ -1,0 +1,20 @@
+{
+  "env": {
+    "OBSIDIAN_VAULT_PATH": "/Users/simon/Desktop/roychec-jeu/obsidian"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ~/.claude/skills/obsidian-second-brain/hooks/load_vault_context.py",
+            "timeout": 5,
+            "async": false
+          }
+        ]
+      }
+    ]
+  }
+}

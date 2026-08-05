@@ -11,6 +11,8 @@
 //   - 'l15' = 8 × 15 (15 colonnes, 8 pions par camp centrés sur colonnes paires
 //           [0,2,4,6,8,10,12,14]). Les colonnes impaires [1,3,5,7,9,11,13] sont
 //           vides au début ; pas de gonflement du solde ni du catalogue de cartes.
+//   - 'bonus' = 8 × 8 avec la Chasse aux améliorations active (cases bonus
+//           déterministes en PvAI et en partie privée en ligne).
 //
 // ADDITION FUTURE (backlog) : Phase A.5 v3 livrera un layout « Standard »
 // 15-pawns (un pion par colonne, plus conforme à un chess-15 large). Phase A.5
@@ -27,7 +29,8 @@
 // logique dans render.js).
 export const TAILLES = {
   std: { id: 'std', h: 8, w: 8,  label: '8 × 8',  sub: 'plateau standard',       accent: 'green',   stroke: 'greenD' },
-  l15: { id: 'l15', h: 8, w: 15, label: '8 × 15', sub: '15 colonnes (Phase A.5)', accent: 'purpleD', stroke: 'purpleD' },
+  l15:   { id: 'l15',   h: 8, w: 15, label: '8 × 15',        sub: '15 colonnes (Phase A.5)', accent: 'purpleD', stroke: 'purpleD' },
+  bonus: { id: 'bonus', h: 8, w: 8,  label: 'Plateau bonus', sub: '8 × 8 · chasse active',   accent: 'gold',    stroke: 'goldD' },
 };
 
 export const DEFAULT_TAILLE = 'std';

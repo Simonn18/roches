@@ -20,7 +20,8 @@ const online = {
   oppTrophies: null,
   band: 100,             // bande de trophées courante pour le matchmaking
   cadence: 300,          // temps initial par joueur (s) — choisi avant recherche/privé, confirmé par le serveur
-  variant: 'pvp_standard', // variante (GDD §7.2) — privé : le créateur impose, le rejoignant hérite ; public : TOUJOURS standard
+  variant: 'pvp_standard', // variante (GDD §7.2) — privé : le créateur impose, public : Standard × Standard
+  taille: 'std',          // file publique séparée par taille ; le Plateau bonus reste hors classement
   searchStart: 0,        // timestamp de début de recherche
   privateCode: null,     // code de partie privée (créateur)
   error: null,           // message d'erreur utilisateur (dégradation gracieuse)
@@ -82,6 +83,7 @@ export function leave() {
   online.band = 100;
   online.cadence = 300;
   online.variant = 'pvp_standard';
+  online.taille = 'std';
   online.error = null;
   online._readyFired = false;
   online._pollFails = 0;
@@ -99,16 +101,18 @@ export function leave() {
 
 /** Lance la recherche d'un adversaire (file publique). Appelle pvp_find_match toutes les 2 s.
  *  cadence = temps initial par joueur (s) — seuls deux joueurs de MÊME cadence s'apparient.
- *  Phase A.5 v2 — taille du plateau (GDD §7.2 v3.5). Par défaut 'std' (8×8). Pour le l15,
- *  disposer d'un SECOND joueur l15 dans la file ralentit l'appariement (volontaire), mais
- *  c'est conforme au GDD qui interdit de mélanger les tailles en pleine partie cross-client.
- *  Le file publique reste TOUJOURS elo-pondérée : variante forcée 'pvp_standard'. */
+ *  La taille est également une clé de file : std, l15 et bonus ne se mélangent jamais,
+ *  afin que les deux clients chargent exactement le même plateau. La file publique
+ *  utilise Standard × Standard ; le Plateau bonus est une file publique dédiée,
+ *  jouable en ligne mais hors classement. */
 export function findMatch(cadence = 300, _variant = 'pvp_standard', taille = 'std') {
   if (!online.supabase) { online.error = 'Pas de connexion au service.'; online.status = 'error'; return; }
   leave(); // nettoie un éventuel canal/timer précédent (remet aussi cadence à 300 et taille à 'std')
   online.cadence = cadence | 0 || 300;
-  online.variant = 'pvp_standard'; // file publique = TOUJOURS Standard × Standard (GDD §7.2 v3.1)
-  online.taille = taille || 'std'; // Phase A.5 v2 — stocke pour transmission à pollMatchmaking.
+  online.variant = 'pvp_standard'; // file publique = Standard × Standard
+  // Chaque taille possède sa propre file. Bonus est donc public, mais uniquement
+  // contre un autre joueur bonus (le serveur filtre aussi cette clé).
+  online.taille = ['std', 'l15', 'bonus'].includes(taille) ? taille : 'std';
   online.status = 'searching';
   online.searchStart = Date.now();
   online.band = 100;
@@ -143,14 +147,24 @@ export async function createPrivate(cadence = 300, variant = 'pvp_standard', tai
   leave();
   online.cadence = cadence | 0 || 300;
   online.variant = variant || 'pvp_standard';
-  online.taille = taille || 'std'; // Phase A.5 v2 — créateur impose la taille, l15 autorisé en privé
+  online.taille = taille || 'std'; // créateur privé impose la taille ; bonus public suit une file dédiée
   online.status = 'private_create';
   try {
-    // Phase A.5 v2 Phase 5.A — conditionnel (cf. code-reviewer RECHECK) : p_taille
-    // envoye UNIQUEMENT si l15. Privé+std continue d'utiliser l'ancien RPC 2-args.
+    // Phase A.5 v3 : p_taille est envoyé pour toute taille non-standard,
+    // notamment `bonus` (Plateau bonus) en partie privée.
     const privParams = { p_cadence: online.cadence, p_variant: online.variant };
     if (online.taille && online.taille !== 'std') privParams.p_taille = online.taille;
     const { data, error } = await online.supabase.rpc('pvp_create_private', privParams);
+    if (error) {
+      // Ne pas remplacer l'erreur PostgREST par `empty_result` : un 400 indique
+      // presque toujours que la migration `schema-pvp-taille.sql` n'est pas
+      // déployée (ou que le cache RPC est encore ancien).
+      const rpcError = new Error(error.message || 'rpc_error');
+      rpcError.code = error.code;
+      rpcError.details = error.details;
+      rpcError.hint = error.hint;
+      throw rpcError;
+    }
     // PostgREST sérialise un RETURNS TABLE en TABLEAU de lignes → on prend la 1re.
     const row = Array.isArray(data) ? data[0] : data;
     if (!row || !row.match_id) throw new Error('empty_result');
@@ -163,7 +177,11 @@ export async function createPrivate(cadence = 300, variant = 'pvp_standard', tai
     return row.code;
   } catch (e) {
     console.warn('[online] createPrivate', e);
-    online.error = 'Impossible de créer la partie privée.';
+    const detail = [e && e.code, e && e.message, e && e.details, e && e.hint].filter(Boolean).join(' — ');
+    const migrationMissing = /p_taille|pvp_create_private|function .*does not exist|Could not find the function|42883|PGRST202/i.test(detail);
+    online.error = migrationMissing
+      ? 'Le serveur ne connaît pas encore le Plateau bonus. Exécute la migration Supabase bonus puis recharge la page.'
+      : 'Impossible de créer la partie privée.';
     online.status = 'error';
     return null;
   }
@@ -226,12 +244,8 @@ async function pollMatchmaking() {
   else online.band = 100;
 
   try {
-    // Phase A.5 v2 Phase 5.A — `p_taille` envoyé UNIQUEMENT si l15. En std, on
-    // retombe sur l'ancien RPC legacy (pas d'arg p_taille) : ça marche que
-    // schema-pvp-taille.sql soit deploye sur Supabase OU PAS (defensive rollout).
-    // Si schema PAS deploye : std marchait deja, l15 tombait deja (rien ne change pour
-    // les matchs std en cours de partie). Si schema deploye : RPC accepte p_taille, on
-    // fait la passe. Graceful degradation sans casser la prod.
+    // Phase A.5 v3 : toute taille non-standard passe par le RPC étendu.
+    // Les parties std gardent l'appel legacy-compatible.
     const findParams = { p_band: online.band, p_cadence: online.cadence };
     if (online.taille && online.taille !== 'std') findParams.p_taille = online.taille;
     const { data, error } = await online.supabase.rpc('pvp_find_match', findParams);
@@ -641,6 +655,7 @@ export async function rematch(prevMatchId) {
     online.oppTrophies = row.opp_trophies;
     if (row.cadence) online.cadence = row.cadence; // la revanche reprend la cadence du match précédent
     if (row.variant) online.variant = row.variant; // … et sa variante (GDD §7.2 v3.1)
+    if (row.taille) online.taille = row.taille; // … et son type de plateau
     return demarrerHandshake(true);  // pas de timeout : appariement déjà connu
   } catch (e) {
     console.warn('[online] rematch', e && (e.message || e));

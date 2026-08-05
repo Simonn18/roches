@@ -1,0 +1,140 @@
+// tests/learn-puzzles.test.mjs — validation des lignes tactiques guidées.
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  PUZZLES,
+  demarrerPuzzle,
+  learnPermet,
+  puzzleReponse,
+} from '../game/src/learn.js?v=15';
+import { coupsLegaux, roiEnEchec } from '../game/src/rules.js?v=116';
+
+const SOLUTIONS = [
+  { move: { r: 4, c: 6 }, wrong: { r: 3, c: 4 } },
+  { move: { r: 5, c: 2 }, wrong: { r: 3, c: 3 } },
+  { target: { r: 5, c: 6 }, wrong: { r: 2, c: 3 } },
+  { move: { r: 2, c: 5 }, wrong: { r: 3, c: 3 } },
+];
+
+function etatPuzzle(index) {
+  const state = {};
+  assert.equal(demarrerPuzzle(state, index), true);
+  const piece = state.learnExpectedPiece;
+  piece.upgrades.push(PUZZLES[index].upgradeId);
+  state.learnPurchased = true;
+  state.puzzlePurchased = true;
+  return { state, piece };
+}
+
+describe('Puzzles tactiques — lignes et refus des mauvais coups', () => {
+  test('refuse un déplacement légal mais tactiquement incorrect sans modifier la position', () => {
+    for (const [index, solution] of [[0, SOLUTIONS[0]], [1, SOLUTIONS[1]], [3, SOLUTIONS[3]]]) {
+      const { state, piece } = etatPuzzle(index);
+      const before = { r: piece.r, c: piece.c };
+      const allowed = learnPermet(state, {
+        type: 'move', piece, move: solution.wrong,
+      });
+
+      assert.equal(allowed, false, `le puzzle ${PUZZLES[index].id} doit refuser le mauvais coup`);
+      assert.equal(piece.r, before.r);
+      assert.equal(piece.c, before.c);
+      assert.equal(state.board[before.r][before.c], piece);
+      assert.equal(typeof state.puzzleFeedback, 'string');
+      assert.ok(state.puzzleFeedback.length > 0);
+    }
+  });
+
+  test('accepte uniquement la destination de la ligne tactique', () => {
+    for (const [index, solution] of [[0, SOLUTIONS[0]], [1, SOLUTIONS[1]], [3, SOLUTIONS[3]]]) {
+      const { state, piece } = etatPuzzle(index);
+      assert.equal(learnPermet(state, {
+        type: 'move', piece, move: solution.move,
+      }), true, `la solution du puzzle ${PUZZLES[index].id} doit être autorisée`);
+    }
+  });
+
+  test('explique une mauvaise cible de pouvoir puis accepte la bonne cible', () => {
+    const { state, piece } = etatPuzzle(2);
+    state.phase = 'ruee-target';
+
+    assert.equal(learnPermet(state, {
+      type: 'target', piece, cell: SOLUTIONS[2].wrong,
+    }), false);
+    assert.match(state.puzzleFeedback, /capture|distance|position|tour|reine/i);
+
+    assert.equal(learnPermet(state, {
+      type: 'target', piece, cell: SOLUTIONS[2].target,
+    }), true);
+    assert.equal(state.puzzleFeedback, '');
+  });
+
+  test('le puzzle 1 protège le roi adverse avec une tour en e7', () => {
+    const { state } = etatPuzzle(0);
+    assert.equal(state.board[0][4]?.type, 'K');
+    assert.equal(state.board[0][4]?.owner, 1);
+    assert.equal(state.board[1][4]?.type, 'R');
+    assert.equal(state.board[1][4]?.owner, 1);
+  });
+
+  test('le puzzle 2 met le roi en échec et Pas de côté permet de le sauver', () => {
+    const { state, piece } = etatPuzzle(1);
+    assert.equal(state.board[5][2]?.type, 'Q');
+    assert.equal(roiEnEchec(state.board, 0), true);
+    assert.equal(roiEnEchec(state.board, 1), false);
+    assert.ok(coupsLegaux(state.board, piece)
+      .some((move) => move.r === 5 && move.c === 2 && move.capture));
+  });
+
+  test('le puzzle 3 place la reine en g3 et protège la case avec la tour', () => {
+    const { state, piece } = etatPuzzle(2);
+    assert.equal(state.board[5][6]?.type, 'Q');
+    assert.equal(state.board[1][6]?.type, 'R');
+    assert.ok(coupsLegaux(state.board, piece)
+      .some((move) => move.r === 5 && move.c === 6 && move.capture));
+
+    // Après une capture directe, la tour en g7 attaquerait le cavalier en g3.
+    state.board[4][4] = null;
+    piece.r = 5; piece.c = 6;
+    state.board[5][6] = piece;
+    assert.ok(coupsLegaux(state.board, state.board[1][6])
+      .some((move) => move.r === 5 && move.c === 6 && move.capture));
+  });
+
+  test('le puzzle Couronne protège la reine lors de la reprise du roi', () => {
+    const { state, piece } = etatPuzzle(4);
+    assert.equal(state.board[5][3]?.type, 'P');
+    assert.equal(state.board[5][4]?.type, 'K');
+    assert.ok(coupsLegaux(state.board, piece)
+      .some((move) => move.r === 5 && move.c === 3 && move.capture));
+    piece.r = 5; piece.c = 3;
+    state.board[4][4] = null;
+    state.board[5][3] = piece;
+    assert.ok(coupsLegaux(state.board, state.board[5][4])
+      .some((move) => move.r === 5 && move.c === 3 && move.capture));
+  });
+
+  test('le puzzle Mariage immobilise la reine qui menace le roi', () => {
+    const { state, piece } = etatPuzzle(5);
+    assert.equal(state.board[5][4]?.type, 'Q');
+    assert.equal(roiEnEchec(state.board, 0), true);
+    assert.equal(Math.max(Math.abs(piece.r - state.board[5][4].r), Math.abs(piece.c - state.board[5][4].c)), 2);
+    assert.equal(PUZZLES[5].power, 'sacrifice');
+  });
+
+  test('chaque réponse adverse pointe vers une pièce ennemie et une case libre', () => {
+    for (let index = 0; index < PUZZLES.length; index++) {
+      const { state } = etatPuzzle(index);
+      const response = puzzleReponse(state);
+      const source = state.board[response.from.r]?.[response.from.c];
+      const destination = state.board[response.to.r]?.[response.to.c];
+
+      assert.equal(source?.owner, 1, `${PUZZLES[index].id}: réponse ennemie attendue`);
+      if (!response.shieldedCapture) {
+        assert.equal(destination, null, `${PUZZLES[index].id}: arrivée libre attendue`);
+      } else {
+        assert.equal(destination?.type, 'P', `${PUZZLES[index].id}: cible de reprise attendue`);
+      }
+    }
+  });
+});

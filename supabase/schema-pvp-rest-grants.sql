@@ -21,7 +21,7 @@
 --
 -- Pré-requis (déjà poussés) :
 --   * schema-pvp-w1.sql        : table matches + RLS sélectif
---   * schema-pvp-taille.sql    : colonne matches.taille varchar(4) + RPC composite
+--   * schema-pvp-taille.sql    : colonne matches.taille varchar(5) + RPC composite
 --   * schema-hardening.sql     : trigger matches_rate_limit_check (30 INSERT/UPDATE par minute)
 --
 -- Sécurité :
@@ -41,7 +41,7 @@
 -- Surface d'attaque élargie : oui, un client authenticated peut maintenant
 -- INSERT/UPDATE/DELETE sur matches directement (vs uniquement via SECURITY
 -- DEFINER). Contrebalancé par :
---   * CHECK constraint taille IN ('std','l15') (matches.taille)
+--   * CHECK constraint taille IN ('std','l15','bonus') (matches.taille)
 --   * CHECK constraint status IN ('waiting', 'ready', 'playing', 'ended', 'disputed', 'voided')
 --   * Rate-limit trigger BEFORE INSERT/UPDATE (30/min)
 --   * Channel Realtime fonctionne sans dépendance PostgREST RPC

@@ -5,7 +5,7 @@ import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP } from './constants.js?v=109';
 import { VARIANT_PRESETS, ECONOMIES, COMBATS, DEFAULT_VARIANT } from './variants.js?v=107';
 // Phase A.5 v2 : toAlgebraic doit connaître la hauteur du plateau pour encoder
 // correctement les rangées sous forme algébrique (8 - r sur plateau 8×N).
-import { DEFAULT_TAILLE, getBoardH } from './tailles.js?v=107';
+import { DEFAULT_TAILLE, getBoardH } from './tailles.js?v=108';
 
 // ---------------------------------------------------------------------------
 // Helpers d'affichage
@@ -52,6 +52,7 @@ export function initReplay(state) {
     // Phase A.5 v2 : la taille du plateau est nécessaire pour recréer un board
     // fidèle dans l'opening book (hash dynamique) et pour décoder les replays.
     taille: state.taille || DEFAULT_TAILLE,
+    huntRngSeed: state.huntRngSeed >>> 0,
     huntBonuses: null,
     events: [],
     stats: {

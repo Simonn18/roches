@@ -1,8 +1,8 @@
 // roychec — Opening book (livre d'ouvertures) construit depuis les replays.
 // Apprend les ouvertures gagnantes au fil des parties.
 // Persisté dans localStorage. Consulté par l'IA (ai.js) comme bonus de score.
-import { creerPlateau } from './board.js?v=107';
-import { DEFAULT_TAILLE } from './tailles.js?v=107';
+import { creerPlateau } from './board.js?v=109';
+import { DEFAULT_TAILLE } from './tailles.js?v=108';
 
 // ---------------------------------------------------------------------------
 // Configuration

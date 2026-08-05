@@ -8,8 +8,8 @@ import {
   UPGRADES,
   UPGRADES_PAR_TYPE,
   MAX_UPGRADES_PAR_PIECE,
-} from '../game/src/constants.js?v=108';
-import { recolterChasse } from '../game/src/hunt.js?v=2';
+} from '../game/src/constants.js?v=109';
+import { initialiserChasse, recolterChasse } from '../game/src/hunt.js?v=3';
 
 const TYPES = ['P', 'N', 'B', 'R', 'Q', 'K'];
 
@@ -101,6 +101,26 @@ describe('Chasse — récompense utilisable par la pièce collectrice', () => {
     } finally {
       Math.random = originalRandom;
     }
+  });
+
+  test('reproduit les mêmes cases et récompenses avec le même seed', () => {
+    const makeState = () => ({
+      mode: 'pvai', bonusMode: true, huntRngSeed: 0x12345678,
+      board: Array.from({ length: 8 }, () => Array(8).fill(null)),
+      huntBonuses: null, huntCollected: [0, 0], huntLastAward: null,
+    });
+    const a = makeState();
+    const b = makeState();
+    initialiserChasse(a);
+    initialiserChasse(b);
+    assert.deepEqual(a.huntBonuses, b.huntBonuses);
+    const pieceA = { owner: 0, type: 'P', ...a.huntBonuses[0], upgrades: [], shield: false };
+    const pieceB = { owner: 0, type: 'P', ...b.huntBonuses[0], upgrades: [], shield: false };
+    const awardA = recolterChasse(a, pieceA);
+    const awardB = recolterChasse(b, pieceB);
+    assert.equal(awardA.upgradeId, awardB.upgradeId);
+    assert.deepEqual(awardA.nextCase, awardB.nextCase);
+    assert.equal(a.huntRngSeed, b.huntRngSeed);
   });
 
   test('ne dépasse pas le plafond d’améliorations de la pièce', () => {

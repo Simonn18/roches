@@ -10,14 +10,14 @@
 //           Note : états du moteur qui bouclent sur 8 hardcodé (coupsLegaux/
 //           evalBoard dans rules.js et ai.js) généraliseront en Phase A.5 v3.
 
-import { SOLDE_DEPART } from './constants.js?v=108';
+import { SOLDE_DEPART } from './constants.js?v=109';
 import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=107';
 // Note Phase A.5 v2 polish : `TAILLES` n'est PAS importé ici — les call sites
 // qui en ont besoin (render.js pour le bouton TAILLE DE PLATEAU, plus tard
 // online.js pour le lockstep header) importeront directement depuis './tailles.js'.
 // Seul `DEFAULT_TAILLE` + `getBoardH/W` (helpers de résolution) sont utilisés
 // ici par creerPlateau(taille).
-import { DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=107';
+import { DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
 
 let PROCHAIN_ID = 1;
 
@@ -101,6 +101,10 @@ export function creerEtat(options) {
   const difficulty = (options && options.difficulty) || 1;
   // Phase A.5 v2 : taille param (DEFAULT_TAILLE omis = std legacy).
   const taille = (options && options.taille) || DEFAULT_TAILLE;
+  const bonusMode = taille === 'bonus' || mode === 'hunt';
+  const huntRngSeed = options && options.huntRngSeed != null
+    ? (options.huntRngSeed >>> 0)
+    : ((Date.now() ^ Math.floor(Math.random() * 0x100000000)) >>> 0);
   const ai = mode === 'pvai' ? { player: 1, difficulty, thinking: false }
            : mode === 'spectator' ? { difficulty, thinking: false } // player set dynamically
            : null;
@@ -110,6 +114,8 @@ export function creerEtat(options) {
     // header lockstep, replay.js toAlgebraic dynamique) — ne fait PAS partie du hash
     // d'état côté lockstep (§5.4 : hash dérivé des positions, pas des dimensions).
     taille,
+    bonusMode,               // Plateau bonus : cases de Chasse actives quel que soit le mode
+    huntRngSeed,             // PRNG partagé par les clients PvP privés
     turn: 0,                 // joueur actif
     ecus: [SOLDE_DEPART, SOLDE_DEPART],
     winner: null,

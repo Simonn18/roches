@@ -121,10 +121,10 @@ export const UPGRADES = {
     desc: "Usage unique : pour la prochaine attaque, le fou se déplace comme une dame.",
   },
   // Fou — 2e actif : les pièces ennemies (hors roi/reine) ne peuvent plus bouger
-  // dans un rayon de 3 cases autour du fou pendant 2 tours.
+  // dans les cases adjacentes au fou pendant 2 tours.
   'hypnose': {
     id: 'hypnose', nom: 'Hypnose', cat: 'A', cout: 10, piece: 'B', cooldown: 4,
-    desc: "Actif : les pièces ennemies (hors roi et reine) ne peuvent pas se déplacer dans un rayon de 3 cases autour du fou pendant 2 tours.",
+    desc: "Actif : les pièces ennemies (hors roi et reine) ne peuvent pas se déplacer dans une case adjacente au fou pendant 2 tours.",
   },
   // Tour — 2e déplacement : saut de la 1re pièce
   'enjambeur': {
