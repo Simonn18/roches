@@ -2414,6 +2414,24 @@ function actionBouton(action) {
       basculerTheme();
       if (state.menu) state.menu.themeMode = themeMode;
       break;
+    case 'togglePreview': {
+      if (state.phase !== 'menu' || !state.ui || !state.ui.preview) break;
+      const taille = ['std', 'l15', 'bonus'].includes(action.taille) ? action.taille : 'std';
+      const preview = state.ui.preview[taille];
+      if (!preview) break;
+      const now = performance.now();
+      if (preview.playing) {
+        preview.elapsed = Math.max(0, now - (preview.startedAt ?? now));
+        preview.startedAt = null;
+        preview.playing = false;
+      } else {
+        if (preview.finished) preview.elapsed = 0;
+        preview.finished = false;
+        preview.startedAt = now - preview.elapsed;
+        preview.playing = true;
+      }
+      break;
+    }
     // Retour au menu (spectateur).
     case 'retourMenu': retourMenu(); break;
     // Mode APPRENDRE : démonstrations + parcours de puzzles tactiques.

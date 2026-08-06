@@ -3,7 +3,7 @@
 
 // --- Économie (GDD §7) ---
 export const REVENU_PAR_COUP = 2;   // +2 écus par coup joué
-export const SOLDE_DEPART = 30; // GDD §7 : les deux joueurs commencent à sec.
+export const SOLDE_DEPART = 0; // GDD §7 : les deux joueurs commencent à sec.
 export const PLAFOND_ECUS = 30;
 
 // Valeurs de pièce = bonus de capture (GDD §7). Roi = 0 (fin de partie).

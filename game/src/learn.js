@@ -198,13 +198,13 @@ function scenarioPuzzleEnjambeur(state) {
   const b = plateauVide();
   const tour = creerPiece('R', 0, 4, 4);
   const obstacle = creerPiece('P', 0, 4, 5);
-  const menace = creerPiece('B', 1, 3, 7);
-  const tempo = creerPiece('P', 1, 2, 6);
+  const menace = creerPiece('N', 1, 3, 6);
+  const tempo = creerPiece('P', 1, 2, 7);
   const gardeRoi = creerPiece('R', 1, 1, 4);
   // La tour noire protège le roi en e8 : sans elle, la tour blanche en e4
   // lui donnerait un échec direct avant même l'achat d'Enjambeur.
-  b[4][4] = tour; b[4][5] = obstacle; b[3][7] = menace; b[2][6] = tempo;
-  b[1][4] = gardeRoi;
+  b[4][4] = tour; b[4][5] = obstacle; b[2][7] = tempo;
+  b[1][4] = gardeRoi; b[3][6] = menace;
   rois(b); baseScenario(state, b, 6);
 }
 
@@ -235,11 +235,11 @@ function scenarioPuzzleRuee(state) {
 
 function scenarioPuzzleFeinte(state) {
   const b = plateauVide();
-  const dame = creerPiece('Q', 0, 4, 4);
+  const dame = creerPiece('Q', 0, 4, 3);
   const menace = creerPiece('R', 1, 2, 5);
   const tempo = creerPiece('P', 1, 1, 4);
-  const garde = creerPiece('B', 1, 0, 6);
-  b[4][4] = dame; b[2][5] = menace; b[1][4] = tempo; b[0][6] = garde;
+  const garde = creerPiece('B', 1, 0, 7);
+  b[4][3] = dame; b[2][2] = menace; b[1][4] = tempo; b[0][7] = garde;
   rois(b); baseScenario(state, b, 12);
 }
 
@@ -559,12 +559,12 @@ export const PUZZLES = [
   {
     id: 'puzzle-enjambeur', title: 'La ligne bloquée', upgrade: 'Enjambeur', upgradeId: 'enjambeur',
     category: 'PUZZLE · DÉPLACEMENT', cost: 6, color: '#8FB8E0',
-    text: 'Ta tour doit rejoindre la ligne de tir avant que les renforts ennemis ne ferment la position.',
+    text: "Ta tour est menacée par le cavalier et par la tour adverse. Trouve une manière de mettre la pression sur la cavalier sans rester dans le champ d'action de la tour.",
     detail: "Achète Enjambeur, franchis l'obstacle, puis observe la réponse adverse. Une autre pièce ennemie garde la case de sortie.",
     objective: "Atteindre la case derrière l'obstacle", setup: scenarioPuzzleEnjambeur,
     hint: (state) => ({ cells: state.puzzlePurchased ? [{ r: 4, c: 6 }] : [{ r: 4, c: 4 }] }),
     failMessage: "La tour doit franchir l'obstacle maintenant : chaque autre coup laisse la ligne se fermer.",
-    response: { from: { r: 2, c: 6 }, to: { r: 3, c: 6 }, text: 'Les renforts avancent.', color: '#B86F6B' },
+    response: { from: { r: 2, c: 7 }, to: { r: 3, c: 7 }, text: 'Les renforts avancent.', color: '#B86F6B' },
     check: (state) => state.puzzlePurchased && state.puzzleResponseDone
       && state.board[4][6]?.type === 'R'
       && state.board[4][6].upgrades.includes('enjambeur'),
@@ -593,8 +593,8 @@ export const PUZZLES = [
     response: { from: { r: 0, c: 7 }, to: { r: 1, c: 7 }, text: 'Le pion adverse avance ; la tour garde g3.', color: '#B86F6B' },
     power: 'ruee', check: (state) => state.puzzlePurchased && state.puzzleResponseDone
       && !state.board[5][6]
-      && state.board[4][4]?.type === 'N'
-      && state.board[4][4].upgrades.includes('ruee'),
+      && state.board[4][3]?.type === 'N'
+      && state.board[4][3].upgrades.includes('ruee'),
   },
   {
     id: 'puzzle-feinte', title: 'Le saut impossible', upgrade: 'Feinte', upgradeId: 'feinte',
@@ -602,13 +602,13 @@ export const PUZZLES = [
     text: 'La tour ennemie verrouille la diagonale : seule une feinte de cavalier permet à la dame de la prendre.',
     detail: 'Achète Feinte, capture la tour par le saut en L, puis laisse le fou adverse reprendre une case de contrôle.',
     objective: 'Capturer par un saut de cavalier', setup: scenarioPuzzleFeinte,
-    hint: () => ({ cells: [{ r: 4, c: 4 }, { r: 2, c: 5 }] }),
+    hint: () => ({ cells: [{ r: 4, c: 3 }, { r: 2, c: 2 }] }),
     failMessage: 'La dame doit surprendre la tour par le saut en L : ses mouvements habituels ne suffisent pas.',
-    response: { from: { r: 0, c: 6 }, to: { r: 1, c: 5 }, text: 'Le fou adverse reprend le contrôle.', color: '#B86F6B' },
+    response: { from: { r: 0, c: 7 }, to: { r: 4, c: 3 }, text: 'Le fou adverse essaye de reprendre le contrôle.', color: '#B86F6B' },
     check: (state) => state.puzzlePurchased && state.puzzleResponseDone
-      && state.board[2][5]?.type === 'Q'
-      && state.board[2][5].upgrades.includes('feinte')
-      && state.board[2][5].feinteUsed,
+      && state.board[2][2]?.type === 'Q'
+      && state.board[2][2].upgrades.includes('feinte')
+      && state.board[2][2].feinteUsed,
   },
   {
     id: 'puzzle-couronne', title: 'Le bouclier royal', upgrade: 'Couronne', upgradeId: 'couronne',
@@ -649,11 +649,12 @@ export const PUZZLES = [
       ? { cells: [{ r: 4, c: 4 }] }
       : { cells: [{ r: 4, c: 1 }] },
     failMessage: 'La tour doit échanger sa place avec le pion en e4 pour ouvrir la colonne et mettre le roi en échec.',
-    response: { from: { r: 1, c: 7 }, to: { r: 2, c: 7 }, text: 'Le pion avance, mais le roi reste sous échec.', color: '#B86F6B' },
+    response: { from: { r: 0, c: 4 }, to: { r: 1, c: 3 }, text: 'Le roi est obligé de bouger pour ne plus être en échec.', color: '#B86F6B' },
     power: 'echange', check: (state) => state.puzzlePurchased && state.puzzleResponseDone
+      && state.board[1][3]?.type === 'K'
       && state.board[4][4]?.type === 'R'
       && state.board[4][4].upgrades.includes('echange')
-      && roiEnEchec(state.board, 1),
+      //&& roiEnEchec(state.board, 1),
   },
 ];
 

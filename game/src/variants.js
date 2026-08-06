@@ -14,8 +14,8 @@ import { REVENU_PAR_COUP } from './constants.js?v=109';
 
 // Plafond du solde par joueur (GDD §5.2.b). Infinity = pas de plafond (illimité).
 export const ECONOMIES = [
-  { id: 'standard',  plafond: 30,       label: 'Plafond 30', sub: 'plafond 30 écus' },
-  { id: 'plafond15', plafond: 15,       label: 'Plafond 15', sub: 'plafond bas, tactique' },
+  { id: 'standard',  plafond: 30,       label: 'Plafond 30 écus', sub: 'plafond 30 écus' },
+  { id: 'plafond15', plafond: 15,       label: 'Plafond 15 écus', sub: 'plafond bas, tactique' },
   { id: 'illimite',  plafond: Infinity, label: 'Illimité',   sub: 'thésaurisation libre' },
 ];
 
@@ -23,9 +23,9 @@ export const ECONOMIES = [
 // Seul `elimX2` porte un timer d'inactivité (stagnation > 0).
 export const COMBATS = [
   { id: 'standard', revenueBase: 1, captureMul: 1, stagnation: 0,
-    label: 'Déplacement +2', sub: '+2 écus par déplacement, capture ×1' },
+    label: 'Déplacement +2 écus', sub: '+2 écus par déplacement, capture ×1' },
   { id: 'elimX2',   revenueBase: 0, captureMul: 2, stagnation: 10,
-    label: 'Élim. ×2', sub: '+0/coup, capture ×2, filet 10' },
+    label: 'Élim. ×2 écus', sub: '+0/coup, capture ×2, filet 10' },
 ];
 
 // --- Catalogue complet des 6 combinaisons (référence matrice GDD §7.2) ---
