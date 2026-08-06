@@ -17,7 +17,8 @@
 --   2. Crée la RPC pvp_report_result : chaque client rapporte le résultat en fin de
 --      partie ; les trophées Elo (K=32, plancher 0) ne sont écrits QUE si les DEUX
 --      rapports concordent (l'un « win », l'autre « loss » — ou les deux « draw »),
---      OU si le survivant signale un abandon (rapport unilatéral accepté, §8.3).
+--      Aucun gain unilateral n'est accepte : un rapport coherent des deux joueurs
+--      est requis pour attribuer des trophees.
 --      Anti-double-écriture : un match ne « paie » qu'une fois (verrou FOR UPDATE +
 --      garde status='ended').
 --   3. RÉVOQUE et SUPPRIME apply_match_result (PvAI) — dernier vecteur de farm fermé.
@@ -74,25 +75,27 @@ create trigger profiles_guard_trophies
 
 -- ---------------------------------------------------------------------------
 -- 2) RPC pvp_report_result (spec §3.5 / §8) — LA SEULE écriture autoritaire de trophies.
+-- La signature historique a trois arguments : on la supprime avant de recréer
+-- la version durcie à deux arguments, pour éviter un overload vulnérable.
+DROP FUNCTION IF EXISTS public.pvp_report_result(uuid, text, boolean);
+DROP FUNCTION IF EXISTS public.pvp_report_result(uuid, text);
 --    p_result           : 'win' | 'loss' | 'draw' du point de vue de l'APPELANT.
---    p_opponent_abandoned : true si l'appelant est le survivant d'un abandon/déconnexion
---                           (fenêtre 30 s échue côté client, §8.3) — accepte alors un
---                           rapport unilatéral 'win'.
+--    Un abandon ou une deconnexion ne suffit pas a attribuer un gain unilateral :
+--    le serveur attend les deux rapports coherents.
 --    Retour (RETURNS TABLE → tableau d'1 ligne côté PostgREST) :
 --      applied      : true si les trophées ont été écrits (ou l'étaient déjà) ;
 --      my_delta     : delta Elo de l'appelant (0 tant que non appliqué) ;
 --      my_total     : total de trophées de l'appelant (à jour si appliqué) ;
 --      match_status : 'ended' | 'disputed' | 'voided' | 'playing' (en attente).
 -- ---------------------------------------------------------------------------
-create or replace function public.pvp_report_result(
+create function public.pvp_report_result(
   p_match_id uuid,
-  p_result text,
-  p_opponent_abandoned boolean default false
+  p_result text
 )
 returns table(applied boolean, my_delta int, my_total int, match_status text)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 #variable_conflict use_column
 declare
@@ -154,10 +157,6 @@ begin
     elsif v_m.result_p1 = 'draw' and v_m.result_p2 = 'draw' then v_concord := true; v_draw := true;
     else v_concord := false;  -- ex. deux « win » → litige
     end if;
-  elsif p_opponent_abandoned and p_result = 'win' then
-    -- Exception abandon/déconnexion (§8.3) : le survivant fait foi, rapport unilatéral.
-    v_concord := true;
-    v_winner  := case when v_is_p1 then 0 else 1 end;
   end if;
 
   if not v_concord then
@@ -209,7 +208,7 @@ begin
            'ended'::text;
 end $$;
 
-grant execute on function public.pvp_report_result(uuid, text, boolean) to authenticated;
+grant execute on function public.pvp_report_result(uuid, text) to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2bis) RPC pvp_rematch (spec §9.4) — revanche entre les deux mêmes joueurs, COULEURS
@@ -221,7 +220,7 @@ create or replace function public.pvp_rematch(p_prev uuid)
 returns table(match_id uuid, side int, opp_pseudo text, opp_trophies int)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 #variable_conflict use_column
 declare
@@ -236,6 +235,7 @@ declare
   v_opp  uuid;
 begin
   select * into v_prev from matches m where m.id = p_prev for update;
+  if v_me is null then raise exception 'not_authenticated'; end if;
   if not found then raise exception 'match_not_found'; end if;
   if v_me <> v_prev.p1 and v_me <> v_prev.p2 then raise exception 'not_a_player'; end if;
   if v_prev.p2 is null then raise exception 'no_opponent'; end if;

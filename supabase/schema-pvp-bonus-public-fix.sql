@@ -11,15 +11,16 @@
 -- bonus reste jouable en ligne, mais ne modifie aucun trophée.
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION public.pvp_report_result(
+DROP FUNCTION IF EXISTS public.pvp_report_result(uuid, text, boolean);
+DROP FUNCTION IF EXISTS public.pvp_report_result(uuid, text);
+CREATE FUNCTION public.pvp_report_result(
   p_match_id uuid,
-  p_result text,
-  p_opponent_abandoned boolean DEFAULT false
+  p_result text
 )
 RETURNS TABLE(applied boolean, my_delta int, my_total int, match_status text)
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 #variable_conflict use_column
 declare
@@ -78,9 +79,6 @@ begin
     elsif v_m.result_p1 = 'draw' and v_m.result_p2 = 'draw' then
       v_concord := true; v_draw := true;
     end if;
-  elsif p_opponent_abandoned and p_result = 'win' then
-    v_concord := true;
-    v_winner := case when v_is_p1 then 0 else 1 end;
   end if;
 
   if not v_concord then
@@ -136,6 +134,6 @@ begin
            'ended'::text;
 end $$;
 
-grant execute on function public.pvp_report_result(uuid, text, boolean) to authenticated;
+grant execute on function public.pvp_report_result(uuid, text) to authenticated;
 
 NOTIFY pgrst, 'reload schema';

@@ -3,11 +3,14 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  LEARN_GAMES,
   PUZZLES,
+  demarrerMiniJeu,
   demarrerPuzzle,
   learnPermet,
   puzzleReponse,
 } from '../game/src/learn.js?v=19';
+import { UPGRADES } from '../game/src/constants.js?v=109';
 import { coupsLegaux, roiEnEchec } from '../game/src/rules.js?v=116';
 
 const SOLUTIONS = [
@@ -26,6 +29,53 @@ function etatPuzzle(index) {
   state.puzzlePurchased = true;
   return { state, piece };
 }
+
+describe('Parcours classique — catalogue complet des améliorations actives et déplacement', () => {
+  test('enseigne chaque amélioration ACTIF et DÉPLACEMENT prévue dans le parcours', () => {
+    const enseignees = new Set(LEARN_GAMES.map((game) => game.upgradeId));
+    const attendues = Object.values(UPGRADES)
+      .filter((upgrade) => (upgrade.cat === 'A' || upgrade.cat === 'D') && !['sacrifice', 'sht'].includes(upgrade.id))
+      .map((upgrade) => upgrade.id);
+
+    assert.deepEqual(
+      attendues.filter((id) => !enseignees.has(id)),
+      [],
+      'aucune amélioration active ou déplacement conservée ne doit manquer du parcours classique',
+    );
+    assert.equal(enseignees.has('sacrifice'), false, 'Mariage stratégique ne doit plus être dans Apprendre');
+    assert.equal(enseignees.has('sht'), false, 'S.H.T. ne doit plus être dans Apprendre');
+    assert.equal(new Set(LEARN_GAMES.map((game) => game.id)).size, LEARN_GAMES.length);
+  });
+
+  test('chaque étape classique prépare sa pièce et son objectif', () => {
+    for (let index = 0; index < LEARN_GAMES.length; index++) {
+      const state = {};
+      assert.equal(demarrerMiniJeu(state, index), true, LEARN_GAMES[index].id);
+      assert.equal(state.learnExpectedPiece?.owner, 0, LEARN_GAMES[index].id);
+      assert.equal(typeof LEARN_GAMES[index].check, 'function', LEARN_GAMES[index].id);
+    }
+  });
+
+  test('Cavalerie présente un pion en face et guide sa poussée', () => {
+    const index = LEARN_GAMES.findIndex((game) => game.id === 'cavalerie');
+    const state = {};
+    assert.notEqual(index, -1);
+    assert.equal(demarrerMiniJeu(state, index), true);
+    const cavalier = state.learnExpectedPiece;
+    assert.equal(cavalier.type, 'N');
+    assert.equal(state.board[3][4]?.type, 'P');
+    assert.equal(state.board[3][4]?.owner, 1);
+
+    cavalier.upgrades.push('cavalerie');
+    state.learnPurchased = true;
+    assert.equal(learnPermet(state, { type: 'power', kind: 'cavalerie', piece: cavalier }), true);
+
+    state.phase = 'cavalerie-target';
+    assert.equal(learnPermet(state, { type: 'target', cell: { r: 3, c: 4 } }), true);
+    state.phase = 'cavalerie-push';
+    assert.equal(learnPermet(state, { type: 'target', cell: { r: 2, c: 3 } }), true);
+  });
+});
 
 describe('Puzzles tactiques — lignes et refus des mauvais coups', () => {
   test('refuse un déplacement légal mais tactiquement incorrect sans modifier la position', () => {

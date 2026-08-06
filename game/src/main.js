@@ -4,7 +4,7 @@
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=160';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=164';
 import { iaDecideTour } from './ai.js?v=111';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
@@ -14,8 +14,8 @@ import { demarrerApprendre, demarrerPuzzles, demarrerMiniJeu, demarrerPuzzle,
   reinitialiserMiniJeu, reinitialiserPuzzle, verifierMiniJeu, verifierPuzzle,
   marquerMiniJeuReussi, marquerPuzzleReussi, marquerPuzzleReponse, puzzleReponse,
   TOTAL_LEARN_GAMES, TOTAL_PUZZLES,
-  apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=19';
-import { initAccount, startAuth, logout, getAccount, getSupabaseClient } from './account.js?v=107';
+  apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
+import { initAccount, startAuth, logout, getAccount, getSupabaseClient } from './account.js?v=108';
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue,
   sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=110';
@@ -32,6 +32,9 @@ import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBAT
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
 import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
+import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=2';
+// La langue pilote à la fois le Canvas et les overlays DOM (auth + renommage de deck).
+// Un seul listener global évite qu'un modal oublié reste en français après le toggle.
 
 const canvas = document.getElementById('jeu');
 canvas.width = CANVAS_W;
@@ -53,6 +56,7 @@ function lireThemeSauvegarde() {
 }
 
 let themeMode = lireThemeSauvegarde();
+let language = lireLangue();
 
 function appliquerThemeDOM() {
   const root = document.documentElement;
@@ -102,6 +106,13 @@ function basculerTheme() {
 }
 
 appliquerTheme(themeMode, { persist: false });
+// Traduction initiale des overlays statiques, puis resynchronisation à chaque changement.
+appliquerTraductions(document.body, language);
+onLangueChange((nextLanguage) => {
+  language = nextLanguage;
+  if (state.menu) state.menu.language = nextLanguage;
+  appliquerTraductions(document.body, nextLanguage);
+});
 
 // PvP en ligne (spec-pvp-online §6) : cadence au choix (1 min / 5 min / 1 h / 1 jour,
 // catalogue PVW_CADENCES de constants.js), SANS incrément (décision utilisateur 12/07,
@@ -174,6 +185,7 @@ function menuState() {
     _hasReplays: false,
     menu: { difficulty: null,
              themeMode,
+             language,
              // Variantes locales (GDD §7.2 v3) : TROIS axes orthogonaux combinés
              // librement (3 économie × 2 combat × 2 taille = 12). Phase A.5 v2
              // Phase 3 ajoute l'axe TAILLE (std 8×8 / l15 8×15) avec silent
@@ -499,7 +511,7 @@ function finPartie(winner) {
     }
     // PvP en ligne (CYCLE W3, spec §3.5/§8) : SEULE source de trophées du jeu. Chaque
     // client rapporte son résultat ; l'Elo K=32 n'est écrit côté serveur que si les deux
-    // rapports concordent (ou abandon constaté). Le PvAI n'écrit RIEN (hookTrophees
+    // rapports concordent. Le PvAI n'écrit RIEN (hookTrophees
     // débranché) — QA-PVW-18.
     if (state.mode === 'pvw' && state.pvw) reporterResultatPvP();
   }
@@ -507,16 +519,15 @@ function finPartie(winner) {
 
 // Rapporte le résultat PvP au serveur et alimente l'écran de fin (delta Elo animé).
 // state.trophy suit le même contrat que l'ancien bloc PvAI (pending → résolu) pour
-// réutiliser dessineBlocTrophee. Un abandon/déconnexion constaté (endReason 'abandon')
-// autorise le rapport unilatéral du survivant (§8.3).
+// réutiliser dessineBlocTrophee. Le serveur exige désormais deux rapports concordants
+// pour attribuer des trophées ; un abandon local peut donc rester non classé.
 function reporterResultatPvP() {
   const p = state.pvw;
   const won = state.winner === p.side;
   const result = state.winner === null ? 'draw' : (won ? 'win' : 'loss');
-  const opponentAbandoned = (p.endReason === 'abandon' && won);
   const prev = getAccount().trophies || 0;
   state.trophy = { pending: true, won, prev, delta: 0, total: prev, t0: performance.now() };
-  onlineReport(result, opponentAbandoned).then((res) => {
+  onlineReport(result).then((res) => {
     // total serveur si appliqué ; sinon on garde prev (aucun trophée écrit) + note.
     const total = (res.applied && res.total != null) ? res.total : prev;
     state.trophy = {
@@ -754,8 +765,14 @@ function finDeTour() {
         if (p.epineZone.turns <= 0) p.epineZone = null;
       }
       if (p.owner !== state.turn) continue;
-      // Rempart : le blindage temporaire expire au prochain tour du joueur (GDD §6 Tour).
-      if (p.rempartGranted) { p.rempartGranted = false; if (p.shield) p.shield = false; }
+      // Rempart : le blindage temporaire expire au prochain tour du joueur
+      // (GDD §6 Tour). Le parcours classique n'a pas de tour adverse réel : on
+      // conserve le blindage pour que la démonstration puisse être observée et
+      // validée après l'activation.
+      if (p.rempartGranted && !(state.mode === 'learn' && state.learnKeepRempart)) {
+        p.rempartGranted = false;
+        if (p.shield) p.shield = false;
+      }
       // Décrément des cooldowns.
       for (const k of Object.keys(p.cooldowns)) {
         if (p.cooldowns[k] > 0) p.cooldowns[k]--;
@@ -2239,6 +2256,14 @@ function actionBouton(action) {
           state.selected = null;
           state.legalMoves = [];
           state.phase = 'learn-game';
+        } else if (state.learnKind === 'classic') {
+          // Après l'achat, referme le catalogue pour révéler le bouton du
+          // pouvoir actif. On conserve la pièce sélectionnée afin que le joueur
+          // puisse l'activer immédiatement (notamment pour Épine niveau 19).
+          state.panelPiece = null;
+          state.selected = learnPiece;
+          state.phase = 'play';
+          state.legalMoves = coupsAutorises(learnPiece);
         }
       }
       break;
@@ -2413,6 +2438,12 @@ function actionBouton(action) {
     case 'toggleTheme':
       basculerTheme();
       if (state.menu) state.menu.themeMode = themeMode;
+      break;
+    case 'setLanguage':
+    language = enregistrerLangue(action.code);
+    state.language = language;
+    if (state.menu) state.menu.language = language;
+      if (state.ui) state.ui.hamburgerT0 = performance.now();
       break;
     case 'togglePreview': {
       if (state.phase !== 'menu' || !state.ui || !state.ui.preview) break;
@@ -2669,6 +2700,10 @@ function boutonSous(x, y) {
   if (!state.ui || !state.ui.buttons) return null; // Sécurité
   for (let i = state.ui.buttons.length - 1; i >= 0; i--) {
     const b = state.ui.buttons[i];
+    // Le drawer est un voile modal : tant qu'il est ouvert, les contrôles du
+    // menu situé derrière ne doivent ni être survolés ni recevoir le clic.
+    // Les seuls boutons autorisés sont ceux du panneau et le bouton hamburger.
+    if (!interactionAutoriseeParDrawer(b, x, y)) continue;
     if (b.shape === 'circle') {
       const cx = b.x + b.w / 2;
       const cy = b.y + b.h / 2;
@@ -2679,6 +2714,24 @@ function boutonSous(x, y) {
     if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
   }
   return null;
+}
+
+function estBoutonDrawer(button) {
+  const kind = button && button.action && button.action.kind;
+  return kind === 'login' || kind === 'logout' || kind === 'toggleTheme' || kind === 'setLanguage';
+}
+
+function interactionAutoriseeParDrawer(button, x, y) {
+  if (!state.ui || !state.ui.hamburgerOpen) return true;
+  if (button.action && button.action.kind === 'toggleHamburger') return true;
+  // Les contrôles du panneau sont les seuls contrôles autorisés pendant son
+  // ouverture. La simple présence d'une ancienne hitbox derrière le panneau
+  // ne suffit donc plus à rendre un bouton cliquable.
+  if (!estBoutonDrawer(button)) return false;
+  const panel = state.ui.hamburgerPanel;
+  return !!panel
+    && x >= panel.x && x <= panel.x + panel.w
+    && y >= panel.y && y <= panel.y + panel.h;
 }
 
 function mettreAJourPointeur(e, { clearPress = false } = {}) {
@@ -2976,6 +3029,7 @@ function loop(now) {
   // Les états de partie/replay sont recréés indépendamment du menu : recopier
   // la préférence globale garantit que le bandeau garde le bon libellé partout.
   state.themeMode = themeMode;
+  state.language = language;
   state._hasReplays = hasReplays(); // pour la liste REPLAYS du menu (render.js)
   if (state.phase === 'menu' || state.phase === 'replays') {
     state._replayList = getReplayList();

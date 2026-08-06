@@ -29,7 +29,8 @@ import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal
 // pour l'affichage). Aucune dépendance inverse.
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
-  apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=19';
+  apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
+import { traduire } from './i18n.js?v=1';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -433,6 +434,17 @@ function enregistrerBouton(state, x, y, w, h, action, enabled, styled = false, r
   return button;
 }
 
+function boutonDrawerAutorise(state, button, x, y) {
+  const ui = state && state.ui;
+  if (!ui || !ui.hamburgerOpen) return true;
+  const kind = button && button.action && button.action.kind;
+  if (kind === 'toggleHamburger') return true;
+  if (!['login', 'logout', 'toggleTheme', 'setLanguage'].includes(kind)) return false;
+  const panel = ui.hamburgerPanel;
+  return !!panel && x >= panel.x && x <= panel.x + panel.w
+    && y >= panel.y && y <= panel.y + panel.h;
+}
+
 function motionBouton(state, button) {
   const ui = ensureButtonUI(state);
   const now = ui.frameNow || (typeof performance !== 'undefined' ? performance.now() : 0);
@@ -443,7 +455,9 @@ function motionBouton(state, button) {
   }
   const dt = Math.min(64, Math.max(0, now - motion.lastNow));
   motion.lastNow = now;
-  const hovered = button.enabled && ui.pointer.inside && insideButton(button, ui.pointer.x, ui.pointer.y);
+  const hovered = button.enabled && ui.pointer.inside
+    && boutonDrawerAutorise(state, button, ui.pointer.x, ui.pointer.y)
+    && insideButton(button, ui.pointer.x, ui.pointer.y);
   const pressed = button.enabled && ui.pressedId === button.id;
   motion.hover = approche(motion.hover, hovered ? 1 : 0, dt, BUTTON_HOVER_MS);
   motion.press = approche(motion.press, pressed ? 1 : 0, dt, BUTTON_PRESS_MS);
@@ -496,6 +510,8 @@ function carte(ctx, x, y, w, h, r, fill, { shadow = true, stroke = UI_THEME.bord
 }
 
 function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '', color = UI_THEME.card, textColor = UI_THEME.text, subColor = UI_THEME.subtext, outlineColor = UI_THEME.border, disabledColor = UI_THEME.disabled, disabledTextColor = UI_THEME.disabledText, disabledOutlineColor = UI_THEME.disabledBorder } = {}) {
+  label = traduire(label, state && state.language);
+  sub = traduire(sub, state && state.language);
   const button = enregistrerBouton(state, x, y, w, h, action, enabled, true);
   const motion = motionBouton(state, button);
   const r = 10;
@@ -1146,10 +1162,8 @@ function dessinePopups(ctx, state, now) {
     ctx.font = `${taille}px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     // Contour Encre 2 px dessiné avant le remplissage : lisible sur tout fond (DA §11.3.b).
-    ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.strokeStyle = C_ENCRE;
-    ctx.strokeText(pop.text, 0, 0);
-    ctx.fillStyle = pop.color;
-    ctx.fillText(pop.text, 0, 0);
+    ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.strokeStyle = C_ENCRE;     ctx.strokeText(traduire(pop.text, state.language), 0, 0);
+    ctx.fillStyle = pop.color;     ctx.fillText(traduire(pop.text, state.language), 0, 0);
     ctx.restore();
   }
 }
@@ -1224,10 +1238,10 @@ function dessineResumeVariante(ctx, state, x, y, w) {
   // tandis que Standard crédite le revenu normal par coup.
   const revenu = variant.revenueBase > 0 ? REVENU_PAR_COUP : 0;
   const combat = `+${revenu} · ×${variant.captureMul || 1}`;
-  const items = [
-    ['ÉCUS', economie === '∞' ? '∞ max' : `${economie} max`],
-    ['COMBAT', combat],
-    ['PLATEAU', taille.label.replace(/\\s/g, '')],
+  const items = [      ['ÉCUS', economie === '∞' ? '∞ max' : `${economie} max`],
+      ['COMBAT', combat],
+      ['PLATEAU', traduire(taille.label.replace(/\\s/g, ''), state.language)],
+
   ];
   const gap = 5;
   const cellW = Math.max(1, (w - gap * (items.length - 1)) / items.length);
@@ -1238,15 +1252,15 @@ function dessineResumeVariante(ctx, state, x, y, w) {
   ctx.font = `9px ${F_DISPLAY}`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
-  ctx.fillText('RÈGLES DE LA PARTIE', x, y - 7);
+  ctx.fillText(traduire('RÈGLES DE LA PARTIE', state.language), x, y - 7);
   items.forEach(([label, value], i) => {
     const ix = x + i * (cellW + gap);
     carte(ctx, ix, y, cellW, h, 7, UI_THEME.panel, { shadow: false, stroke: UI_THEME.border });
     ctx.fillStyle = UI_THEME.muted;
     ctx.font = `8px ${F_TEXTE}`;
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(label, ix + cellW / 2, y + 8);
+    ctx.textBaseline = 'top';     ctx.fillText(traduire(label, state.language), ix + cellW / 2, y + 8);
+
     ctx.fillStyle = UI_THEME.text;
     ctx.font = `11px ${F_DISPLAY}`;
     ctx.textBaseline = 'bottom';
@@ -1303,7 +1317,9 @@ function dessinePanneau(ctx, state, now) {
     // En PvP en ligne, on nomme les camps « Toi » / pseudo adverse plutôt que Joueur 1/2.
     let nomJ = NOM_JOUEUR[j];
     if (state.mode === 'pvw' && state.pvw) nomJ = j === state.pvw.side ? 'Toi' : (state.pvw.oppPseudo || 'Adversaire');
-    ctx.fillText((nomJ + (actif ? '  ·  à jouer' : '')).toUpperCase(), x + 36, y + 21);
+    const nomJTraduit = traduire(nomJ, state.language);
+    const statutJoueur = actif ? `  ·  ${traduire('à jouer', state.language)}` : '';
+    ctx.fillText((nomJTraduit + statutJoueur).toUpperCase(), x + 36, y + 21);
 
     // Écusson doré du solde (DA §11.3.a) : pilule 60×24, Doré si actif sinon désaturé.
     const eW = 60, eH = 24, eX = x + w - 66, eY = y + 9;
@@ -1330,9 +1346,9 @@ function dessinePanneau(ctx, state, now) {
 
   // Enchaînement en attente (Double coup / Second galop).
   if (state.chain) {
-    const msg = state.chain.type === 'double-coup'
+    const msg = traduire(state.chain.type === 'double-coup'
       ? 'Double coup : rejouez la Dame'
-      : 'Second galop : rejouez le Cavalier (sans capture)';
+      : 'Second galop : rejouez le Cavalier (sans capture)', state.language);
     ctx.fillStyle = UI_THEME.amberDark; ctx.font = `600 14px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText(msg, x, y);
@@ -1348,7 +1364,7 @@ function dessinePanneau(ctx, state, now) {
     ctx.fillStyle = UI_THEME.text; ctx.font = `600 14px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     const valeur = valeurAffichee(sel);
-    ctx.fillText(`${nomType(sel.type)} — valeur ${valeur}`, x + 10, y + 13);
+    ctx.fillText(`${nomType(sel.type, state.language)} — ${traduire('valeur', state.language)} ${valeur}`, x + 10, y + 13);
     y += 34;
 
     // S.H.T. : les améliorations d'une pièce sont silencées si le roi adverse
@@ -1400,16 +1416,6 @@ function dessinePanneau(ctx, state, now) {
       y += 42;
     }
 
-    // Pouvoir actif : Rayon sacré (fou).
-    if (sel.type === 'B' && sel.upgrades.includes('Rayon')) {
-      const cd = sel.cooldowns.Rayon || 0;
-      const pret = !powersBlocked && cd === 0 && state.phase === 'play'
-        && tutorielPermet(state, { type: 'power', kind: 'rayon' });
-      bouton(state, ctx, x, y, w, 34, 'Rayon sacré', { kind: 'rayon' },
-        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: cd > 0 ? `recharge ${cd}` : 'capture à distance' });
-      y += 42;
-    }
-
     // Pouvoir actif : Mariage stratégique (roi).
     if (sel.type === 'K' && sel.upgrades.includes('sacrifice')) {
       const cd = sel.cooldowns.sacrifice || 0;
@@ -1418,6 +1424,16 @@ function dessinePanneau(ctx, state, now) {
       bouton(state, ctx, x, y, w, 34, 'Mariage strat.', { kind: 'sacrifice' },
         { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText,
           sub: sel.sacrificeArmed ? 'armé' : (cd > 0 ? `recharge ${cd}` : 'immobilise la reine adverse') });
+      y += 42;
+    }
+
+    // Pouvoir actif : Rayon sacré (fou).
+    if (sel.type === 'B' && sel.upgrades.includes('Rayon')) {
+      const cd = sel.cooldowns.Rayon || 0;
+      const pret = !powersBlocked && cd === 0 && state.phase === 'play'
+        && tutorielPermet(state, { type: 'power', kind: 'rayon' });
+      bouton(state, ctx, x, y, w, 34, 'Rayon sacré', { kind: 'rayon' },
+        { enabled: pret, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: cd > 0 ? `recharge ${cd}` : 'capture à distance' });
       y += 42;
     }
 
@@ -1509,16 +1525,18 @@ function dessinePanneau(ctx, state, now) {
 }
 
 // Petite légende D / A / S — rend lisible le code couleur utilisé sur chaque carte.
-function dessineLegendeCategories(ctx, x, y) {
-  const items = [['D', 'Déplacement'], ['A', 'Actif'], ['S', 'Stat']];
+function dessineLegendeCategories(ctx, state, x, y) {
+  const items = [['D', 'DÉPLACEMENT'], ['A', 'ACTIF'], ['S', 'STAT']];
   ctx.font = `10px ${F_TEXTE}`; ctx.textBaseline = 'middle';
   let lx = x;
   for (const [cat, label] of items) {
     ctx.beginPath(); ctx.arc(lx + 4, y, 4, 0, Math.PI * 2);
     ctx.fillStyle = COULEUR_CAT[cat]; ctx.fill();
-    ctx.fillStyle = UI_THEME.muted; ctx.textAlign = 'left';
-    ctx.fillText(label, lx + 11, y);
-    lx += ctx.measureText(label).width + 26;
+    ctx.fillStyle = UI_THEME.muted; ctx.textAlign = 'left';     const translatedLabel = traduire(label, state.language);
+     ctx.fillText(translatedLabel, lx + 11, y);
+
+     lx += ctx.measureText(translatedLabel).width + 26;
+
   }
 }
 
@@ -1526,10 +1544,10 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
   const p = state.panelPiece;
   ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText(`AMÉLIORER : ${nomType(p.type).toUpperCase()}`, x, y);
+  ctx.fillText(`${traduire('AMÉLIORER', state.language)} : ${nomType(p.type, state.language).toUpperCase()}`, x, y);
   bouton(state, ctx, x + w - 26, y - 4, 26, 22, '×', { kind: 'closePanel' }, { color: UI_THEME.dangerDark, textColor: UI_THEME.text, outlineColor: UI_THEME.danger });
   y += 20;
-  dessineLegendeCategories(ctx, x, y + 6);
+  dessineLegendeCategories(ctx, state, x, y + 6);
   // Marge supplémentaire : laisse respirer la pastille de coût qui déborde du haut
   // de la 1re carte (DA §11.1.c, grammaire « déborde du conteneur »).
   y += 28;
@@ -1591,14 +1609,14 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
     // Nom + description (décalés à droite du liseré 8 px).
     ctx.fillStyle = (achetable || deja) && !bientot ? UI_THEME.text : UI_THEME.disabledText;
     ctx.font = `12px ${F_DISPLAY}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText(u.nom.toUpperCase(), cx0 + 18, y + 8);
+    ctx.fillText(traduire(u.nom, state.language).toUpperCase(), cx0 + 18, y + 8);
     ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
-    wrapText(ctx, u.desc, cx0 + 18, y + 28, w - 52, 14);
+    wrapText(ctx, traduire(u.desc, state.language), cx0 + 18, y + 28, w - 52, 14);
 
     // Carte « bientôt » : pas de pastille, juste un libellé neutre (DA §11.1, pas de premium).
     if (bientot) {
       ctx.textAlign = 'right'; ctx.font = `700 13px ${F_TEXTE}`; ctx.fillStyle = UI_THEME.disabledText;
-      ctx.fillText('bientôt', cx0 + w - 10, y + 8);
+      ctx.fillText(traduire('bientôt', state.language), cx0 + w - 10, y + 8);
     } else if (verrou) {
       // Carte verrouillée par l'étape du tutoriel : cadenas à la place de la pastille.
       ctx.textAlign = 'right'; ctx.font = `700 13px ${F_TEXTE}`; ctx.fillStyle = UI_THEME.disabledText;
@@ -1702,10 +1720,10 @@ function dessinePromotion(ctx, state, now) {
   ctx.fillStyle = UI_THEME.text;
   ctx.font = `20px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('PROMOTION', x0 + W / 2, y0 + 30);
+  ctx.fillText(traduire('PROMOTION', state.language), x0 + W / 2, y0 + 30);
   ctx.fillStyle = UI_THEME.subtext;
   ctx.font = `600 12px ${F_TEXTE}`;
-  ctx.fillText('Choisissez la nouvelle pièce du pion', x0 + W / 2, y0 + 52);
+  ctx.fillText(traduire('Choisissez la nouvelle pièce du pion', state.language), x0 + W / 2, y0 + 52);
 
   // 4 tuiles de choix : sprite réel de la pièce (au skin/camp VISUEL du joueur).
   types.forEach((choix, i) => {
@@ -1721,7 +1739,7 @@ function dessinePromotion(ctx, state, now) {
     ctx.fillStyle = UI_THEME.subtext;
     ctx.font = `700 10px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(choix.nom.toUpperCase(), bx + TILE / 2, by + TILE - 9);
+    ctx.fillText(traduire(choix.nom, state.language).toUpperCase(), bx + TILE / 2, by + TILE - 9);
   });
 
   // ✕ annuler (coin haut droit) — rend la sélection sans jouer le coup.
@@ -1814,12 +1832,13 @@ function dessineGameOver(ctx, state, now) {
   if (state.winner === null) {
     titre = 'ÉGALITÉ'; titreColor = C_ENCRE;
   } else if (pvw) {
-    const nom = state.winner === state.pvw.side ? 'TU' : (state.pvw.oppPseudo || 'Adversaire').toUpperCase();
-    titre = `${nom} GAGNE${state.winner === state.pvw.side ? 'S' : ''} !`;
+    titre = state.winner === state.pvw.side
+      ? `${traduire('TU GAGNES !', state.language)}`
+      : `${(state.pvw.oppPseudo || traduire('Adversaire', state.language)).toUpperCase()} ${traduire('GAGNE !', state.language)}`;
     // Couleur VISUELLE : si je gagne, la couleur annoncée est celle de MES pièces à l'écran.
     titreColor = ACCENT[campVisuel(state, state.winner)];
   } else {
-    titre = `${NOM_JOUEUR[state.winner].toUpperCase()} GAGNE !`;
+    titre = `${traduire(NOM_JOUEUR[state.winner], state.language).toUpperCase()} ${traduire('GAGNE !', state.language)}`;
     titreColor = ACCENT[campVisuel(state, state.winner)];
   }
   ctx.strokeText(titre, cx, py + 48);
@@ -1832,20 +1851,20 @@ function dessineGameOver(ctx, state, now) {
   if (voided) soustexte = 'Partie annulée';
   else if (pvw && state.pvw.endReason === 'time') soustexte = state.winner === null ? 'Égalité au temps (départage)' : 'Victoire au temps (départage)';
   else if (pvw && state.pvw.endReason === 'resign') soustexte = 'Abandon';
-  else if (pvw && state.pvw.endReason === 'abandon') soustexte = 'Victoire par abandon (adversaire déconnecté)';
-  ctx.fillText(soustexte, cx, py + 84);
+  else if (pvw && state.pvw.endReason === 'abandon') soustexte = 'Victoire locale — résultat non classé';
+  ctx.fillText(traduire(soustexte, state.language), cx, py + 84);
 
   // --- Bloc central : trophée (PvP), calcul en cours, ou annulation ---
   const midY = py + 116;
   if (voided) {
     ctx.fillStyle = UI_THEME.danger; ctx.font = `14px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('Désynchronisation détectée — aucun trophée attribué.', cx, midY);
+    ctx.fillText(traduire('Désynchronisation détectée — aucun trophée attribué.', state.language), cx, midY);
   } else if (pendingTrophy) {
     ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const dots = ['.', '..', '...'][Math.floor(now / 400) % 3];
-    ctx.fillText('Calcul des trophées' + dots, cx, midY);
+    ctx.fillText(`${traduire('Calcul des trophées', state.language)}${dots}`, cx, midY);
   } else if (showTrophy) {
     dessineBlocTrophee(ctx, state, cx, midY, guestEph, now);
   }
@@ -1875,7 +1894,7 @@ function dessineGameOver(ctx, state, now) {
       ctx.fillStyle = UI_THEME.amber;
       ctx.font = `700 14px ${F_TEXTE}`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(`${state.pvw.oppPseudo || 'L\'adversaire'} propose une revanche`, cx, btnY - 20);
+      ctx.fillText(`${state.pvw.oppPseudo || traduire('Adversaire', state.language)} ${traduire('propose une revanche', state.language)}`, cx, btnY - 20);
       bouton(state, ctx, cx - 130, btnY, 124, 46, '✓ Accepter', { kind: 'acceptRematch' },
         { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'couleurs inversées' });
       bouton(state, ctx, cx + 6, btnY, 124, 46, '✕ Refuser', { kind: 'declineRematch' },
@@ -1921,9 +1940,9 @@ function dessineReconnexionPvw(ctx, state, now) {
   const nom = (p.oppPseudo || 'Adversaire');
   ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(`${nom} déconnecté`.toUpperCase(), bx + bw / 2, by + 20);
+  ctx.fillText(`${nom} ${traduire('déconnecté', state.language)}`.toUpperCase(), bx + bw / 2, by + 20);
   ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-  ctx.fillText(`Reprise possible — ${Math.ceil(restant)} s`, bx + bw / 2, by + 40);
+  ctx.fillText(`${traduire('Reprise possible', state.language)} — ${Math.ceil(restant)} s`, bx + bw / 2, by + 40);
   // Barre décroissante.
   const barW = bw - 40, barX = bx + 20, barY = by + bh - 14;
   ctx.fillStyle = UI_THEME.border;
@@ -1953,7 +1972,7 @@ function dessineBlocTrophee(ctx, state, cx, baseY, guestEph, now) {
     else m = 'Hors ligne — trophées non sauvegardés';
     ctx.fillText(m, cx, baseY);
     ctx.fillStyle = UI_THEME.disabledText; ctx.font = `13px ${F_TEXTE}`;
-    ctx.fillText(`Trophées : ${tr.total != null ? tr.total : tr.prev}`, cx, baseY + 24);
+    ctx.fillText(`${traduire('Trophées', state.language)} : ${tr.total != null ? tr.total : tr.prev}`, cx, baseY + 24);
     return;
   }
 
@@ -1983,12 +2002,13 @@ function dessineBlocTrophee(ctx, state, cx, baseY, guestEph, now) {
   ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const note = tr.error ? '  (hors ligne, non sauvegardé)' : '';
-  ctx.fillText(`Trophées : ${shown}${note}`, cx, baseY + 30);
+  ctx.fillText(`${traduire('Trophées', state.language)} : ${shown}${note}`, cx, baseY + 30);
 }
 
 // --- Helpers d'affichage ---
-function nomType(t) {
-  return { P: 'Pion', N: 'Cavalier', B: 'Fou', R: 'Tour', Q: 'Dame', K: 'Roi' }[t];
+function nomType(t, lang) {
+  const name = { P: 'Pion', N: 'Cavalier', B: 'Fou', R: 'Tour', Q: 'Dame', K: 'Roi' }[t];
+  return traduire(name, lang);
 }
 // Accord singulier/pluriel du mot « écu ».
 function ecusLabel(n) {
@@ -2062,7 +2082,8 @@ function dessineBandeauCompte(ctx, state) {
   const taille = 44;
   const ouvert = !!(state.ui && state.ui.hamburgerOpen);
   const themeMode = state.themeMode === 'light' ? 'light' : 'dark';
-  const themeLabel = themeMode === 'dark' ? '☀ Clair' : '☾ Sombre';
+  const themeLabel = traduire(themeMode === 'dark' ? '☀ Clair' : '☾ Sombre', state.language);
+  const language = state.language === 'en' ? 'en' : 'fr';
 
   // Bouton hamburger ENREGISTRÉ en premier : aucun bouton du panneau ne chevauche
   // son rect (coin haut droit), le hit-test reste donc correct. Il est DESSINÉ en
@@ -2106,10 +2127,10 @@ function dessineBandeauCompte(ctx, state) {
     // En-tête : MENU + sous-titre.
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
-    ctx.fillText('MENU', dx + pw / 2, y);
+    ctx.fillText(traduire('MENU', language), dx + pw / 2, y);
     y += 15;
     ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
-    ctx.fillText('Compte · Apparence · Langues', dx + pw / 2, y);
+    ctx.fillText(traduire('Compte · Apparence · Langues', language), dx + pw / 2, y);
     y += 12;
     ctx.strokeStyle = UI_THEME.border; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(dx + pad, y); ctx.lineTo(dx + pw - pad, y); ctx.stroke();
@@ -2123,7 +2144,7 @@ function dessineBandeauCompte(ctx, state) {
     };
 
     // --- COMPTE ---
-    entete('Compte');
+    entete(traduire('Compte', language));
     if (connected) {
       // Ligne pseudo + trophées (DA §11.3 : ambre/or).
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -2145,38 +2166,47 @@ function dessineBandeauCompte(ctx, state) {
       if (acc.trophies > 0) {
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
         ctx.fillStyle = UI_THEME.disabledText; ctx.font = `10px ${F_TEXTE}`;
-        ctx.fillText('🏆 ' + acc.trophies + ' éphémères — connecte-toi pour sauvegarder', dx + pad, y + 8);
+        ctx.fillText(`🏆 ${acc.trophies} ${traduire('éphémères — connecte-toi pour sauvegarder', language)}`, dx + pad, y + 8);
         y += 16;
       }
     }
     y += 16;
 
     // --- APPARE... ---
-    entete('Apparence');
+    entete(traduire('Apparence', language));
     bouton(state, ctx, dx + pad, y, pw - 2 * pad, 36, themeLabel, { kind: 'toggleTheme' },
       { color: UI_THEME.card, textColor: UI_THEME.text });
     y += 36 + 16;
 
     // --- LANGUES ---
-    entete('Langues');
-    // Français : seule langue disponible pour l'instant — ligne active non cliquable.
-    enregistrerBouton(state, dx + pad, y, pw - 2 * pad, 36,
-      { kind: 'langue', code: 'fr' }, false, true, 10);
-    ctx.fillStyle = UI_THEME.field;
-    roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.amberDark;
-    roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.stroke();
-    ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_TEXTE}`;
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText('🇫🇷  Français', dx + pad + 12, y + 18);
-    ctx.fillStyle = UI_THEME.amber; ctx.font = `14px ${F_DISPLAY}`;
-    ctx.textAlign = 'right';
-    ctx.fillText('✓', dx + pw - pad - 12, y + 18);
+    entete(traduire('Langues', language));
+    // Deux choix persistants : le bouton actif est signalé par un contour ambre.
+    const langOptions = [
+      ['fr', '🇫🇷  Français'],
+      ['en', '🇬🇧  English'],
+    ];
+    for (const [code, label] of langOptions) {
+      const selected = language === code;
+      enregistrerBouton(state, dx + pad, y, pw - 2 * pad, 36,
+        { kind: 'setLanguage', code }, true, true, 10);
+      ctx.fillStyle = selected ? UI_THEME.field : UI_THEME.card;
+      roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.fill();
+      ctx.lineWidth = selected ? 2 : 1; ctx.strokeStyle = selected ? UI_THEME.amberDark : UI_THEME.border;
+      roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.stroke();
+      ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_TEXTE}`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(traduire(label, language), dx + pad + 12, y + 18);
+      if (selected) {
+        ctx.fillStyle = UI_THEME.amber; ctx.font = `14px ${F_DISPLAY}`;
+        ctx.textAlign = 'right'; ctx.fillText('✓', dx + pw - pad - 12, y + 18);
+      }
+      y += 42;
+    }
 
     // Pied du drawer : mention de version discrète.
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
-    ctx.fillText('Roychec · bêta', dx + pw / 2, py + ph - 16);
+    ctx.fillText(traduire('Roychec · bêta', language), dx + pw / 2, py + ph - 16);
   } else {
     if (state.ui) state.ui.hamburgerPanel = null;
   }
@@ -2276,6 +2306,7 @@ function dessineMenuDashboard(ctx, state) {
   }
 
   function dbText(text, x, y, font, color = C.text, align = 'left', baseline = 'middle') {
+    text = traduire(text, state.language);
     ctx.fillStyle = color; ctx.font = font;
     ctx.textAlign = align; ctx.textBaseline = baseline;
     ctx.fillText(text, x, y);
@@ -2283,6 +2314,8 @@ function dessineMenuDashboard(ctx, state) {
 
   function dbControl(x, y, w, h, label, action, opts = {}) {
     const enabled = opts.enabled !== false;
+    label = traduire(label, state.language);
+    if (opts.sub) opts = { ...opts, sub: traduire(opts.sub, state.language) };
     const { visualY } = motionMenuBouton(state, x, y, w, h, action, enabled, opts.radius || R_INNER);
     ctx.fillStyle = enabled ? (opts.fill || C.card) : UI_THEME.disabled;
     roundRect(ctx, x, visualY, w, h, opts.radius || R_INNER); ctx.fill();
@@ -2297,6 +2330,7 @@ function dessineMenuDashboard(ctx, state) {
 
   function dbCta(x, y, w, h, label, action, opts = {}) {
     const enabled = opts.enabled !== false;
+    label = traduire(label, state.language);
     const { visualY } = motionMenuBouton(state, x, y, w, h, action, enabled, R_PILL);
     if (enabled) {
       ctx.save(); ctx.globalAlpha = 0.45; ctx.fillStyle = opts.shadow || C.forestDark;
@@ -2483,30 +2517,33 @@ function dessineMenuDashboard(ctx, state) {
       ? state._dashboardReplay : null;
     const events = replay && Array.isArray(replay.events)
       ? replay.events.filter((event) => event && typeof event === 'object') : [];
-    const modeLabel = replay?.mode === 'pvai' ? 'Ordinateur'
-      : replay?.mode === 'pvw' ? 'En ligne'
-      : replay?.mode === 'spectator' ? 'Spectateur' : 'Local';
+      const modeLabel = replay?.mode === 'pvai' ? traduire('Ordinateur', state.language)
+      : replay?.mode === 'pvw' ? traduire('En ligne', state.language)
+      : replay?.mode === 'spectator' ? traduire('Spectateur', state.language) : traduire('Local', state.language);
     const winner = replay?.result && (replay.result.winner === 0 || replay.result.winner === 1)
-      ? NOM_JOUEUR[replay.result.winner] : null;
-    const resultLabel = winner ? `${winner} gagne` : 'Partie en cours / nulle';
+      ? traduire(NOM_JOUEUR[replay.result.winner], state.language) : null;
+    const resultLabel = winner ? `${winner} ${traduire('gagne', state.language)}` : traduire('Partie en cours / nulle', state.language);
     const actionLabel = (event) => {
-      if (event.type === 'move') return `${event.piece || '?'} ${event.from || '?'}→${event.to || '?'}`;
-      if (event.type === 'purchase') return `🛒 ${event.upgrade || 'achat'}`;
-      if (event.type === 'power') return `⚡ ${event.power || 'pouvoir'}`;
-      return event.type || 'action';
+      if (event.type === 'move') return `${nomType(event.piece, state.language)} ${event.from || '?'}→${event.to || '?'}`;
+      if (event.type === 'purchase') {
+        const upgradeName = UPGRADES[event.upgrade]?.nom || event.upgrade || '';
+        return `🛒 ${traduire('achat', state.language)} · ${traduire(upgradeName, state.language)}`;
+      }
+      if (event.type === 'power') return `⚡ ${traduire('pouvoir', state.language)} · ${traduire(event.power || '', state.language)}`;
+      return traduire(event.type || 'action', state.language);
     };
     const compact = (text, max = 18) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
 
-    dbText('FEUILLE DE PARTIE', x + 18, y + 25, `700 13px ${F_DB}`, C.text);
-    dbText(replay ? `${modeLabel} · ${resultLabel}` : 'Aucune partie enregistrée',
+    dbText(traduire('FEUILLE DE PARTIE', state.language), x + 18, y + 25, `700 13px ${F_DB}`, C.text);
+    dbText(replay ? `${modeLabel} · ${resultLabel}` : traduire('Aucune partie enregistrée', state.language),
       x + 18, y + 45, `10px ${F_DB}`, replay ? C.muted : C.goldBright);
     ctx.strokeStyle = C.border; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x + 14, y + 61); ctx.lineTo(x + w - 14, y + 61); ctx.stroke();
 
     if (!replay || !events.length) {
-      dbText(replay ? 'Aucune action enregistrée' : 'Termine une partie pour afficher',
+      dbText(replay ? traduire('Aucune action enregistrée', state.language) : traduire('Termine une partie pour afficher', state.language),
         x + w / 2, y + 175, `11px ${F_DB}`, C.muted, 'center');
-      if (!replay) dbText('sa feuille de partie ici.', x + w / 2, y + 198,
+      if (!replay) dbText(traduire('sa feuille de partie ici.', state.language), x + w / 2, y + 198,
         `10px ${F_DB}`, C.muted, 'center');
     } else {
       // Le panneau montre les 8 dernières actions, dans l’ordre réel du replay.
@@ -2533,10 +2570,10 @@ function dessineMenuDashboard(ctx, state) {
     const total = replay?.result?.totalActions ?? events.length;
     const durationMs = Number(replay?.result?.duration);
     const duration = Number.isFinite(durationMs) ? `${Math.floor(durationMs / 60000)}:${String(Math.floor(durationMs / 1000) % 60).padStart(2, '0')}` : '--:--';
-    dbText(`${total} actions · ${duration}`, x + 16, y + h - 18, `10px ${F_DB}`, C.muted);
+    dbText(`${total} ${traduire('actions', state.language)} · ${duration}`, x + 16, y + h - 18, `10px ${F_DB}`, C.muted);
     if (replay && typeof state._dashboardReplayKey === 'string'
         && state._dashboardReplayKey.length > 0) {
-      dbControl(x + w - 88, y + h - 32, 72, 24, 'Replay',
+      dbControl(x + w - 88, y + h - 32, 72, 24, traduire('REPLAY', state.language),
         { kind: 'startReplay', key: state._dashboardReplayKey },
         { fill: C.gold, font: `700 9px ${F_DB}`, radius: 7 });
     }
@@ -2554,7 +2591,7 @@ function dessineMenuDashboard(ctx, state) {
     const deckY = mainY + mainH - deckH;
     const historyH = Math.max(174, deckY - historyY - 8);
     dbCard(x, historyY, w, historyH, C.panel, R_CARD);
-    dbText('HISTORIQUE DES PARTIES', x + 16, historyY + 25, `700 12px ${F_DB}`, C.text);
+    dbText(traduire('HISTORIQUE DES PARTIES', state.language), x + 16, historyY + 25, `700 12px ${F_DB}`, C.text);
     // Source réelle : la même liste que l'écran REPLAYS, alimentée par les
     // parties finalisées dans localStorage. Chaque ligne ouvre directement le
     // replay concerné ; aucun nom ou score fictif n'est injecté dans le menu.
@@ -2565,14 +2602,14 @@ function dessineMenuDashboard(ctx, state) {
       .filter((replay) => replay && typeof replay === 'object'
         && typeof replay.key === 'string' && replay.key.length > 0)
       .slice(0, 7);
-    const modeLabel = (mode) => mode === 'spectator' ? 'Spectateur'
-      : mode === 'pvai' ? 'Ordinateur'
-      : mode === 'pvw' ? 'En ligne' : 'Local';
+    const modeLabel = (mode) => mode === 'spectator' ? traduire('Spectateur', state.language)
+      : mode === 'pvai' ? traduire('Ordinateur', state.language)
+      : mode === 'pvw' ? traduire('En ligne', state.language) : traduire('Local', state.language);
     const winnerIndex = (winner) => winner === 0 || winner === '0' ? 0
       : winner === 1 || winner === '1' ? 1 : null;
     const resultLabel = (winner) => {
       const index = winnerIndex(winner);
-      return index === null ? 'Partie' : `${NOM_JOUEUR[index]} gagne`;
+      return index === null ? traduire('Partie', state.language) : `${traduire(NOM_JOUEUR[index], state.language)} ${traduire('gagne', state.language)}`;
     };
     const shortDate = (timestamp) => {
       const date = new Date(Number(timestamp));
@@ -2581,9 +2618,9 @@ function dessineMenuDashboard(ctx, state) {
     };
 
     if (!visibleReplays.length) {
-      dbText('Aucune partie enregistrée', x + w / 2, historyY + 92,
+      dbText(traduire('Aucune partie enregistrée', state.language), x + w / 2, historyY + 92,
         `11px ${F_DB}`, C.muted, 'center');
-      dbText('Termine une partie pour la retrouver ici.', x + w / 2, historyY + 114,
+      dbText(traduire('Termine une partie pour la retrouver ici.', state.language), x + w / 2, historyY + 114,
         `10px ${F_DB}`, C.muted, 'center');
     } else {
       for (let i = 0; i < visibleReplays.length; i++) {
@@ -2614,9 +2651,9 @@ function dessineMenuDashboard(ctx, state) {
     const x = 24, y = modeY, w = CANVAS_W - 48, h = 304;
     dbCard(x, y, w, h, C.panel, R_CARD);
     const modes = [
-      { id: 'pvw', label: 'EN LIGNE' },
-      { id: 'pvp', label: 'LOCAL' },
-      { id: 'pvai', label: 'ORDINATEUR' },
+      { id: 'pvw', label: traduire('EN LIGNE', state.language) },
+      { id: 'pvp', label: traduire('LOCAL', state.language) },
+      { id: 'pvai', label: traduire('ORDINATEUR', state.language) },
     ];
     const tabW = (w - 36) / 3;
     modes.forEach((mode, i) => dbControl(x + 12 + i * (tabW + 6), y + 12, tabW, 38, mode.label,
@@ -2662,7 +2699,7 @@ function dessineMenuDashboard(ctx, state) {
     dbText('ÉCUS', optionX, optionY + 12, `700 9px ${F_DB}`, C.muted);
     ECONOMIES.slice(0, 3).forEach((item, i) => dbControl(
       optionX + optionLabelW + i * (ecoW + optionGap), optionY, ecoW, 24,
-      item.label.toUpperCase(), { kind: 'pickEconomie', value: item.id },
+      traduire(item.label, state.language).toUpperCase(), { kind: 'pickEconomie', value: item.id },
       { fill: item.id === varEco ? C.forest : C.field, selected: item.id === varEco, radius: 7, font: `700 8px ${F_DB}` },
     ));
     const combatY = optionY + 28;
@@ -2670,7 +2707,7 @@ function dessineMenuDashboard(ctx, state) {
     dbText('COMBAT', optionX, combatY + 12, `700 9px ${F_DB}`, C.muted);
     COMBATS.forEach((item, i) => dbControl(
       optionX + optionLabelW + i * (combatW + optionGap), combatY, combatW, 24,
-      item.label.toUpperCase(), { kind: 'pickCombat', value: item.id },
+      traduire(item.label, state.language).toUpperCase(), { kind: 'pickCombat', value: item.id },
       { fill: item.id === varCbt ? C.wine : C.field, selected: item.id === varCbt, radius: 7, font: `700 8px ${F_DB}` },
     ));
 
@@ -2699,8 +2736,8 @@ function dessineMenuDashboard(ctx, state) {
   const boardX = 24, boardW = 430;
   dbCard(boardX, mainY, boardW, mainH, C.panel, R_CARD);
   dbText('PLATEAU', boardX + 20, mainY + 25, `700 13px ${F_DB}`, C.text);    drawPreviewBoard(boardX + 18, mainY + 52, boardW - 36, mainH - 98, state);
-  dbText('●  Trait aux blancs', boardX + 20, mainY + mainH - 24, `11px ${F_DB}`, C.goldBright);
-  dbText(`Partie libre · ${tailleLabel}`, boardX + boardW - 20, mainY + mainH - 24, `10px ${F_DB}`, C.muted, 'right');
+  //dbText('●  Trait aux blancs', boardX + 20, mainY + mainH - 24, `11px ${F_DB}`, C.goldBright);
+  //dbText(`Partie libre · ${tailleLabel}`, boardX + boardW - 20, mainY + mainH - 24, `10px ${F_DB}`, C.muted, 'right');
 
   drawMoves(466, mainY, 210, mainH);
   drawSideMenu(692, mainY, 284, mainH);
@@ -2728,8 +2765,8 @@ function dessineBadgeClasse(ctx, state, cx, y, variantId, tailleId) {
   const classe = estClassee(variantId, tailleId);
   const acc = state.account || {};
   const txt = classe
-    ? `🏆 CLASSÉ — ${acc.trophies || 0} trophées`
-    : 'HORS COMPÉTITION';
+    ? `🏆 ${traduire('CLASSÉ', state.language)} — ${acc.trophies || 0} ${traduire('trophées', state.language)}`
+    : traduire('HORS COMPÉTITION', state.language);
   ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -2767,7 +2804,7 @@ function dessineMatchmaking(ctx, state) {
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     // ⚠ + message, wrap sur 2-3 lignes si trop long.
     ctx.fillText('⚠', bx + 30, by + 8);
-    wrapText(ctx, mm.error, bx + 50, by + 10, bw - 70, 16, 2);
+    wrapText(ctx, traduire(mm.error, state.language), bx + 50, by + 10, bw - 70, 16, 2);
   }
 
   // Wordmark.
@@ -2783,26 +2820,25 @@ function dessineMatchmaking(ctx, state) {
     const acc = state.account || {};
     ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('JOUER EN LIGNE', cx, 180);
+    ctx.fillText(traduire('JOUER EN LIGNE', state.language), cx, 180);
 
     // Sous-titre : pseudo + trophées du joueur connecté.
     if (acc.status === 'connected') {
       ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(`♟ ${acc.pseudo || ''}  ·  🏆 ${acc.trophies || 0} trophées`, cx, 208);
+      ctx.fillText(`♟ ${acc.pseudo || ''}  ·  🏆 ${acc.trophies || 0} ${traduire('Trophées', state.language).toLowerCase()}`, cx, 208);
     }
 
     // 3 gros boutons distincts.
     bouton(state, ctx, cx - wB / 2, 244, wB, 58, '🔍 Lancer une recherche',
-      { kind: 'startSearch' },
-      { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'trouver un adversaire au hasard' });
-
+      { kind: 'startSearch' }, { color: UI_THEME.amber, textColor: UI_THEME.buttonText,
+        sub: traduire('trouver un adversaire au hasard', state.language) });
     bouton(state, ctx, cx - wB / 2, 314, wB, 58, '👥 Jouer avec un ami',
-      { kind: 'createPrivateMatch' },
-      { color: UI_THEME.primary, textColor: UI_THEME.text, sub: 'créer une partie privée' });
+      { kind: 'createPrivateMatch' }, { color: UI_THEME.primary, textColor: UI_THEME.text,
+        sub: traduire('créer une partie privée', state.language) });
 
     bouton(state, ctx, cx - wB / 2, 384, wB, 58, '🔑 Rejoindre par code',
       { kind: 'showJoinCode' },
-      { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'entrer un code d\'invitation' });
+      { color: UI_THEME.card, textColor: UI_THEME.text, sub: traduire("entrer un code d'invitation", state.language) });
 
     // Retour au menu.
     bouton(state, ctx, cx - wB / 2, 460, wB, hB, '← Retour',
@@ -2811,7 +2847,7 @@ function dessineMatchmaking(ctx, state) {
 
     if (mm.error) {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(mm.error, cx, 530);
+      ctx.fillText(traduire(mm.error, state.language), cx, 530);
     }
 
   } else if (mm.mode === 'cadence') {
@@ -2819,12 +2855,12 @@ function dessineMatchmaking(ctx, state) {
     // Le titre rappelle l'action d'origine ; deux joueurs ne s'apparient que sur la
     // même cadence (file publique) / le créateur impose la sienne (partie privée).
     ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('CADENCE DE JEU', cx, 180);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';      ctx.fillText(traduire('CADENCE DE JEU', state.language), cx, 180);
+
     ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-    ctx.fillText(mm.pendingAction === 'private'
+    ctx.fillText(traduire(mm.pendingAction === 'private'
       ? 'Temps de réflexion de la partie privée (ton ami en hérite)'
-      : 'Temps de réflexion — tu ne rencontres que des joueurs de la même cadence', cx, 208);
+      : 'Temps de réflexion — tu ne rencontres que des joueurs de la même cadence', state.language), cx, 208);
 
     // Grille 2×2 de cadences (sans incrément — spec §6.1 v3.1).
     const gw = 155, gh = 58, gap = 10;
@@ -2832,9 +2868,9 @@ function dessineMatchmaking(ctx, state) {
       const col = i % 2, row = Math.floor(i / 2);
       bouton(state, ctx,
         cx - gw - gap / 2 + col * (gw + gap), 244 + row * (gh + gap + 4), gw, gh,
-        `${c.emoji} ${c.label}`,
+        `${c.emoji} ${traduire(c.label, state.language)}`,
         { kind: 'pickCadence', cadence: c.s },
-        { color: c.s === 300 ? UI_THEME.amber : UI_THEME.card, textColor: c.s === 300 ? UI_THEME.buttonText : UI_THEME.text, sub: c.sub });
+        { color: c.s === 300 ? UI_THEME.amber : UI_THEME.card, textColor: c.s === 300 ? UI_THEME.buttonText : UI_THEME.text, sub: traduire(c.sub, state.language) });
     });
 
     // Les variantes historiques ÉCUS/COMBAT ont été retirées de la création privée.
@@ -2845,17 +2881,17 @@ function dessineMatchmaking(ctx, state) {
     // Retour au lobby (aucun réseau engagé à ce stade).
     bouton(state, ctx, cx - wB / 2, retourY, wB, hB, '← Retour',
       { kind: 'cancelMatchmaking' },
-      { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'revenir au lobby' });
+      { color: UI_THEME.card, textColor: UI_THEME.text, sub: traduire('revenir au lobby', state.language) });
 
   } else if (mm.mode === 'search') {
     // Écran RECHERCHE (spec §9.2).
     const elapsed = Math.floor((Date.now() - (mm.searchStart || Date.now())) / 1000);
     const band = mm.band || 100;
-    const bandLabel = band >= 99999 ? 'tous niveaux' : `±${band}`;
+    const bandLabel = band >= 99999 ? traduire('tous niveaux', state.language) : `±${band}`;
 
     ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('RECHERCHE D\'UN ADVERSAIRE…', cx, 194);
+    ctx.fillText(traduire('RECHERCHE D\'UN ADVERSAIRE…', state.language), cx, 194);
 
     // Spinner simple (texte animé).
     const dots = ['.', '..', '...'][Math.floor(Date.now() / 500) % 3];
@@ -2864,7 +2900,7 @@ function dessineMatchmaking(ctx, state) {
 
     // Infos (la cadence choisie borne la file : rappel visible pendant l'attente).
     ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-    ctx.fillText(`Temps écoulé : ${elapsed}s  ·  Niveau : ${bandLabel}  ·  ⏱ ${cadenceLabel(mm.cadence || 300)}`, cx, 270);
+    ctx.fillText(`${traduire('Temps écoulé', state.language)} : ${elapsed}s  ·  ${traduire('Niveau', state.language)} : ${traduire(bandLabel, state.language)}  ·  ⏱ ${traduire(cadenceLabel(mm.cadence || 300), state.language)}`, cx, 270);
 
     // Badge CLASSÉ / HORS COMPÉTITION : la file bonus est publique mais dédiée,
     // et reste volontairement hors classement.
@@ -2874,31 +2910,31 @@ function dessineMatchmaking(ctx, state) {
     // Bouton Annuler : ramène AU LOBBY (retire de la file publique via cancelWait).
     bouton(state, ctx, cx - wB / 2, 320, wB, hB, '✕ Annuler',
       { kind: 'cancelMatchmaking' },
-      { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'revenir au lobby' });
+      { color: UI_THEME.card, textColor: UI_THEME.text, sub: traduire('revenir au lobby', state.language) });
 
     if (mm.error) {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(mm.error, cx, 400);
+      ctx.fillText(traduire(mm.error, state.language), cx, 400);
     }
 
   } else if (mm.mode === 'private_create') {
     // Écran CRÉATION partie privée.
     ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('PARTIE PRIVÉE CRÉÉE', cx, 194);
+    ctx.fillText(traduire('PARTIE PRIVÉE CRÉÉE', state.language), cx, 194);
 
     if (mm.privateCode) {
       // Code en gros.
       ctx.fillStyle = UI_THEME.amber; ctx.font = `42px ${F_DISPLAY}`;
       ctx.fillText(mm.privateCode, cx, 250);
       ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText('Partage ce code avec ton adversaire', cx, 284);
+      ctx.fillText(traduire('Partage ce code avec ton adversaire', state.language), cx, 284);
       const varSuffix = mm.variant && mm.variant !== 'pvp_standard'
-        ? `  ·  ⚔ ${variantLabel(mm.variant)}` : '';
-      ctx.fillText(`Cadence : ⏱ ${cadenceLabel(mm.cadence || 300)}${varSuffix}  ·  En attente…`, cx, 308);
+        ? `  ·  ⚔ ${traduire(variantLabel(mm.variant), state.language)}` : '';
+      ctx.fillText(`${traduire('Cadence', state.language)} : ⏱ ${traduire(cadenceLabel(mm.cadence || 300), state.language)}${varSuffix}  ·  ${traduire('En attente', state.language)}…`, cx, 308);
     } else {
       ctx.fillStyle = UI_THEME.muted; ctx.font = `15px ${F_TEXTE}`;
-      ctx.fillText('Création en cours…', cx, 240);
+      ctx.fillText(traduire('Création en cours…', state.language), cx, 240);
     }
 
     // Badge CLASSÉ / HORS COMPÉTITION : config imposée par le créateur (variante +
@@ -2913,22 +2949,22 @@ function dessineMatchmaking(ctx, state) {
 
     if (mm.error) {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(mm.error, cx, 430);
+      ctx.fillText(traduire(mm.error, state.language), cx, 430);
     }
 
   } else if (mm.mode === 'private_join') {
     // Écran REJOINDRE partie privée.
     ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('REJOINDRE UNE PARTIE', cx, 194);
+    ctx.fillText(traduire('REJOINDRE UNE PARTIE', state.language), cx, 194);
 
     ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
-    ctx.fillText('Entre le code à 6 caractères :', cx, 230);
+    ctx.fillText(traduire('Entre le code à 6 caractères :', state.language), cx, 230);
 
     // Bouton qui déclenche un prompt (simplifié — pas de DOM input en v1).
     bouton(state, ctx, cx - 120, 264, 240, 46, 'Entrer le code',
       { kind: 'joinByCode', code: '' },
-      { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'cliquer pour saisir' });
+      { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: traduire('cliquer pour saisir', state.language) });
 
     // Note : le prompt est déclenché par un listener spécial dans main.js.
     // On override le code vide → au clic, un prompt s'ouvre, puis on rappelle
@@ -2936,35 +2972,35 @@ function dessineMatchmaking(ctx, state) {
 
     bouton(state, ctx, cx - wB / 2, 330, wB, hB, '← Retour',
       { kind: 'cancelMatchmaking' },
-      { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'revenir au lobby' });
+      { color: UI_THEME.card, textColor: UI_THEME.text, sub: traduire('revenir au lobby', state.language) });
 
     if (mm.error) {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(mm.error, cx, 390);
+      ctx.fillText(traduire(mm.error, state.language), cx, 390);
     }
 
   } else if (mm.mode === 'matched') {
     // Écran MATCH TROUVÉ (spec §9.2).
     ctx.fillStyle = UI_THEME.primary; ctx.font = `22px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('✓ ADVERSIRE TROUVÉ !', cx, 194);
+    ctx.fillText(traduire('✓ ADVERSAIRE TROUVÉ !', state.language), cx, 194);
 
     // Infos adversaire.
     ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
-    ctx.fillText(`♟ ${(mm.oppPseudo || 'Adversaire').toUpperCase()}`, cx, 244);
+    ctx.fillText(`♟ ${(mm.oppPseudo || traduire('Adversaire', state.language)).toUpperCase()}`, cx, 244);
     ctx.fillStyle = UI_THEME.amberDark; ctx.font = `15px ${F_DISPLAY}`;
-    ctx.fillText(`🏆 ${mm.oppTrophies || 0} trophées`, cx, 274);
+    ctx.fillText(`🏆 ${mm.oppTrophies || 0} ${traduire('Trophées', state.language).toLowerCase()}`, cx, 274);
 
     // Variante héritée (partie privée non-standard) : le rejoignant découvre ici
     // la variante imposée par le créateur (GDD §7.2 v3.1).
     if (mm.variant && mm.variant !== 'pvp_standard') {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(`⚔ Variante : ${variantLabel(mm.variant)}`, cx, 296);
+      ctx.fillText(`⚔ ${traduire('Variante', state.language)} : ${traduire(variantLabel(mm.variant), state.language)}`, cx, 296);
     }
 
     // Compte à rebours visuel.
     ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
-    ctx.fillText('Connexion en cours…', cx, 318);
+    ctx.fillText(traduire('Connexion en cours…', state.language), cx, 318);
 
     // Badge CLASSÉ / HORS COMPÉTITION : config confirmée par le serveur (privé :
     // imposée par le créateur ; public : Standard × Standard × 8×8).
@@ -3006,14 +3042,14 @@ function dessineReplays(ctx, state) {
 
   ctx.fillStyle = REPLAY_UI.ink; ctx.font = `18px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('🎬 REPLAYS', cx, 160);
+  ctx.fillText(`🎬 ${traduire('REPLAYS', state.language)}`, cx, 160);
   ctx.fillStyle = REPLAY_UI.muted; ctx.font = `13px ${F_TEXTE}`;
-  ctx.fillText('Revoir tes dernières parties — les 20 plus récentes sont conservées', cx, 188);
+  ctx.fillText(traduire('Revoir tes dernières parties — les 20 plus récentes sont conservées', state.language), cx, 188);
 
   const replays = state._replayList || [];
   if (!replays.length) {
     ctx.fillStyle = REPLAY_UI.muted; ctx.font = `15px ${F_TEXTE}`;
-    ctx.fillText('Aucun replay pour l\'instant — joue une partie !', cx, 300);
+    ctx.fillText(traduire('Aucun replay pour l\'instant — joue une partie !', state.language), cx, 300);
   }
 
   // 2 colonnes de 10 lignes max (20 entrées ≤ CANVAS_H).
@@ -3025,11 +3061,14 @@ function dessineReplays(ctx, state) {
     const x = colX[col];
     const ry = 222 + (i % parCol) * (rH + rGap);
     const d = new Date(rp.startTime);
-    const dateStr = `${d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })} ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
-    const modeStr = rp.mode === 'spectator' ? 'Spect.' : rp.mode === 'pvai' ? 'PvAI' : rp.mode === 'pvw' ? 'En ligne' : 'PvP';
-    const diffStr = rp.difficulty ? ` niv.${rp.difficulty}` : '';
-    const winnerStr = rp.winner !== null ? `  ·  🏆 ${NOM_JOUEUR[rp.winner]}` : '';
-    const label = `${modeStr}${diffStr}  ·  ${rp.totalActions} act.  ·  ${dateStr}${winnerStr}`;
+    const locale = state.language === 'en' ? 'en-GB' : 'fr-FR';
+    const dateStr = `${d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit' })} ${d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}`;
+    const modeStr = rp.mode === 'spectator' ? traduire('Spect.', state.language)
+      : rp.mode === 'pvai' ? traduire('PvAI', state.language)
+      : rp.mode === 'pvw' ? traduire('En ligne', state.language) : traduire('PvP', state.language);
+    const diffStr = rp.difficulty ? ` ${traduire('niv.', state.language)}${rp.difficulty}` : '';
+    const winnerStr = rp.winner !== null ? `  ·  🏆 ${traduire(NOM_JOUEUR[rp.winner], state.language)}` : '';
+    const label = `${modeStr}${diffStr}  ·  ${rp.totalActions} ${traduire('act.', state.language)}  ·  ${dateStr}${winnerStr}`;
     state.ui.buttons.push({
       x, y: ry, w: rW, h: rH,
       action: { kind: 'startReplay', key: rp.key }, enabled: true, radius: 8,
@@ -3043,7 +3082,7 @@ function dessineReplays(ctx, state) {
     roundRect(ctx, x, ry, rW, rH, 8); ctx.stroke();
     ctx.fillStyle = REPLAY_UI.ink; ctx.font = `12px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(label, x + rW / 2, ry + rH / 2);
+    ctx.fillText(traduire(label, state.language), x + rW / 2, ry + rH / 2);
   }
 
   // Retour au menu (sous les 2 colonnes de 10 → 222 + 10×44 = 662).
@@ -3137,7 +3176,7 @@ function dessineDecks(ctx, state) {
   ctx.fillStyle = DECK_UI.ink;
   ctx.font = `24px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('MES DECKS', CANVAS_W / 2, 59);
+  ctx.fillText(traduire('MES DECKS', state.language), CANVAS_W / 2, 59);
 
   const root = state.decksRoot || sanitizeRoot(loadDecks());
   state.decksRoot = root;
@@ -3253,7 +3292,7 @@ function dessineDecks(ctx, state) {
         roundRect(ctx, pillX, pillY, DECK_PILL_W, DECK_PILL_H, DECK_PILL_RADIUS); ctx.stroke();
         const upgId = slots[cat];
         const upg = upgId && UPGRADES[upgId];
-        const label = upg ? upg.nom.toUpperCase() : '—';
+        const label = upg ? traduire(upg.nom, state.language).toUpperCase() : '—';
         // Fonds pastel clairs → encre sombre (buttonText) pour garder le contraste AA.
         ctx.fillStyle = UI_THEME.buttonText;
         ctx.font = `600 13px ${F_DISPLAY}`;
@@ -3296,15 +3335,15 @@ function dessineDeckPicker(ctx, state) {
   // Le pattern defense-in-depth protege contre ANY collision future avec un
   // mode degrade silencieux (jamais de throw) au lieu d'un crash picker.
   const typeStr   = LETTRE[type] || type || '?';
-  const typeNom   = (typeof nomType === 'function' ? nomType(type) : typeStr).toUpperCase();
+  const typeNom   = (typeof nomType === 'function' ? nomType(type, state.language) : traduire(typeStr, state.language)).toUpperCase();
   const catLabel  = DECK_CAT_LABEL[cat] || cat || '—';
-  ctx.fillText(`${typeStr} — ${typeNom} · ${catLabel.toUpperCase()}`,
+  ctx.fillText(`${traduire(typeStr, state.language)} — ${typeNom} · ${traduire(catLabel, state.language).toUpperCase()}`,
     CANVAS_W / 2, 80);
   ctx.fillStyle = DECK_UI.muted; ctx.font = `12px ${F_TEXTE}`;
-  ctx.fillText('Choisis une amélioration compatible', CANVAS_W / 2, 102);
+  ctx.fillText(traduire('Choisis une amélioration compatible', state.language), CANVAS_W / 2, 102);
   ctx.font = `10px ${F_DISPLAY}`;
   ctx.fillStyle = DECK_UI.amber;
-  ctx.fillText('OU VIDE LE SLOT POUR LE RÉINITIALISER', CANVAS_W / 2, 119);
+  ctx.fillText(traduire('OU VIDE LE SLOT POUR LE RÉINITIALISER', state.language), CANVAS_W / 2, 119);
 
   // Cartes éligibles : UPGRADES filtrées sur (piece, cat), triées par coût croissant.
   const eligible = Object.values(UPGRADES)
@@ -3329,7 +3368,7 @@ function dessineDeckPicker(ctx, state) {
     // comme les pills du deck, plutôt qu'une couleur verte générique.
     ctx.fillStyle = isCurrent ? C_ENCRE : DECK_UI.ink; ctx.font = `bold 18px ${F_DISPLAY}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText(u.nom, cx + 16, cy + 9);
+    ctx.fillText(traduire(u.nom, state.language), cx + 16, cy + 9);
     // Coût lisible en haut à droite.
     ctx.fillStyle = isCurrent ? C_ENCRE : DECK_UI.amber; ctx.font = `700 16px ${F_DISPLAY}`;
     ctx.textAlign = 'right'; ctx.textBaseline = 'top';
@@ -3337,12 +3376,12 @@ function dessineDeckPicker(ctx, state) {
     // Badge cd/once sous le coût, légèrement agrandi lui aussi.
     if (u.cooldown || u.once) {
       ctx.fillStyle = isCurrent ? C_ENCRE : DECK_UI.muted; ctx.font = `600 11px ${F_TEXTE}`;
-      ctx.fillText(u.once ? 'usage unique' : `cd ${u.cooldown}`, cx + cardW - 16, cy + 32);
+      ctx.fillText(u.once ? traduire('usage unique', state.language) : `cd ${u.cooldown}`, cx + cardW - 16, cy + 32);
     }
     // Description plus présente, avec un interligne adapté aux caractères agrandis.
     ctx.fillStyle = isCurrent ? C_ENCRE : DECK_UI.muted; ctx.font = `13px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    wrapTextLimite(ctx, u.desc, cx + 16, cy + 47, cardW - 32, 16, 2);
+    wrapTextLimite(ctx, traduire(u.desc, state.language), cx + 16, cy + 47, cardW - 32, 16, 2);
     // Hit-test cliquable.
     state.ui.buttons.push({ x: cx, y: cy, w: cardW, h: cardH,
       action: { kind: 'pickUpgrade', id: u.id }, enabled: true, radius: 8 });
@@ -3381,12 +3420,18 @@ function learnWrap(ctx, text, x, y, maxWidth, lineHeight, maxLines = 4) {
 function dessineLearnHub(ctx, state) {
   const cx = CANVAS_W / 2;
   const completed = new Set(state.learnProgress?.completed || []);
-  // 14 cases en deux rangées de 7 : la première rangée avance vers la droite,
-  // la seconde revient vers la gauche pour former un parcours en lacet.
-  const positions = [
-    ...Array.from({ length: 7 }, (_, i) => ({ x: 82 + i * 140, y: 220 })),
-    ...Array.from({ length: 7 }, (_, i) => ({ x: 922 - i * 140, y: 455 })),
-  ];
+  // Le parcours s'adapte au nombre de cartes : trois rangées en lacet
+  // permettent d'afficher l'intégralité du catalogue sans sortir du canvas.
+  const columns = 9;
+  const positions = LEARN_GAMES.map((_, index) => {
+    const row = Math.floor(index / columns);
+    const col = index % columns;
+    const leftToRight = row % 2 === 0;
+    return {
+      x: leftToRight ? 60 + col * 110 : 940 - col * 110,
+      y: 180 + row * 145,
+    };
+  });
   const nodeW = 64, nodeH = 64;
   const nodeRadius = 28;
 
@@ -3404,9 +3449,9 @@ function dessineLearnHub(ctx, state) {
 
   ctx.fillStyle = UI_THEME.text; ctx.font = `34px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('APPRENDRE', cx, 55);
+  ctx.fillText(traduire('APPRENDRE', state.language), cx, 55);
   ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-  ctx.fillText('Avance case après case pour maîtriser les améliorations.', cx, 80);
+  ctx.fillText(traduire('Avance case après case pour maîtriser les améliorations.', state.language), cx, 80);
 
   // Chemin doré en lacet : la lecture va de gauche à droite, puis revient
   // sur la ligne inférieure vers la gauche comme sur un vrai parcours.
@@ -3458,7 +3503,7 @@ function dessineLearnHub(ctx, state) {
   const doneCount = completed.size;
   ctx.fillStyle = UI_THEME.text; ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(`${doneCount}/${TOTAL_LEARN_GAMES} cases maîtrisées`, cx, 590);
+  ctx.fillText(traduire(`${doneCount}/${TOTAL_LEARN_GAMES} cases maîtrisées`, state.language), cx, 590);
   bouton(state, ctx, 32, 635, 220, 34, '✦ Puzzles tactiques', { kind: 'openPuzzles' },
     { color: UI_THEME.amber, textColor: UI_THEME.buttonText, outlineColor: UI_THEME.amberLight });
   bouton(state, ctx, cx - 110, 635, 220, 34, '← Menu principal', { kind: 'retourMenu' },
@@ -3492,9 +3537,9 @@ function dessinePuzzleHub(ctx, state) {
 
   ctx.fillStyle = UI_THEME.text; ctx.font = `34px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('PUZZLES TACTIQUES', cx, 55);
+  ctx.fillText(traduire('PUZZLES TACTIQUES', state.language), cx, 55);
   ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-  ctx.fillText('Trouve l’amélioration nécessaire pour résoudre chaque situation.', cx, 80);
+  ctx.fillText(traduire('Trouve l’amélioration nécessaire pour résoudre chaque situation.', state.language), cx, 80);
 
   ctx.save();
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -3532,7 +3577,7 @@ function dessinePuzzleHub(ctx, state) {
   const doneCount = completed.size;
   ctx.fillStyle = UI_THEME.text; ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(`${doneCount}/${TOTAL_PUZZLES} puzzles résolus`, cx, 590);
+  ctx.fillText(traduire(`${doneCount}/${TOTAL_PUZZLES} puzzles résolus`, state.language), cx, 590);
   bouton(state, ctx, 32, 700, 220, 34, '← Parcours classique', { kind: 'classicHub' },
     { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
   bouton(state, ctx, cx - 110, 700, 220, 34, '← Menu principal', { kind: 'retourMenu' },
@@ -3549,9 +3594,9 @@ function dessineLearnPanel(ctx, state, now) {
   if (state.panelPiece && state.phase !== 'gameover') {
     ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText('ACHAT · APPRENDRE', x, OY + 8);
+    ctx.fillText(traduire('ACHAT · APPRENDRE', state.language), x, OY + 8);
     ctx.fillStyle = game.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
-    ctx.fillText(`${game.title.toUpperCase()} · ${game.upgrade.toUpperCase()}`, x, OY + 30);
+    ctx.fillText(`${traduire(game.title, state.language).toUpperCase()} · ${traduire(game.upgrade, state.language).toUpperCase()}`, x, OY + 30);
     dessineCatalogue(ctx, state, x, OY + 48, w, now);
     bouton(state, ctx, x, CANVAS_H - 92, w, 34, '↻ Recommencer', { kind: 'learnRestart' },
       { color: UI_THEME.card, textColor: UI_THEME.text });
@@ -3560,32 +3605,32 @@ function dessineLearnPanel(ctx, state, now) {
     return;
   }
   ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('APPRENDRE', x, OY + 8);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';    ctx.fillText(traduire('APPRENDRE', state.language), x, OY + 8);
+
   carte(ctx, x, OY + 22, w, 178, 10, UI_THEME.panel, { shadow: true });
   ctx.fillStyle = game.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
-  ctx.fillText(game.category, x + 14, OY + 42);
+  ctx.fillText(traduire(game.category, state.language), x + 14, OY + 42);
   ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`;
-  learnWrap(ctx, game.title, x + 14, OY + 66, w - 28, 21, 2);
+  learnWrap(ctx, traduire(game.title, state.language), x + 14, OY + 66, w - 28, 21, 2);
   ctx.fillStyle = UI_THEME.muted; ctx.font = `12px ${F_TEXTE}`;
-  learnWrap(ctx, game.text, x + 14, OY + 104, w - 28, 17, 3);
+  learnWrap(ctx, traduire(game.text, state.language), x + 14, OY + 104, w - 28, 17, 3);
   ctx.fillStyle = UI_THEME.gold || UI_THEME.amber; ctx.font = `700 11px ${F_TEXTE}`;
-  learnWrap(ctx, `Objectif : ${game.objective}`, x + 14, OY + 158, w - 28, 15, 2);
+  learnWrap(ctx, traduire(`Objectif : ${game.objective}`, state.language), x + 14, OY + 158, w - 28, 15, 2);
 
   const hint = apprendreHint(state);
   if (state.selected && !state.learnPurchased && game.upgradeId) {
     bouton(state, ctx, x, OY + 214, w, 38, 'Acheter l’amélioration', { kind: 'ameliorer' },
-      { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: `${game.upgrade} · ${game.cost} écus` });
+      { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: `${traduire(game.upgrade, state.language)} · ${game.cost} ${traduire('écus', state.language)}` });
   }
   if (hint && state.selected && game.power && state.learnPurchased) {
-    const actionByPower = { ruee: 'ruee', rayon: 'rayon', vet: 'vet', hypnose: 'hypnose', decret: 'decret', echange: 'echange' };
+    const actionByPower = { ruee: 'ruee', rayon: 'rayon', vet: 'vet', hypnose: 'hypnose', decret: 'decret', cavalerie: 'cavalerie', echange: 'echange', epine: 'epine', rempart: 'rempart' };
     const kind = actionByPower[game.power];
     if (kind) bouton(state, ctx, x, OY + 214, w, 38, game.power.toUpperCase(), { kind },
       { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'activer maintenant' });
   }
   if (state.selected) {
     ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
-    ctx.fillText(state.learnPurchased ? 'Amélioration achetée · joue sur le plateau' : 'Pièce sélectionnée · achète d’abord l’amélioration', x, OY + 278);
+    ctx.fillText(traduire(state.learnPurchased ? 'Amélioration achetée · joue sur le plateau' : 'Pièce sélectionnée · achète d’abord l’amélioration', state.language), x, OY + 278);
   }
   bouton(state, ctx, x, CANVAS_H - 92, w, 34, '↻ Recommencer', { kind: 'learnRestart' },
     { color: UI_THEME.card, textColor: UI_THEME.text });
@@ -3605,35 +3650,35 @@ function dessinePuzzlePanel(ctx, state, now) {
   if (state.panelPiece && state.phase !== 'gameover') {
     ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText('SOLUTION · PUZZLE', x, OY + 8);
+    ctx.fillText(traduire('SOLUTION · PUZZLE', state.language), x, OY + 8);
     ctx.fillStyle = puzzle.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
-    ctx.fillText(`${puzzle.title.toUpperCase()} · ${puzzle.upgrade.toUpperCase()}`, x, OY + 30);
+    ctx.fillText(`${traduire(puzzle.title, state.language).toUpperCase()} · ${traduire(puzzle.upgrade, state.language).toUpperCase()}`, x, OY + 30);
     dessineCatalogue(ctx, state, x, OY + 48, w, now);
   } else {
     ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
-    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillText('PUZZLE', x, OY + 8);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillText(traduire('PUZZLE', state.language), x, OY + 8);
     carte(ctx, x, OY + 22, w, 210, 10, UI_THEME.panel, { shadow: true });
     ctx.fillStyle = puzzle.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
-    ctx.fillText(puzzle.category, x + 14, OY + 42);
+    ctx.fillText(traduire(puzzle.category, state.language), x + 14, OY + 42);
     ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`;
-    learnWrap(ctx, puzzle.title, x + 14, OY + 66, w - 28, 21, 2);
+    learnWrap(ctx, traduire(puzzle.title, state.language), x + 14, OY + 66, w - 28, 21, 2);
     ctx.fillStyle = UI_THEME.muted; ctx.font = `12px ${F_TEXTE}`;
-    learnWrap(ctx, puzzle.text, x + 14, OY + 104, w - 28, 17, 4);
+    learnWrap(ctx, traduire(puzzle.text, state.language), x + 14, OY + 104, w - 28, 17, 4);
     ctx.fillStyle = UI_THEME.amber; ctx.font = `700 11px ${F_TEXTE}`;
-    learnWrap(ctx, `Objectif : ${puzzle.objective}`, x + 14, OY + 176, w - 28, 15, 2);
+    learnWrap(ctx, traduire(`Objectif : ${puzzle.objective}`, state.language), x + 14, OY + 176, w - 28, 15, 2);
     if (state.puzzleFeedback) {
       ctx.fillStyle = UI_THEME.dangerText || '#F4EDEA';
       ctx.font = `700 11px ${F_TEXTE}`;
-      learnWrap(ctx, state.puzzleFeedback, x + 14, OY + 210, w - 28, 15, 3);
+      learnWrap(ctx, traduire(state.puzzleFeedback, state.language), x + 14, OY + 210, w - 28, 15, 3);
     }
 
     if (state.selected && !state.puzzlePurchased) {
       bouton(state, ctx, x, OY + 246, w, 38, 'Acheter la solution', { kind: 'ameliorer' },
-        { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: `${puzzle.upgrade} · ${puzzle.cost} écus` });
+        { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: `${traduire(puzzle.upgrade, state.language)} · ${puzzle.cost} ${traduire('écus', state.language)}` });
     }
     if (state.puzzlePurchased) {
       ctx.fillStyle = UI_THEME.primaryDark; ctx.font = `700 12px ${F_TEXTE}`;
-      ctx.fillText(`✓ ${puzzle.upgrade} acheté — résous la position`, x, OY + 246);
+      ctx.fillText(traduire(`✓ ${puzzle.upgrade} acheté — résous la position`, state.language), x, OY + 246);
       if (state.selected && puzzle.power && state.phase === 'play') {
         const actionByPower = { ruee: 'ruee', sacrifice: 'sacrifice', echange: 'echange' };
         const kind = actionByPower[puzzle.power];
@@ -3658,10 +3703,9 @@ function dessinePuzzleSuccess(ctx, state) {
   carte(ctx, px, py, pw, ph, 16, UI_THEME.panel, { shadow: true });
   ctx.lineWidth = 3; ctx.strokeStyle = UI_THEME.primary; roundRect(ctx, px, py, pw, ph, 16); ctx.stroke();
   ctx.fillStyle = UI_THEME.primaryDark; ctx.font = `30px ${F_DISPLAY}`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('PUZZLE RÉSOLU !', cx, py + 44);
-  ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`; ctx.fillText(puzzle.title, cx, py + 82);
-  ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-  learnWrap(ctx, puzzle.detail, cx, py + 116, pw - 44, 18, 4);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(traduire('PUZZLE RÉSOLU !', state.language), cx, py + 44);
+  ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`; ctx.fillText(traduire(puzzle.title, state.language), cx, py + 82);
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;   learnWrap(ctx, traduire(puzzle.detail, state.language), cx, py + 116, pw - 44, 18, 4);
   bouton(state, ctx, px + 20, py + ph - 56, 118, 36, 'Rejouer', { kind: 'puzzleRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text });
   bouton(state, ctx, px + 156, py + ph - 56, 118, 36, 'Menu', { kind: 'puzzleHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
   const next = state.puzzleIndex + 1 < TOTAL_PUZZLES;
@@ -3679,10 +3723,9 @@ function dessineLearnSuccess(ctx, state) {
   carte(ctx, px, py, pw, ph, 16, UI_THEME.panel, { shadow: true });
   ctx.lineWidth = 3; ctx.strokeStyle = UI_THEME.primary; roundRect(ctx, px, py, pw, ph, 16); ctx.stroke();
   ctx.fillStyle = UI_THEME.primaryDark; ctx.font = `30px ${F_DISPLAY}`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('BIEN JOUÉ !', cx, py + 44);
-  ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`; ctx.fillText(game.title, cx, py + 82);
-  ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-  learnWrap(ctx, game.detail, cx, py + 116, pw - 44, 18, 4);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(traduire('BIEN JOUÉ !', state.language), cx, py + 44);
+  ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`; ctx.fillText(traduire(game.title, state.language), cx, py + 82);
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;   learnWrap(ctx, traduire(game.detail, state.language), cx, py + 116, pw - 44, 18, 4);
   bouton(state, ctx, px + 20, py + ph - 56, 112, 36, 'Rejouer', { kind: 'learnRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text });
   bouton(state, ctx, px + 148, py + ph - 56, 112, 36, 'Menu', { kind: 'learnHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
   const next = state.learnIndex + 1 < LEARN_GAMES.length;
@@ -3801,15 +3844,15 @@ export function render(ctx, state, now) {
       }
     }
   }
-  ctx.fillText(banniere.toUpperCase(), OX + 32, chY);
+  ctx.fillText(traduire(banniere, state.language).toUpperCase(), OX + 32, chY);
 
   // PvP en ligne : bannière de désync (hash discordant, §3.4) — détection W2, annulation W3.
   if (state.mode === 'pvw' && state.pvw && state.pvw.desync) {
     ctx.fillStyle = C_TERRACOTTA;
     roundRect(ctx, OX, OY + __BOARD_H + 6, __BOARD_W, 22, 8); ctx.fill();
     ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('⚠ DÉSYNCHRONISATION DÉTECTÉE (voir console)', OX + __BOARD_W / 2, OY + __BOARD_H + 17);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';     ctx.fillText(`⚠ ${traduire('DÉSYNCHRONISATION DÉTECTÉE (voir console)', state.language)}`, OX + __BOARD_W / 2, OY + __BOARD_H + 17);
+
   }
 
   dessineEchiquier(ctx, state, now);
@@ -3909,7 +3952,7 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
   roundRect(ctx, x, y, badgeW, badgeH, 8); ctx.stroke();
   ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(`ÉTAPE ${state.tutorialStep + 1}/${TOTAL_STEPS}`, x + badgeW / 2, y + badgeH / 2);
+  ctx.fillText(`${traduire('ÉTAPE', state.language)} ${state.tutorialStep + 1}/${TOTAL_STEPS}`, x + badgeW / 2, y + badgeH / 2);
   if (state._tutoBravoT && now - state._tutoBravoT < 1200) {
     ctx.save();
     ctx.globalAlpha = Math.min(1, (1200 - (now - state._tutoBravoT)) / 400);ctx.fillStyle = UI_THEME.primary;
@@ -3917,7 +3960,7 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
     ctx.lineWidth = 2; ctx.strokeStyle = C_ENCRE;
     roundRect(ctx, x + badgeW + 10, y, 130, badgeH, 8); ctx.stroke();
     ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
-    ctx.fillText('✔ BIEN JOUÉ !', x + badgeW + 75, y + badgeH / 2);
+    ctx.fillText(traduire('✔ BIEN JOUÉ !', state.language), x + badgeW + 75, y + badgeH / 2);
     ctx.restore();
   }
   y += badgeH + 12;
@@ -3934,18 +3977,18 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
   // Titre de l'étape.
   ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText(step.title.toUpperCase(), x, y);
+  ctx.fillText(traduire(step.title, state.language).toUpperCase(), x, y);
   y += 28;
 
   // Instruction principale.
   ctx.fillStyle = UI_THEME.muted; ctx.font = `600 15px ${F_TEXTE}`;
-  const lines = wrapTextLines(ctx, step.text, x, y, w - 8, 22);
+  const lines = wrapTextLines(ctx, traduire(step.text, state.language), x, y, w - 8, 22);
   y += lines * 22 + 10;
 
   // Détail.
   if (step.detail) {
-    ctx.fillStyle = UI_THEME.disabledText; ctx.font = `12px ${F_TEXTE}`;
-    const dLines = wrapTextLines(ctx, step.detail, x, y, w - 8, 18);
+    ctx.fillStyle = UI_THEME.disabledText; ctx.font = `12px ${F_TEXTE}`;     const dLines = wrapTextLines(ctx, traduire(step.detail, state.language), x, y, w - 8, 18);
+
     y += dLines * 18 + 16;
   }
 
@@ -3955,7 +3998,7 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
    ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
    ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText(`${state.ecus[0]} ÉCUS`, x + 34, y + 18);
+  ctx.fillText(`${state.ecus[0]} ${traduire('ÉCUS', state.language)}`, x + 34, y + 18);
   y += 46;
 
   // Bouton "Continuer" pour les étapes de lecture.
@@ -3998,13 +4041,13 @@ function dessineTutorielFin(ctx, state) {
   ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.strokeStyle = C_ENCRE;
   ctx.strokeText('FÉLICITATIONS !', cx, py + 48);
   ctx.fillStyle = UI_THEME.primaryDark;
-  ctx.fillText('FÉLICITATIONS !', cx, py + 48);
+  ctx.fillText(traduire('FÉLICITATIONS !', state.language), cx, py + 48);
 
   // Message.
   ctx.fillStyle = UI_THEME.muted; ctx.font = `15px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('Tu maîtrises les bases de Roychec.', cx, py + 90);
-  ctx.fillText('Lance une vraie partie !', cx, py + 112);
+  ctx.fillText(traduire('Tu maîtrises les bases de Roychec.', state.language), cx, py + 90);
+  ctx.fillText(traduire('Lance une vraie partie !', state.language), cx, py + 112);
 
   // Bouton Menu.
   bouton(state, ctx, cx - 100, py + ph - 62, 200, 48, 'Menu',
@@ -4030,14 +4073,13 @@ function dessineReplayHUD(ctx, state) {
   const idx = Math.max(0, state.replayIndex);
   const total = data.events.length;
   ctx.fillStyle = REPLAY_UI.ink; ctx.font = `12px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  const label = state.replayPlaying
-    ? `▶ REPLAY — Action ${idx + 1} / ${total}`
-    : `⏸ PAUSE — Action ${idx + 1} / ${total}`;
-  if (idx >= total) {
-    ctx.fillText('⏹ FIN DU REPLAY', OX + 12, barY + barH / 2 - 8);
-  } else {
-    ctx.fillText(label, OX + 12, barY + barH / 2 - 8);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';  const label = state.replayPlaying
+      ? `▶ ${traduire('REPLAY', state.language)} — ${traduire('Action', state.language)} ${idx + 1} / ${total}`
+      : `⏸ ${traduire('PAUSE', state.language)} — ${traduire('Action', state.language)} ${idx + 1} / ${total}`;
+  if (idx >= total) {     ctx.fillText(`⏹ ${traduire('FIN DU REPLAY', state.language)}`, OX + 12, barY + barH / 2 - 8);
+
+  } else {     ctx.fillText(traduire(label, state.language), OX + 12, barY + barH / 2 - 8);
+
   }
 
   // Barre de progression.
@@ -4068,8 +4110,8 @@ function dessineReplayHUD(ctx, state) {
     ctx.lineWidth = 1; ctx.strokeStyle = sel ? REPLAY_UI.greenD : REPLAY_UI.border;
     roundRect(ctx, sx, barY + barH / 2 - bh / 2 - 1, bw, bh, 6); ctx.stroke();
     ctx.fillStyle = sel ? REPLAY_UI.darkInk : REPLAY_UI.muted;
-    ctx.font = `10px ${F_DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(s.label, sx + bw / 2, barY + barH / 2 - 1);
+    ctx.font = `10px ${F_DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';     ctx.fillText(traduire(s.label, state.language), sx + bw / 2, barY + barH / 2 - 1);
+
     sx += bw + 6;
   }
 
@@ -4095,5 +4137,5 @@ function dessineReplayHUD(ctx, state) {
   roundRect(ctx, qX, barY + barH / 2 - qH / 2 - 1, qW, qH, 6); ctx.stroke();
   ctx.fillStyle = REPLAY_UI.roseInk; ctx.font = `10px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('QUITTER', qX + qW / 2, barY + barH / 2 - 1);
+  ctx.fillText(traduire('QUITTER', state.language), qX + qW / 2, barY + barH / 2 - 1);
 }

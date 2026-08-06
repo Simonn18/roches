@@ -100,7 +100,8 @@
       border: 2px solid var(--ui-text); border-radius: 9px; outline: none;
     }
     .auth-card input:focus { border-color: var(--ui-amber); }
-    #auth-code { letter-spacing: 6px; text-align: center; font-weight: 700; }
+    #auth-code, #auth-mfa-setup-code, #auth-mfa-challenge-code { letter-spacing: 6px; text-align: center; font-weight: 700; }
+    #auth-mfa-qr { display: block; width: 180px; height: 180px; margin: 0 auto 14px; background: #fff; border-radius: 8px; padding: 8px; }
 
     /* --- Écran de choix : 3 grosses options distinctes (icône + titre + explication) --- */
     .auth-method {
@@ -308,9 +309,58 @@
                placeholder="Mot de passe" />
         <p class="auth-hint" id="auth-pwd-hint" hidden>6 caractères minimum.</p>
         <button id="auth-pwd-submit" class="auth-btn" type="button">Se connecter</button>
+        <button id="auth-forgot" class="auth-link" type="button">Mot de passe oublié&nbsp;?</button>
       </div>
 
-      <!-- Écran 2 : email envoyé (magic link OU confirmation d'inscription) -->
+      <!-- Écran 1c : MOT DE PASSE OUBLIÉ -->
+      <div data-screen="reset" class="has-back" hidden>
+        <button id="auth-reset-back" class="auth-back" type="button" aria-label="Retour">←</button>
+        <h2>Mot de passe oublié</h2>
+        <p>Entre ton email. Si un compte existe, tu recevras un lien pour choisir un nouveau mot de passe.</p>
+        <input id="auth-reset-email" type="email" autocomplete="email" inputmode="email"
+               placeholder="ton@email.fr" />
+        <button id="auth-reset-submit" class="auth-btn" type="button">Envoyer le lien</button>
+      </div>
+
+      <!-- Écran 1d : NOUVEAU MOT DE PASSE après un lien de récupération -->
+      <div data-screen="new-password" class="has-back" hidden>
+        <h2>Nouveau mot de passe</h2>
+        <p>Choisis un nouveau mot de passe pour sécuriser ton compte.</p>
+        <input id="auth-new-password" type="password" autocomplete="new-password"
+               placeholder="Nouveau mot de passe" />
+        <button id="auth-new-password-submit" class="auth-btn" type="button">Enregistrer</button>
+      </div>
+
+      <!-- Écran 1e : proposition facultative de double authentification TOTP -->
+      <div data-screen="mfa-prompt" class="has-back" hidden>
+        <h2>Protéger le compte&nbsp;?</h2>
+        <p>Ajoute une double authentification avec une application comme Google Authenticator ou Authy.</p>
+        <button id="auth-mfa-enable" class="auth-btn" type="button">Activer la 2FA</button>
+        <button id="auth-mfa-later" class="auth-link" type="button">Plus tard</button>
+      </div>
+
+      <!-- Écran 1f : enrôlement TOTP -->
+      <div data-screen="mfa-setup" class="has-back" hidden>
+        <button id="auth-mfa-setup-back" class="auth-back" type="button" aria-label="Retour">←</button>
+        <h2>Activer la 2FA</h2>
+        <p>Scanne ce QR code dans ton application d’authentification, puis saisis le code affiché.</p>
+        <img id="auth-mfa-qr" alt="QR code de configuration de la double authentification" hidden />
+        <input id="auth-mfa-setup-code" type="text" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="6" pattern="[0-9]{6}" placeholder="Code à 6 chiffres" />
+        <button id="auth-mfa-setup-verify" class="auth-btn" type="button">Vérifier et activer</button>
+      </div>
+
+      <!-- Écran 1g : défi TOTP à la connexion -->
+      <div data-screen="mfa-challenge" class="has-back" hidden>
+        <button id="auth-mfa-challenge-back" class="auth-back" type="button" aria-label="Annuler">←</button>
+        <h2>Vérification 2FA</h2>
+        <p>Entre le code à 6 chiffres de ton application d’authentification pour continuer.</p>
+        <input id="auth-mfa-challenge-code" type="text" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="6" pattern="[0-9]{6}" placeholder="Code à 6 chiffres" />
+        <button id="auth-mfa-challenge-submit" class="auth-btn" type="button">Vérifier</button>
+      </div>
+
+      <!-- Écran 2 : email envoyé (magic link, confirmation ou reset) -->
       <div data-screen="sent" class="has-back" hidden>
         <button class="auth-back" type="button" data-back aria-label="Retour">←</button>
         <h2>Email envoyé !</h2>

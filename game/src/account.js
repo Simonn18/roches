@@ -14,6 +14,8 @@
 // l'inscription (envoie un email de confirmation Supabase). Le magic link reste
 // disponible via un toggle dans l'overlay.
 //
+import { appliquerTraductions, lireLangue, onLangueChange, traduire } from './i18n.js?v=2';
+
 // ISOLATION (garde-fou CLAUDE.md §7.3) : c'est le SEUL module du projet qui connaît
 // Supabase. Le reste du jeu ne voit qu'un objet d'état plat (getAccount()) et trois
 // fonctions (initAccount / startAuth / logout). supabase-js est chargé en import
@@ -91,7 +93,128 @@ let supabase = null;      // client Supabase, null tant que non chargé / si CDN
 let pendingEmail = null;  // email en cours de vérification OTP
 let resendTimer = null;   // interval du compte à rebours « Renvoyer »
 let passwordTab = 'login';// onglet de l'écran mot de passe : 'login' (connexion) | 'signup' (inscription)
-let sentFrom = 'magic';   // écran qui a mené à 'sent' : 'magic' (lien) | 'password' (confirmation inscription)
+let  sentFrom = 'magic';   // écran qui a mené à 'sent' : 'magic' | 'password' | 'reset'
+let pendingMfaUser = null;
+let pendingMfaFactorId = null;
+let pendingMfaChallengeId = null;
+
+// Rate limiting UX local, en complément des limites serveur natives de Supabase Auth.
+// Ces compteurs ne sont pas une autorisation (un script peut les contourner) : la
+// protection réelle contre le brute-force reste celle de l'API Auth Supabase.
+const AUTH_RATE_LIMITS = {
+  login: { max: 5, windowMs: 5 * 60 * 1000, lockMs: 5 * 60 * 1000 },
+  reset: { max: 3, windowMs: 15 * 60 * 1000, lockMs: 15 * 60 * 1000 },
+};
+const AUTH_RATE_STORAGE = 'roychec-auth-rate-v1';
+let rateTimer = null;
+let rateTimerButton = null;
+let rateTimerLabel = '';
+
+function rateIdentity(email) { return (email || '').trim().toLowerCase(); }
+function lireRateState(kind, email) {
+  const identity = rateIdentity(email);
+  const empty = { attempts: [], lockedUntil: 0 };
+  if (!identity || !AUTH_RATE_LIMITS[kind]) return empty;
+  const now = Date.now();
+  try {
+    const all = JSON.parse(localStorage.getItem(AUTH_RATE_STORAGE) || '{}');
+    const raw = all[`${kind}:${identity}`] || empty;
+    const attempts = Array.isArray(raw.attempts)
+      ? raw.attempts.filter((t) => Number.isFinite(t) && now - t < AUTH_RATE_LIMITS[kind].windowMs)
+      : [];
+    const state = { attempts, lockedUntil: Number(raw.lockedUntil) > now ? Number(raw.lockedUntil) : 0 };
+    if (!state.lockedUntil && !attempts.length) {
+      delete all[`${kind}:${identity}`];
+      localStorage.setItem(AUTH_RATE_STORAGE, JSON.stringify(all));
+    }
+    return state;
+  } catch (_) { return empty; }
+}
+function ecrireRateState(kind, email, state) {
+  const identity = rateIdentity(email);
+  if (!identity) return;
+  try {
+    const all = JSON.parse(localStorage.getItem(AUTH_RATE_STORAGE) || '{}');
+    all[`${kind}:${identity}`] = state;
+    localStorage.setItem(AUTH_RATE_STORAGE, JSON.stringify(all));
+  } catch (_) { /* localStorage indisponible : Supabase protège toujours côté serveur */ }
+}
+function effacerRateState(kind, email) {
+  const identity = rateIdentity(email);
+  if (!identity) return;
+  try {
+    const all = JSON.parse(localStorage.getItem(AUTH_RATE_STORAGE) || '{}');
+    delete all[`${kind}:${identity}`];
+    localStorage.setItem(AUTH_RATE_STORAGE, JSON.stringify(all));
+  } catch (_) { /* non bloquant */ }
+}
+function formatCooldown(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const min = Math.floor(total / 60);
+  return `${min}:${String(total % 60).padStart(2, '0')}`;
+}
+function uiText(value) { return traduire(value, lireLangue()); }
+function setUiText(node, value) { if (node) node.textContent = uiText(value); }
+function clearRateTimer(restore = true) {
+  if (rateTimer) clearInterval(rateTimer);
+  rateTimer = null;
+  if (restore && rateTimerButton) {
+    rateTimerButton.disabled = false;
+    setUiText(rateTimerButton, rateTimerLabel);
+  }
+  rateTimerButton = null;
+  rateTimerLabel = '';
+}
+function demarrerVerrou(kind, email, button, label) {
+  const cfg = AUTH_RATE_LIMITS[kind];
+  if (!cfg || !button) return;
+  const state = lireRateState(kind, email);
+  state.lockedUntil = Math.max(state.lockedUntil, Date.now() + cfg.lockMs);
+  ecrireRateState(kind, email, state);
+  clearRateTimer();
+  rateTimerButton = button;
+  rateTimerLabel = label;
+  const tick = () => {
+    const remaining = state.lockedUntil - Date.now();
+    if (remaining <= 0) {
+      clearRateTimer(false);
+      effacerRateState(kind, email);
+      button.disabled = false;
+      setUiText(button, label);
+      return;
+    }
+    button.disabled = true;
+    setUiText(button, `${uiText('BLOQUÉ')} (${formatCooldown(remaining)})`);
+  };
+  tick();
+  rateTimer = setInterval(tick, 1000);
+}
+function verrouEncoreActif(kind, email, button, label) {
+  const state = lireRateState(kind, email);
+  if (state.lockedUntil > Date.now()) {
+    demarrerVerrou(kind, email, button, label);
+    message(`Trop de tentatives. Réessaie dans ${formatCooldown(state.lockedUntil - Date.now())}.`, true);
+    return true;
+  }
+  return false;
+}
+function enregistrerEchec(kind, email) {
+  const cfg = AUTH_RATE_LIMITS[kind];
+  const state = lireRateState(kind, email);
+  state.attempts.push(Date.now());
+  if (state.attempts.length >= cfg.max) state.lockedUntil = Date.now() + cfg.lockMs;
+  ecrireRateState(kind, email, state);
+  return state;
+}
+function enregistrerTentative(kind, email) {
+  // Pour le reset, chaque demande compte : même une adresse inexistante ne doit
+  // pas permettre de spammer l'endpoint d'envoi d'emails.
+  return enregistrerEchec(kind, email);
+}
+function erreurRateLimit(error) {
+  const m = (error && error.message ? error.message : '').toLowerCase();
+  return !!(error && (error.status === 429 || m.includes('rate') || m.includes('limit')));
+}
 
 // ---------- Initialisation ----------
 // Appelée une fois au démarrage. Câble l'overlay DOM puis tente de charger Supabase
@@ -99,6 +222,15 @@ let sentFrom = 'magic';   // écran qui a mené à 'sent' : 'magic' (lien) | 'pa
 export async function initAccount() {
   cacheDom();
   wireDom();
+  appliquerTraductions(el.overlay, lireLangue());
+  onLangueChange((lang) => {
+    appliquerTraductions(el.overlay, lang);
+    const sentScreen = el.screens && el.screens.find((screen) => screen.dataset.screen === 'sent');
+    if (sentScreen && !sentScreen.hidden) {
+      mettreAJourEcranSent();
+      if (el.emailRappel) el.emailRappel.textContent = pendingEmail || '';
+    }
+  });
   try {
     // Import dynamique via CDN — première (et unique) dépendance externe (spec §7).
     // VENDOR LOCAL (M2+ soldé 2026-07-12 ~21:00) : supabase-js@2.110.2 importé
@@ -143,9 +275,16 @@ export async function initAccount() {
     // session courante (ou null), donc pas besoin d'un getSession() séparé.
     supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT' || !session) { setGuest(); nettoyerUrl(); return; }
+      // PASSWORD_RECOVERY ouvre l'écran de nouveau mot de passe, sans charger le profil
+      // avant que l'utilisateur ait remplacé son secret.
+      if (event === 'PASSWORD_RECOVERY') {
+        ouvrirNouveauMotDePasse();
+        nettoyerUrl();
+        return;
+      }
       // SIGNED_IN / INITIAL_SESSION / TOKEN_REFRESHED avec une session valide.
       nettoyerUrl(); // retire le token du magic link de la barre d'adresse
-      if (account.status !== 'connected') chargerProfil(session.user);
+      gererSessionAuthentifiee(session);
     });
   } catch (e) {
     console.warn('[account] restauration de session impossible — mode invité', e);
@@ -210,7 +349,7 @@ function ouvrirMagic() {
   montrerEcran('magic');
   message('', false);
   el.magicSend.disabled = false;
-  el.magicSend.textContent = 'Recevoir le lien';
+  setUiText(el.magicSend, 'Recevoir le lien');
   if (el.magicEmail) el.magicEmail.focus();
 }
 
@@ -220,6 +359,33 @@ function ouvrirPassword(tab) {
   message('', false);
   changerTab(tab || 'login');
   if (el.pwdEmail) el.pwdEmail.focus();
+  if (passwordTab === 'login' && el.pwdEmail.value) {
+    verrouEncoreActif('login', el.pwdEmail.value, el.pwdSubmit, labelPwd());
+  }
+}
+
+function ouvrirReset() {
+  montrerEcran('reset');
+  message('', false);
+  if (el.resetSubmit) {
+    el.resetSubmit.disabled = false;
+    setUiText(el.resetSubmit, 'Envoyer le lien');
+  }
+  if (el.resetEmail) el.resetEmail.focus();
+  if (el.resetEmail && el.resetEmail.value) {
+    verrouEncoreActif('reset', el.resetEmail.value, el.resetSubmit, 'Envoyer le lien');
+  }
+}
+
+function ouvrirNouveauMotDePasse() {
+  montrerEcran('new-password');
+  ouvrirOverlay();
+  message('', false);
+  if (el.newPassword) el.newPassword.focus();
+  if (el.newPasswordSubmit) {
+    el.newPasswordSubmit.disabled = false;
+    setUiText(el.newPasswordSubmit, 'Enregistrer');
+  }
 }
 
 // Bascule d'onglet : adapte champ (autocomplete), indice « 6 car. » et libellé du bouton.
@@ -231,10 +397,12 @@ function changerTab(tab) {
   el.tabLogin.setAttribute('aria-selected', login ? 'true' : 'false');
   el.tabSignup.setAttribute('aria-selected', login ? 'false' : 'true');
   if (el.pwdHint) el.pwdHint.hidden = login;               // indice 6 car. → inscription seulement
+  if (el.forgot) el.forgot.hidden = !login;
   el.pwdPassword.setAttribute('autocomplete', login ? 'current-password' : 'new-password');
   el.pwdSubmit.disabled = false;
-  el.pwdSubmit.textContent = login ? 'Se connecter' : 'Créer un compte';
+  setUiText(el.pwdSubmit, login ? 'Se connecter' : 'Créer un compte');
   message('', false);
+  appliquerTraductions(el.overlay, lireLangue());
 }
 function labelPwd() { return passwordTab === 'signup' ? 'Créer un compte' : 'Se connecter'; }
 
@@ -252,7 +420,7 @@ async function envoyerCode() {
   const email = (el.magicEmail.value || '').trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { message('Adresse email invalide.', true); return; }
   if (!supabase) { message('Service indisponible, réessaie plus tard.', true); return; }
-  el.magicSend.disabled = true; el.magicSend.textContent = 'ENVOI…';
+  el.magicSend.disabled = true; setUiText(el.magicSend, 'ENVOI…');
   try {
     const origin = window.location.origin;
     console.log('[account] emailRedirectTo =', origin);
@@ -262,20 +430,20 @@ async function envoyerCode() {
     });
     if (error) {
       message(traduireErreurEnvoi(error), true);
-      el.magicSend.disabled = false; el.magicSend.textContent = 'Recevoir le lien';
+      el.magicSend.disabled = false; setUiText(el.magicSend, 'Recevoir le lien');
       return;
     }
     pendingEmail = email;
     sentFrom = 'magic';
     mettreAJourEcranSent();
     if (el.emailRappel) el.emailRappel.textContent = email;
-    montrerEcran('sent');
-    message('Email envoyé ✓', false);
+    montrerEcran('sent');      message('Email envoyé ✓', false);
+
     demarrerResend();
   } catch (e) {
     console.warn('[account] signInWithOtp', e);
     message('Connexion impossible, réessaie.', true);
-    el.magicSend.disabled = false; el.magicSend.textContent = 'Recevoir le lien';
+    el.magicSend.disabled = false; setUiText(el.magicSend, 'Recevoir le lien');
   }
 }
 
@@ -286,31 +454,295 @@ async function connexionPassword() {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { message('Adresse email invalide.', true); return; }
   if (!pwd) { message('Entre ton mot de passe.', true); return; }
   if (!supabase) { message('Service indisponible.', true); return; }
-  el.pwdSubmit.disabled = true; el.pwdSubmit.textContent = 'CONNEXION…';
+  if (verrouEncoreActif('login', email, el.pwdSubmit, labelPwd())) return;
+  el.pwdSubmit.disabled = true; setUiText(el.pwdSubmit, 'CONNEXION…');
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password: pwd });
-    if (error) {
+    const { error } = await supabase.auth.signInWithPassword({ email, password: pwd });
+      if (error) {
+      const state = erreurRateLimit(error)
+        ? { lockedUntil: Date.now() + AUTH_RATE_LIMITS.login.lockMs, attempts: [] }
+        : erreurIdentifiants(error)
+          ? enregistrerEchec('login', email)
+          : { lockedUntil: 0, attempts: [] };
+      if (erreurRateLimit(error)) ecrireRateState('login', email, state);
+      if (state.lockedUntil > Date.now()) demarrerVerrou('login', email, el.pwdSubmit, labelPwd());
+      else { el.pwdSubmit.disabled = false; setUiText(el.pwdSubmit, labelPwd()); }
       message(traduireErreurPassword(error), true);
-      el.pwdSubmit.disabled = false; el.pwdSubmit.textContent = labelPwd();
       return;
     }
     // Connexion réussie : le callback onAuthStateChange (SIGNED_IN) va charger le profil.
-    // Pas besoin de faire quoi que ce soit ici — chargerProfil sera appelé automatiquement.
+    // Le compteur local de cette adresse est réinitialisé.
+    clearRateTimer();
+    effacerRateState('login', email);
   } catch (e) {
     console.warn('[account] signInWithPassword', e);
-    message('Connexion impossible, réessaie.', true);
-    el.pwdSubmit.disabled = false; el.pwdSubmit.textContent = labelPwd();
+    if (erreurRateLimit(e)) {
+      demarrerVerrou('login', email, el.pwdSubmit, labelPwd());
+    } else {
+      el.pwdSubmit.disabled = false; setUiText(el.pwdSubmit, labelPwd());
+    }
+    message(traduireErreurPassword(e), true);
+  }
+}
+
+// Demande de lien de réinitialisation. Le message de succès reste volontairement
+// générique afin de ne pas révéler si l'adresse possède un compte.
+async function envoyerReset() {
+  const email = (el.resetEmail.value || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { message('Adresse email invalide.', true); return; }
+  if (!supabase) { message('Service indisponible.', true); return; }
+  if (verrouEncoreActif('reset', email, el.resetSubmit, 'Envoyer le lien')) return;
+  const state = enregistrerTentative('reset', email);
+  el.resetSubmit.disabled = true;
+  setUiText(el.resetSubmit, 'ENVOI…');
+  // Le troisième essai est envoyé puis verrouille immédiatement les suivants.
+  if (state.lockedUntil > Date.now()) demarrerVerrou('reset', email, el.resetSubmit, 'Envoyer le lien');
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      if (erreurRateLimit(error)) demarrerVerrou('reset', email, el.resetSubmit, 'Envoyer le lien');
+      else { el.resetSubmit.disabled = false; setUiText(el.resetSubmit, 'Envoyer le lien'); }
+      message(traduireErreurEnvoi(error), true);
+      return;
+    }
+    pendingEmail = email;
+    sentFrom = 'reset';
+    mettreAJourEcranSent();
+    if (el.emailRappel) el.emailRappel.textContent = email;
+    montrerEcran('sent');
+    message('Si cette adresse est associée à un compte, un lien a été envoyé ✓', false);
+    demarrerResend();
+  } catch (e) {
+    console.warn('[account] resetPasswordForEmail', e);
+    if (erreurRateLimit(e)) demarrerVerrou('reset', email, el.resetSubmit, 'Envoyer le lien');
+    else { el.resetSubmit.disabled = false; setUiText(el.resetSubmit, 'Envoyer le lien'); }
+    message('Impossible d’envoyer le lien pour le moment.', true);
   }
 }
 
 // Inscription par email + mot de passe (nouveau compte).
+async function mettreAJourMotDePasse() {
+  const pwd = el.newPassword.value || '';
+  if (pwd.length < 6) { message('Le mot de passe doit faire au moins 6 caractères.', true); return; }
+  if (!supabase) { message('Service indisponible.', true); return; }
+  el.newPasswordSubmit.disabled = true;
+  setUiText(el.newPasswordSubmit, 'ENREGISTREMENT…');
+  try {
+    const { error } = await supabase.auth.updateUser({ password: pwd });
+    if (error) throw error;
+    el.newPassword.value = '';
+    message('Mot de passe mis à jour ✓', false);
+    await chargerProfil((await supabase.auth.getUser()).data.user);
+  } catch (e) {
+    console.warn('[account] updateUser password', e);
+    el.newPasswordSubmit.disabled = false;
+    setUiText(el.newPasswordSubmit, 'Enregistrer');
+    message('Impossible de mettre à jour le mot de passe.', true);
+  }
+}
+
+function emailConfirme(user) {
+  // Supabase renseigne email_confirmed_at après le clic sur le lien. On refuse
+  // volontairement toute session email/password sans cette date ; le verrou serveur
+  // doit aussi être activé dans Dashboard > Authentication > Providers > Email.
+  return !!(user && user.email && user.email_confirmed_at);
+}
+
+function afficherConfirmationEmail(email) {
+  pendingEmail = email;
+  sentFrom = 'password';
+  mettreAJourEcranSent();
+  if (el.emailRappel) el.emailRappel.textContent = email;
+  montrerEcran('sent');
+  ouvrirOverlay();
+  message('Confirme ton adresse email avant de jouer.', true);
+  demarrerResend();
+}
+
+function mfaDisponible() {
+  const mfa = supabase && supabase.auth && supabase.auth.mfa;
+  return !!(mfa && typeof mfa.enroll === 'function' && typeof mfa.challenge === 'function'
+    && typeof mfa.verify === 'function');
+}
+
+async function gererSessionAuthentifiee(session) {
+  const user = session && session.user;
+  if (!emailConfirme(user)) {
+    await supabase.auth.signOut().catch(() => {});
+    afficherConfirmationEmail(user && user.email);
+    return;
+  }
+  if (await ouvrirDefiMfaSiNecessaire(user)) return;
+  chargerProfil(user);
+}
+
+async function ouvrirDefiMfaSiNecessaire(user) {
+  if (!mfaDisponible()) return false;
+  try {
+    const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error || !data || data.currentLevel !== 'aal1' || data.nextLevel !== 'aal2') return false;
+    const factors = await supabase.auth.mfa.listFactors();
+    const verified = (factors.data && factors.data.totp || []).find((factor) => factor.status === 'verified');
+    if (!verified) return false;
+    const challenge = await supabase.auth.mfa.challenge({ factorId: verified.id });
+    if (challenge.error) throw challenge.error;
+    pendingMfaUser = user;
+    pendingMfaFactorId = verified.id;
+    pendingMfaChallengeId = challenge.data.id;
+    montrerEcran('mfa-challenge');
+    ouvrirOverlay();
+    message('Entre le code à 6 chiffres de ton application d’authentification.', false);
+    el.mfaChallengeCode.value = '';
+    el.mfaChallengeCode.focus();
+    return true;
+  } catch (e) {
+    console.warn('[account] MFA challenge indisponible', e);
+    await supabase.auth.signOut().catch(() => {});
+    setGuest();
+    message('Vérification 2FA impossible. Réessaie plus tard.', true);
+    ouvrirOverlay();
+    montrerEcran('choice');
+    return true;
+  }
+}
+
+function proposerActivationMfa() {
+  if (!mfaDisponible()) return;
+  supabase.auth.mfa.listFactors().then(({ data, error }) => {
+    if (error) return;
+    const verified = (data && data.totp || []).some((factor) => factor.status === 'verified');
+    if (!verified) {
+      montrerEcran('mfa-prompt');
+      ouvrirOverlay();
+    }
+  }).catch(() => {});
+}
+
+async function commencerActivationMfa() {
+  if (!mfaDisponible()) { message('La double authentification n’est pas disponible.', true); return; }
+  el.mfaEnable.disabled = true;
+  el.mfaQr.hidden = true;
+  let nouveauFacteurId = null;
+  try {
+    let resultat = await supabase.auth.mfa.enroll({
+      factorType: 'totp', friendlyName: 'Roychec',
+    });
+
+    // Une tentative abandonnée peut laisser un facteur « unverified ». On ne les
+    // supprime que si Supabase refuse réellement le nouvel enrôlement pour cette
+    // raison, afin de ne pas invalider une tentative ouverte dans un autre onglet.
+    if (resultat.error && estErreurFacteurMfa(resultat.error)) {
+      await nettoyerFacteursMfaEnAttente();
+      resultat = await supabase.auth.mfa.enroll({
+        factorType: 'totp', friendlyName: 'Roychec',
+      });
+    }
+    if (resultat.error) throw resultat.error;
+
+    const { data } = resultat;
+    nouveauFacteurId = data && data.id;
+    if (!data || !data.id || !data.totp || !data.totp.qr_code) {
+      throw new Error('Réponse MFA invalide.');
+    }
+    pendingMfaFactorId = data.id;
+    // Supabase renvoie un SVG dans totp.qr_code : il peut être placé directement
+    // dans une data URL et affiché par l’image, sans bibliothèque QR tierce.
+    el.mfaQr.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(data.totp.qr_code)}`;
+    el.mfaQr.hidden = false;
+    el.mfaSetupCode.value = '';
+    montrerEcran('mfa-setup');
+    message('Scanne le QR code, puis saisis le code généré.', false);
+    el.mfaSetupCode.focus();
+  } catch (e) {
+    console.warn('[account] MFA enroll', e);
+    // Si Supabase a créé le facteur mais renvoyé une réponse inutilisable, on
+    // retire uniquement celui créé par cette tentative, jamais les facteurs vérifiés.
+    if (nouveauFacteurId && supabase.auth.mfa.unenroll) {
+      await supabase.auth.mfa.unenroll({ factorId: nouveauFacteurId }).catch(() => {});
+    }
+    pendingMfaFactorId = null;
+    el.mfaQr.removeAttribute('src');
+    el.mfaQr.hidden = true;
+    el.mfaEnable.disabled = false;
+    message(traduireErreurMfa(e), true);
+  }
+}
+
+function estErreurFacteurMfa(error) {
+  const m = String(error && error.message || '').toLowerCase();
+  return m.includes('factor') && (
+    m.includes('limit') || m.includes('maximum') || m.includes('already') || m.includes('exist')
+  );
+}
+
+async function nettoyerFacteursMfaEnAttente() {
+  const facteurs = await supabase.auth.mfa.listFactors();
+  if (facteurs.error) throw facteurs.error;
+  const enAttente = (facteurs.data && facteurs.data.totp || [])
+    .filter((factor) => factor.status === 'unverified');
+  for (const factor of enAttente) {
+    const { error } = await supabase.auth.mfa.unenroll({ factorId: factor.id });
+    if (error) throw error;
+  }
+}
+
+async function verifierActivationMfa() {
+  const code = (el.mfaSetupCode.value || '').trim();
+  if (!/^\d{6}$/.test(code) || !pendingMfaFactorId) {
+    message('Entre un code à 6 chiffres.', true); return;
+  }
+  el.mfaSetupVerify.disabled = true;
+  try {
+    const challenge = await supabase.auth.mfa.challenge({ factorId: pendingMfaFactorId });
+    if (challenge.error) throw challenge.error;
+    const { error } = await supabase.auth.mfa.verify({
+      factorId: pendingMfaFactorId, challengeId: challenge.data.id, code,
+    });
+    if (error) throw error;
+    pendingMfaFactorId = null;
+    el.mfaSetupCode.value = '';
+    fermerOverlay();
+  } catch (e) {
+    console.warn('[account] MFA verify enrollment', e);
+    el.mfaSetupVerify.disabled = false;
+    message('Code invalide ou expiré. Réessaie.', true);
+  }
+}
+
+async function verifierDefiMfa() {
+  const code = (el.mfaChallengeCode.value || '').trim();
+  if (!/^\d{6}$/.test(code) || !pendingMfaFactorId || !pendingMfaChallengeId) {
+    message('Entre un code à 6 chiffres.', true); return;
+  }
+  el.mfaChallengeSubmit.disabled = true;
+  try {
+    const { error } = await supabase.auth.mfa.verify({
+      factorId: pendingMfaFactorId, challengeId: pendingMfaChallengeId, code,
+    });
+    if (error) throw error;
+    const user = pendingMfaUser;
+    pendingMfaUser = null;
+    pendingMfaFactorId = null;
+    pendingMfaChallengeId = null;
+    el.mfaChallengeCode.value = '';
+    el.mfaChallengeSubmit.disabled = false;
+    chargerProfil(user);
+  } catch (e) {
+    console.warn('[account] MFA verify challenge', e);
+    el.mfaChallengeSubmit.disabled = false;
+    message('Code 2FA invalide ou expiré.', true);
+  }
+}
+
 async function inscriptionPassword() {
   const email = (el.pwdEmail.value || '').trim();
   const pwd = el.pwdPassword.value || '';
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { message('Adresse email invalide.', true); return; }
   if (pwd.length < 6) { message('Le mot de passe doit faire au moins 6 caractères.', true); return; }
   if (!supabase) { message('Service indisponible.', true); return; }
-  el.pwdSubmit.disabled = true; el.pwdSubmit.textContent = 'INSCRIPTION…';
+  el.pwdSubmit.disabled = true; setUiText(el.pwdSubmit, 'INSCRIPTION…');
   try {
     const origin = window.location.origin;
     const { data, error } = await supabase.auth.signUp({
@@ -320,28 +752,21 @@ async function inscriptionPassword() {
     });
     if (error) {
       message(traduireErreurPassword(error), true);
-      el.pwdSubmit.disabled = false; el.pwdSubmit.textContent = labelPwd();
+      el.pwdSubmit.disabled = false; setUiText(el.pwdSubmit, labelPwd());
       return;
     }
-    // Si l'utilisateur est déjà confirmé ou la confirmation n'est pas requise,
-    // une session est créée immédiatement → onAuthStateChange déclenchera chargerProfil.
-    // Sinon, on affiche l'écran "email envoyé" (confirmation).
-    if (data.session) {
-      // Session immédiate : onAuthStateChange va gérer.
-    } else if (data.user) {
-      // Email de confirmation envoyé.
-      pendingEmail = email;
-      sentFrom = 'password';
-      mettreAJourEcranSent();
-      if (el.emailRappel) el.emailRappel.textContent = email;
-      montrerEcran('sent');
-      message('Email de confirmation envoyé ✓', false);
-      demarrerResend();
+    // Même si le projet renvoie exceptionnellement une session immédiatement,
+    // l'inscription reste bloquée tant que Supabase n'a pas confirmé l'adresse.
+    if (data.user && !emailConfirme(data.user)) {
+      if (data.session) await supabase.auth.signOut().catch(() => {});
+      afficherConfirmationEmail(email);
+    } else if (!data.session && data.user) {
+      afficherConfirmationEmail(email);
     }
   } catch (e) {
     console.warn('[account] signUp', e);
     message('Inscription impossible, réessaie.', true);
-    el.pwdSubmit.disabled = false; el.pwdSubmit.textContent = labelPwd();
+    el.pwdSubmit.disabled = false; setUiText(el.pwdSubmit, labelPwd());
   }
 }
 
@@ -353,7 +778,7 @@ async function confirmerPseudo() {
     message('3 à 16 caractères : lettres, chiffres, espace, - ou _.', true); return;
   }
   if (!supabase) { message('Service indisponible.', true); return; }
-  el.pseudoBtn.disabled = true; el.pseudoBtn.textContent = 'ENVOI…';
+  el.pseudoBtn.disabled = true; setUiText(el.pseudoBtn, 'ENVOI…');
   try {
     const { data: u } = await supabase.auth.getUser();
     if (!u || !u.user) { message('Session expirée, reconnecte-toi.', true); resetPseudoBtn(); return; }
@@ -366,6 +791,7 @@ async function confirmerPseudo() {
     account.pseudo = pseudo;
     account.trophies = 0;
     fermerOverlay();
+    proposerActivationMfa();
   } catch (e) {
     console.warn('[account] insert profil', e);
     resetPseudoBtn();
@@ -394,6 +820,7 @@ async function chargerProfil(user) {
     account.pseudo = data.pseudo;
     account.trophies = data.trophies || 0;
     fermerOverlay();
+    proposerActivationMfa();
   } catch (e) {
     console.warn('[account] chargerProfil', e);
     ouvrirPseudo();
@@ -410,12 +837,32 @@ function setGuest() {
 }
 
 // Traductions d'erreurs Supabase en messages joueur (spec §5.1 feedbacks).
+function traduireErreurMfa(error) {
+  const raw = String(error && error.message || '').trim();
+  const m = raw.toLowerCase();
+  if (m.includes('rate') || m.includes('limit') || (error && error.status === 429)) {
+    return 'Trop de tentatives 2FA. Patiente un instant puis réessaie.';
+  }
+  if (m.includes('not enabled') || m.includes('disabled')) {
+    return 'La 2FA TOTP n’est pas activée sur le projet Supabase.';
+  }
+  if (m.includes('aal') || m.includes('assurance') || m.includes('unauthorized')) {
+    return 'Reconnecte-toi avant d’activer la double authentification.';
+  }
+  // Le détail reste dans la console pour le diagnostic, jamais dans l’interface :
+  // une erreur serveur peut contenir des informations internes.
+  return 'Impossible de préparer la double authentification.';
+}
 function traduireErreurEnvoi(error) {
   const m = (error && error.message ? error.message : '').toLowerCase();
   if (m.includes('rate') || m.includes('limit') || (error && error.status === 429)) {
     return 'Trop de tentatives, patiente un instant avant de réessayer.';
   }
   return 'Envoi impossible pour le moment, réessaie.';
+}
+function erreurIdentifiants(error) {
+  const m = (error && error.message ? error.message : '').toLowerCase();
+  return m.includes('invalid login') || m.includes('invalid credentials');
 }
 function traduireErreurPassword(error) {
   const m = (error && error.message ? error.message : '').toLowerCase();
@@ -455,6 +902,24 @@ function cacheDom() {
   el.pwdEmail = q('auth-pwd-email');
   el.pwdPassword = q('auth-pwd-password');
   el.pwdSubmit = q('auth-pwd-submit');
+  el.forgot = q('auth-forgot');
+  // Écran mot de passe oublié.
+  el.resetEmail = q('auth-reset-email');
+  el.resetSubmit = q('auth-reset-submit');
+  el.resetBack = q('auth-reset-back');
+  // Écran nouveau mot de passe (après le lien de récupération).
+  el.newPassword = q('auth-new-password');
+  el.newPasswordSubmit = q('auth-new-password-submit');
+  // Écrans MFA TOTP.
+  el.mfaEnable = q('auth-mfa-enable');
+  el.mfaLater = q('auth-mfa-later');
+  el.mfaQr = q('auth-mfa-qr');
+  el.mfaSetupCode = q('auth-mfa-setup-code');
+  el.mfaSetupVerify = q('auth-mfa-setup-verify');
+  el.mfaSetupBack = q('auth-mfa-setup-back');
+  el.mfaChallengeCode = q('auth-mfa-challenge-code');
+  el.mfaChallengeSubmit = q('auth-mfa-challenge-submit');
+  el.mfaChallengeBack = q('auth-mfa-challenge-back');
   el.pwdHint = q('auth-pwd-hint');
   el.tabLogin = q('auth-tab-login');
   el.tabSignup = q('auth-tab-signup');
@@ -486,10 +951,34 @@ function wireDom() {
   el.magicEmail.addEventListener('keydown', (e) => { if (e.key === 'Enter') envoyerCode(); });
   // Écran password.
   el.pwdSubmit.addEventListener('click', soumettrePassword);
+  q('auth-forgot').addEventListener('click', ouvrirReset);
   el.tabLogin.addEventListener('click', () => changerTab('login'));
   el.tabSignup.addEventListener('click', () => changerTab('signup'));
   el.pwdEmail.addEventListener('keydown', (e) => { if (e.key === 'Enter') soumettrePassword(); });
   el.pwdPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') soumettrePassword(); });
+  el.resetBack.addEventListener('click', () => ouvrirPassword('login'));
+  el.resetSubmit.addEventListener('click', envoyerReset);
+  el.resetEmail.addEventListener('keydown', (e) => { if (e.key === 'Enter') envoyerReset(); });
+  el.newPasswordSubmit.addEventListener('click', mettreAJourMotDePasse);
+  el.newPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') mettreAJourMotDePasse(); });
+  el.mfaEnable.addEventListener('click', commencerActivationMfa);
+  el.mfaLater.addEventListener('click', fermerOverlay);
+  el.mfaSetupVerify.addEventListener('click', verifierActivationMfa);
+  el.mfaSetupCode.addEventListener('keydown', (e) => { if (e.key === 'Enter') verifierActivationMfa(); });
+  el.mfaSetupBack.addEventListener('click', async () => {
+    if (pendingMfaFactorId && supabase && supabase.auth.mfa.unenroll) {
+      await supabase.auth.mfa.unenroll({ factorId: pendingMfaFactorId }).catch(() => {});
+    }
+    pendingMfaFactorId = null;
+    montrerEcran('mfa-prompt');
+  });
+  el.mfaChallengeSubmit.addEventListener('click', verifierDefiMfa);
+  el.mfaChallengeCode.addEventListener('keydown', (e) => { if (e.key === 'Enter') verifierDefiMfa(); });
+  el.mfaChallengeBack.addEventListener('click', async () => {
+    pendingMfaUser = null;
+    await supabase.auth.signOut().catch(() => {});
+    setGuest(); montrerChoix(); ouvrirOverlay();
+  });
   // Écran sent.
   el.resend.addEventListener('click', renvoyer);
   el.changeEmail.addEventListener('click', changerEmail);
@@ -497,7 +986,7 @@ function wireDom() {
   el.pseudoBtn.addEventListener('click', confirmerPseudo);
   el.pseudo.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmerPseudo(); });
   // Fermer (croix).
-  el.close.addEventListener('click', fermerOverlay);
+  el.close.addEventListener('click', annulerAuthDepuisOverlay);
   // Compteur live du pseudo (3-16).
   el.pseudo.addEventListener('input', () => {
     if (el.pseudoCount) el.pseudoCount.textContent = `${el.pseudo.value.trim().length}/16`;
@@ -506,10 +995,22 @@ function wireDom() {
 
 function montrerEcran(name) {
   for (const s of el.screens) s.hidden = s.dataset.screen !== name;
+  appliquerTraductions(el.overlay, lireLangue());
 }
 function ouvrirOverlay() { if (el.overlay) el.overlay.hidden = false; }
 function fermerOverlay() { if (el.overlay) el.overlay.hidden = true; clearResend(); }
-function resetPseudoBtn() { if (el.pseudoBtn) { el.pseudoBtn.disabled = false; el.pseudoBtn.textContent = 'Confirmer'; } }
+async function annulerAuthDepuisOverlay() {
+  // Pendant le défi de connexion, pendingMfaFactorId désigne un facteur déjà
+  // vérifié : le fermer ne doit surtout pas le supprimer. Seul l’écran
+  // d’enrôlement possède un facteur temporaire à annuler.
+  const setup = el.screens && el.screens.find((screen) => screen.dataset.screen === 'mfa-setup');
+  if (setup && !setup.hidden && pendingMfaFactorId && supabase && supabase.auth.mfa.unenroll) {
+    await supabase.auth.mfa.unenroll({ factorId: pendingMfaFactorId }).catch(() => {});
+    pendingMfaFactorId = null;
+  }
+  fermerOverlay();
+}
+function resetPseudoBtn() { if (el.pseudoBtn) { el.pseudoBtn.disabled = false; el.pseudoBtn.textContent = traduire('Confirmer', lireLangue()); } }
 
 function ouvrirPseudo() {
   account.status = 'pseudo';
@@ -522,21 +1023,24 @@ function ouvrirPseudo() {
 
 function message(text, isError) {
   if (!el.msg) return;
-  el.msg.textContent = text || '';
+  el.msg.textContent = traduire(text || '', lireLangue());
   el.msg.style.color = isError ? 'var(--ui-danger)' : 'var(--ui-primary)';
 }
 
 // Met à jour le texte de l'écran "sent" selon qu'on vient du magic link ou de l'inscription password.
 function mettreAJourEcranSent() {
   if (!el.sentDesc) return;
-  if (sentFrom === 'password') {
-    el.sentDesc.innerHTML = 'Un email de confirmation a été envoyé à <strong id="auth-email-rappel"></strong>.'
-      + ' Clique le lien dans ta boîte mail pour activer ton compte.';
+  // Repart toujours des clés françaises : ainsi le changement EN → FR ne
+  // mémorise jamais le texte déjà traduit comme nouvelle source.
+  if (sentFrom === 'reset') {
+    el.sentDesc.innerHTML = `${uiText('Si cette adresse est associée à un compte, un lien de réinitialisation a été envoyé à')} <strong id="auth-email-rappel"></strong>. ${uiText('Vérifie ta boîte mail.')}`;
+    el.emailRappel = q('auth-email-rappel');
+  } else if (sentFrom === 'password') {
+    el.sentDesc.innerHTML = `${uiText('Un email de confirmation a été envoyé à')} <strong id="auth-email-rappel"></strong>. ${uiText('Clique le lien dans ta boîte mail pour activer ton compte.')}`;
     // Re-cache emailRappel car le innerHTML a recréé l'élément.
     el.emailRappel = q('auth-email-rappel');
   } else {
-    el.sentDesc.innerHTML = 'On a envoyé un lien de connexion à <strong id="auth-email-rappel"></strong>.'
-      + ' Clique le lien dans ta boîte mail : tu reviendras ici connecté.';
+    el.sentDesc.innerHTML = `${uiText('On a envoyé un lien de connexion à')} <strong id="auth-email-rappel"></strong>. ${uiText('Clique le lien dans ta boîte mail : tu reviendras ici connecté.')}`;
     el.emailRappel = q('auth-email-rappel');
   }
 }
@@ -547,8 +1051,10 @@ function changerEmail() {
   clearResend();
   message('', false);
   if (sentFrom === 'password') {
-    // Seule l'INSCRIPTION mène à 'sent' côté password → on rouvre l'onglet inscription.
+    // Seule l'inscription mène à 'sent' côté password → on rouvre l'onglet inscription.
     ouvrirPassword('signup');
+  } else if (sentFrom === 'reset') {
+    ouvrirReset();
   } else {
     ouvrirMagic();
   }
@@ -556,7 +1062,9 @@ function changerEmail() {
 
 // Renvoi selon le mode : magic link ou confirmation d'inscription.
 async function renvoyer() {
-  if (sentFrom === 'password') {
+  if (sentFrom === 'reset') {
+    await envoyerReset();
+  } else if (sentFrom === 'password') {
     // Renvoi de l'email de confirmation (supabase.auth.resend).
     if (!supabase || !pendingEmail) return;
     try {
@@ -583,12 +1091,14 @@ function demarrerResend() {
   let s = 30;
   if (!el.resend) return;
   el.resend.disabled = true;
-  const label = sentFrom === 'password' ? 'Renvoyer la confirmation' : 'Renvoyer le lien';
-  el.resend.textContent = `${label} (${s})`;
+  const label = sentFrom === 'password'
+    ? 'Renvoyer la confirmation'
+    : (sentFrom === 'reset' ? 'Renvoyer le lien de réinitialisation' : 'Renvoyer le lien');
+  el.resend.textContent = `${uiText(label)} (${s})`;
   resendTimer = setInterval(() => {
     s -= 1;
-    if (s <= 0) { clearResend(); el.resend.disabled = false; el.resend.textContent = label; }
-    else el.resend.textContent = `${label} (${s})`;
+    if (s <= 0) { clearResend(); el.resend.disabled = false; setUiText(el.resend, label); }
+    else el.resend.textContent = `${uiText(label)} (${s})`;
   }, 1000);
 }
 function clearResend() { if (resendTimer) { clearInterval(resendTimer); resendTimer = null; } }

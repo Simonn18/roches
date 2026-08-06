@@ -89,9 +89,10 @@ create policy "matches_delete_own_waiting"
 -- sans GRANT le rôle authenticated ne déclenche même pas l'évaluation RLS.
 -- (sélection : déjà couvert par matches_select_involved en w1)
 -- ----------------------------------------------------------------------------
-grant insert on public.matches to authenticated;
-grant update on public.matches to authenticated;
-grant delete on public.matches to authenticated;
+-- DEPRECIE : ces grants ouvraient un bypass direct des RPC. Ils restent
+-- explicitement revoques pour qu'une reexecution de ce fichier ne reinstalle
+-- pas l'ecriture client sur matches.
+revoke insert, update, delete on public.matches from public, anon, authenticated;
 -- grant select on public.matches to authenticated; -- déjà fait via w1 policy
 
 -- ----------------------------------------------------------------------------
@@ -112,7 +113,9 @@ as $$
   select pseudo, trophies from profiles where id = p_user_id;
 $$;
 
-grant execute on function public.pvp_get_opp_profile(uuid) to authenticated;
+-- DEPRECIE : le profil adverse ne doit plus etre expose par ce helper REST
+-- historique. Le hardening central revoque aussi toute permission residuelle.
+revoke execute on function public.pvp_get_opp_profile(uuid) from public, anon, authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 6. Idempotence marker pour ré-application sûre (§8.1 §5).
@@ -131,6 +134,12 @@ comment on policy "matches_delete_own_waiting" on public.matches is
 -- ----------------------------------------------------------------------------
 notify pgrst, 'reload schema';
 notify pgrst, 'reload config';
+
+-- Garde-fou idempotent : les anciennes policies REST ne doivent jamais
+-- restaurer une autorisation d'ecriture sans une nouvelle decision de securite.
+drop policy if exists "matches_insert_own" on public.matches;
+drop policy if exists "matches_update_claim_or_own" on public.matches;
+drop policy if exists "matches_delete_own_waiting" on public.matches;
 
 -- ============================================================================
 -- FIN schema-pvp-rest-grants.sql

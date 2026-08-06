@@ -38,8 +38,11 @@ function baseScenario(state, board, ecus = 0) {
   state.puzzlePurchased = false;
   state.learnPurchased = false;
   state.learnAutoDemo = false;
+  state.learnKeepRempart = false;
   state._shieldDemo = null;
   state._hypnoseDemo = null;
+  state._epineDemo = null;
+  state._rempartDemo = null;
   state.puzzleMoves = 0;
   state.puzzleResponseDone = false;
   state.puzzleResponsePending = false;
@@ -189,6 +192,87 @@ function scenarioPasseRoyale(state) {
   // Deux cases en avant, sans capture : le saut dépasse le déplacement royal normal.
   rois(b); b[7][4] = null;
   baseScenario(state, b, 8);
+}
+
+// --- Parcours étendu : toutes les cartes ACTIF et DÉPLACEMENT ---
+function scenarioSecondGalop(state) {
+  const b = plateauVide();
+  const cavalier = creerPiece('N', 0, 4, 4);
+  b[4][4] = cavalier;
+  rois(b); baseScenario(state, b, 8);
+}
+
+function scenarioPasDiag(state) {
+  const b = plateauVide();
+  const pion = creerPiece('P', 0, 4, 3);
+  b[4][3] = pion;
+  rois(b); baseScenario(state, b, 4);
+}
+
+function scenarioGrandSaut(state) {
+  const b = plateauVide();
+  const cavalier = creerPiece('N', 0, 4, 4);
+  // Le bond vers f7 (3,1) est impossible pour un cavalier normal.
+  b[4][4] = cavalier;
+  rois(b); baseScenario(state, b, 9);
+}
+
+function scenarioHauteFuite(state) {
+  const b = plateauVide();
+  const roi = creerPiece('K', 0, 6, 6);
+  b[6][6] = roi;
+  // Trois cases en diagonale : (5,5), (4,4), puis (3,3).
+  b[0][4] = creerPiece('K', 1, 0, 4);
+  baseScenario(state, b, 10);
+}
+
+function scenarioEpine(state) {
+  const b = plateauVide();
+  const pion = creerPiece('P', 0, 4, 4);
+  // Le fou arrive sur la diagonale, face à la case du pion. Après le gel,
+  // (4,4) est interdite et (2,2) reste une case de repli légale.
+  const fou = creerPiece('B', 1, 3, 3);
+  b[4][4] = pion; b[3][3] = fou;
+  rois(b); baseScenario(state, b, 7);
+}
+
+function scenarioRempart(state) {
+  const b = plateauVide();
+  const tour = creerPiece('R', 0, 4, 4);
+  const allie = creerPiece('P', 0, 4, 5);
+  // Le cavalier noir peut réellement capturer le pion en e4 depuis d5. Après
+  // l'activation, la tour et le pion adjacent sont blindés par Rempart.
+  const attaquant = creerPiece('N', 1, 3, 3);
+  b[4][4] = tour; b[4][5] = allie; b[3][3] = attaquant;
+  rois(b); baseScenario(state, b, 9);
+  // Le parcours classique n'a pas de tour adverse réelle : le blindage reste
+  // visible après le tour consommé par l'activation et pendant la démonstration.
+  state.learnKeepRempart = true;
+}
+
+function scenarioDoubleCoup(state) {
+  const b = plateauVide();
+  const dame = creerPiece('Q', 0, 4, 4);
+  b[4][4] = dame;
+  rois(b); baseScenario(state, b, 15);
+}
+
+function scenarioCavalerie(state) {
+  const b = plateauVide();
+  const cavalier = creerPiece('N', 0, 4, 4);
+  // Le pion est juste en face du cavalier, sur la même colonne : il sera
+  // repoussé vers les deux cases libres derrière lui après l'activation.
+  const cible = creerPiece('P', 1, 3, 4);
+  b[4][4] = cavalier; b[3][4] = cible;
+  rois(b); baseScenario(state, b, 9);
+}
+
+function scenarioEchange(state) {
+  const b = plateauVide();
+  const tour = creerPiece('R', 0, 4, 1);
+  const pion = creerPiece('P', 0, 4, 4);
+  b[4][1] = tour; b[4][4] = pion;
+  rois(b); baseScenario(state, b, 9);
 }
 
 // --- Puzzles tactiques : l'amélioration n'est pas équipée au départ ---
@@ -548,6 +632,215 @@ export const LEARN_GAMES = [
     hint: () => ({ cells: [{ r: 6, c: 4 }, { r: 4, c: 4 }] }),
     check: (state) => state.board[4][4]?.type === 'K'
       && state.board[4][4].upgrades.includes('passe-royale'),
+  },
+  {
+    id: 'second-galop', title: 'Second galop', upgrade: 'Second Galop', upgradeId: 'second', category: 'DÉPLACEMENT', cost: 8, color: '#8FB8E0',
+    text: 'Le cavalier enchaîne un deuxième saut après un déplacement sans capture.',
+    detail: 'Achète Second Galop, joue vers d6, puis rejoue immédiatement vers f7 sans capturer.',
+    objective: 'Enchaîner deux sauts', setup: scenarioSecondGalop,
+    hint: (state) => state.chain ? { cells: [{ r: 2, c: 3 }, { r: 1, c: 5 }] } : { cells: [{ r: 4, c: 4 }, { r: 2, c: 3 }] },
+    check: (state) => state.board[1][5]?.type === 'N'
+      && state.board[1][5].upgrades.includes('second')
+      && (state.board[1][5].cooldowns.second || 0) > 0,
+  },
+  {
+    id: 'pas-diag', title: 'Pas diagonal', upgrade: 'Pas diagonal', upgradeId: 'pas-diag', category: 'DÉPLACEMENT', cost: 4, color: '#8FB8E0',
+    text: 'Le pion avance en diagonale sans capturer.',
+    detail: 'Achète Pas diagonal puis avance vers d5, une case qui serait normalement réservée à une capture.',
+    objective: 'Avancer en diagonale', setup: scenarioPasDiag,
+    hint: () => ({ cells: [{ r: 4, c: 3 }, { r: 3, c: 2 }] }),
+    check: (state) => state.board[3][2]?.type === 'P'
+      && state.board[3][2].upgrades.includes('pas-diag'),
+  },
+  {
+    id: 'grand-saut', title: 'Grand saut', upgrade: 'Grand saut', upgradeId: 'grand-saut', category: 'DÉPLACEMENT', cost: 9, color: '#8FB8E0',
+    text: 'Le cavalier franchit une distance de trois cases.',
+    detail: 'Achète Grand saut puis bondis de e4 à f7, en gardant la case intermédiaire libre.',
+    objective: 'Jouer un bond long', setup: scenarioGrandSaut,
+    hint: () => ({ cells: [{ r: 4, c: 4 }, { r: 1, c: 5 }] }),
+    check: (state) => state.board[1][5]?.type === 'N'
+      && state.board[1][5].upgrades.includes('grand-saut')
+      && (state.board[1][5].cooldowns['grand-saut'] || 0) > 0,
+  },
+  {
+    id: 'haute-fuite', title: 'Haute fuite', upgrade: 'Haute fuite', upgradeId: 'haute-fuite', category: 'DÉPLACEMENT', cost: 10, color: '#8FB8E0',
+    text: 'Le roi fuit de trois cases en ligne droite.',
+    detail: 'Achète Haute fuite puis bondis de g7 à d5 sur les trois cases libres de la diagonale.',
+    objective: 'Fuir sur trois cases', setup: scenarioHauteFuite,
+    hint: () => ({ cells: [{ r: 6, c: 6 }, { r: 3, c: 3 }] }),
+    check: (state) => state.board[3][3]?.type === 'K'
+      && state.board[3][3].upgrades.includes('haute-fuite'),
+  },
+  {
+    id: 'epine', title: 'Épine', upgrade: 'Épine', upgradeId: 'epine', category: 'ACTIF', cost: 7, color: '#F0B15E',
+    text: 'Le pion gèle sa case pour empêcher une entrée adverse.',
+    detail: 'Sélectionne le pion puis active Épine : le fou tente d’entrer sur sa case, se heurte au gel, puis se replie sur la case suivante.',
+    objective: 'Geler une case', setup: scenarioEpine,
+    hint: () => ({ cells: [{ r: 4, c: 4 }] }),
+    power: 'epine',
+    check: (state) => {
+      const pion = state.board[4][4];
+      if (!(pion?.cooldowns.epine > 0) || !(pion.epineZone?.turns > 0)) {
+        return !!state._epineDemo?.done;
+      }
+      // Une fois la séquence terminée, la démonstration a déjà vérifié le blocage
+      // et placé le fou sur sa case de repli.
+      if (state._epineDemo?.done) return true;
+      const fou = state.board[3][3];
+      if (!fou || fou.type !== 'B') return false;
+
+      // Vérifie avec le moteur réel que le gel bloque bien l'arrivée sur le pion
+      // et que le fou peut reculer d'une case supplémentaire.
+      const coups = coupsLegaux(state.board, fou);
+      const casePionBloquee = !coups.some((move) => move.r === 4 && move.c === 4);
+      const caseSuivanteLibre = coups.some((move) => move.r === 2 && move.c === 2);
+      if (!casePionBloquee || !caseSuivanteLibre) return false;
+
+      const centre = (r, c) => ({
+        x: OX + c * CELL + CELL / 2,
+        y: OY + r * CELL + CELL / 2,
+      });
+      if (!state._epineDemo) {
+        state._epineDemo = { stage: 'blocage' };
+        state.phase = 'animating';
+        state.anim = {
+          piece: fou,
+          from: centre(3, 3),
+          to: centre(4, 4),
+          t0: performance.now(),
+          onDone() {
+            state.flashes.push({ r: 4, c: 4, t0: performance.now(), color: '#F0B15E' });
+            state.popups.push({
+              text: 'CASE GELÉE !',
+              x: centre(4, 4).x,
+              y: centre(4, 4).y - 24,
+              t0: performance.now(),
+              color: '#F0B15E',
+            });
+            state._epineDemo.stage = 'repli';
+            state.phase = 'animating';
+            state.anim = {
+              piece: fou,
+              from: centre(4, 4),
+              to: centre(2, 2),
+              t0: performance.now(),
+              onDone() {
+                // Le repli est aussi appliqué à la position logique : la suite
+                // de la démonstration ne laisse pas le fou dans une case gelée.
+                state.board[3][3] = null;
+                fou.r = 2; fou.c = 2;
+                state.board[2][2] = fou;
+                state._epineDemo.stage = 'termine';
+                state._epineDemo.done = true;
+                state.phase = 'learn-game';
+              },
+            };
+          },
+        };
+        return false;
+      }
+
+      return !!state._epineDemo.done;
+    },
+  },
+  {
+    id: 'rempart', title: 'Rempart', upgrade: 'Rempart', upgradeId: 'rempart', category: 'ACTIF', cost: 9, color: '#F0B15E',
+    text: 'La tour protège les alliés placés à côté d’elle.',
+    detail: 'Sélectionne la tour, active Rempart, puis observe le cavalier attaquer le pion protégé. Le blindage absorbe la capture.',
+    objective: 'Protéger un allié', setup: scenarioRempart,
+    hint: () => ({ cells: [{ r: 4, c: 4 }] }),
+    power: 'rempart',
+    check: (state) => {
+      const tour = state.board[4][4];
+      const pion = state.board[4][5];
+      const cavalier = state.board[3][3];
+      if (!(tour?.cooldowns.rempart > 0) || !tour.rempartGranted
+          || !pion?.rempartGranted || !cavalier) {
+        return !!state._rempartDemo?.done;
+      }
+      if (state._rempartDemo?.done) return true;
+
+      const centre = (r, c) => ({
+        x: OX + c * CELL + CELL / 2,
+        y: OY + r * CELL + CELL / 2,
+      });
+      // Le cavalier doit avoir un vrai coup de capture vers le pion : la mise
+      // en scène ne contourne pas la règle de déplacement du moteur.
+      const attaqueLegale = coupsLegaux(state.board, cavalier)
+        .some((move) => move.r === 4 && move.c === 5 && move.capture);
+      if (!attaqueLegale) return false;
+
+      state._rempartDemo = { stage: 'attaque' };
+      state.phase = 'animating';
+      state.anim = {
+        piece: cavalier,
+        from: centre(3, 3),
+        to: centre(4, 5),
+        t0: performance.now(),
+        onDone() {
+          // Comme dans une vraie capture blindée : le pion reste en place et
+          // l'attaquant rebondit. Le Rempart est consommé sur cette attaque.
+          pion.shield = false;
+          state.flashes.push({ r: 4, c: 5, t0: performance.now(), color: 'cyan' });
+          state.popups.push({
+            text: 'REMPART !',
+            x: centre(4, 5).x,
+            y: centre(4, 5).y - 24,
+            t0: performance.now(),
+            color: '#4FA79C',
+          });
+          state._rempartDemo.stage = 'repli';
+          state.phase = 'animating';
+          state.anim = {
+            piece: cavalier,
+            from: centre(4, 5),
+            to: centre(3, 3),
+            t0: performance.now(),
+            onDone() {
+              state._rempartDemo.stage = 'termine';
+              state._rempartDemo.done = true;
+              state.phase = 'learn-game';
+            },
+          };
+        },
+      };
+      return false;
+    },
+  },
+  {
+    id: 'double-coup', title: 'Double coup', upgrade: 'Double coup', upgradeId: 'double-coup', category: 'ACTIF', cost: 15, color: '#F0B15E',
+    text: 'La dame rejoue immédiatement une deuxième fois.',
+    detail: 'Achète Double coup, joue vers e5, puis profite du second coup vers f6.',
+    objective: 'Jouer deux coups dans le même tour', setup: scenarioDoubleCoup,
+    hint: (state) => state.chain ? { cells: [{ r: 3, c: 4 }, { r: 2, c: 5 }] } : { cells: [{ r: 4, c: 4 }, { r: 3, c: 4 }] },
+    check: (state) => state.board[2][5]?.type === 'Q'
+      && state.board[2][5].doubleCoupUsed,
+  },
+  {
+    id: 'cavalerie', title: 'Cavalerie', upgrade: 'Cavalerie', upgradeId: 'cavalerie', category: 'ACTIF', cost: 9, color: '#F0B15E',
+    text: 'Le cavalier repousse le pion placé juste en face de lui.',
+    detail: 'Achète Cavalerie, active-la sur le cavalier, choisis le pion devant lui, puis choisis sa case de recul.',
+    objective: 'Repousser le pion en face', setup: scenarioCavalerie,
+    hint: (state) => state.phase === 'cavalerie-target'
+      ? { cells: [{ r: 3, c: 4 }] }
+      : state.phase === 'cavalerie-push'
+        ? { cells: [{ r: 2, c: 3 }] }
+        : { cells: [{ r: 4, c: 4 }] },
+    power: 'cavalerie', check: (state) => state.board[2][3]?.type === 'P'
+      && state.board[2][3].owner === 1
+      && (state.board[4][4]?.cooldowns.cavalerie || 0) > 0,
+  },
+  {
+    id: 'echange', title: 'Échange', upgrade: 'Échange', upgradeId: 'echange', category: 'ACTIF', cost: 9, color: '#F0B15E',
+    text: 'La tour échange sa place avec un pion allié.',
+    detail: 'Active Échange sur la tour, puis choisis le pion en e4 pour ouvrir la ligne.',
+    objective: 'Échanger deux positions', setup: scenarioEchange,
+    hint: (state) => state.phase === 'echange-target'
+      ? { cells: [{ r: 4, c: 4 }] }
+      : { cells: [{ r: 4, c: 1 }] },
+    power: 'echange', check: (state) => state.board[4][4]?.type === 'R'
+      && state.board[4][4].upgrades.includes('echange')
+      && state.board[4][1]?.type === 'P',
   },
 ];
 

@@ -1,7 +1,8 @@
 // roychec — enregistrement de partie (replay) pour tutoriel / analyse.
 // Hooké dans main.js (jouerCoup, acheter, pouvoirs, finPartie).
 // Sortie : markdown téléchargeable + localStorage (max 20 parties).
-import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP } from './constants.js?v=109';
+import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP, UPGRADES } from './constants.js?v=109';
+import { traduire } from './i18n.js?v=1';
 import { VARIANT_PRESETS, ECONOMIES, COMBATS, DEFAULT_VARIANT } from './variants.js?v=108';
 // Phase A.5 v2 : toAlgebraic doit connaître la hauteur du plateau pour encoder
 // correctement les rangées sous forme algébrique (8 - r sur plateau 8×N).
@@ -43,6 +44,7 @@ const MODE_LABEL = { pvp: '1J vs 2J (Hot-seat)', hunt: 'Chasse aux amélioration
 export function initReplay(state) {
   const r = {
     mode: state.mode,
+    language: state.language || 'fr',
     difficulty: state.ai ? state.ai.difficulty : null,
     // Variante locale (GDD §7.2 v3) : snapshot de l'id pour fidélité du replay.
     // Pour les modes hors scope (PvAI / PvP en ligne), `state.variant` est TOUJOURS
@@ -181,14 +183,22 @@ export function toMarkdown(state) {
   const r = state.replay;
   if (!r || !r.result) return '';
   const win = r.result.winner;
-  const modeLabel = MODE_LABEL[r.mode] || r.mode;
-  const diffLabel = r.difficulty ? ` niv.${r.difficulty}` : '';
+  const lang = state.language || r.language || 'fr';
+  const t = (value) => traduire(value, lang);
+  const pieceName = (type) => t(PIECE_NOM[type] || type || '');
+  const upgradeName = (id) => t(UPGRADES[id]?.nom || id || '');
+  const modeLabel = r.mode === 'pvai' ? t('Humain vs IA')
+    : r.mode === 'spectator' ? t('Spectateur (IA vs IA)')
+    : r.mode === 'hunt' ? t('Chasse aux améliorations')
+    : r.mode === 'pvp' ? t('1J vs 2J (Hot-seat)') : t(MODE_LABEL[r.mode] || r.mode);
+  const diffLabel = r.difficulty ? ` ${t('niv.')}${r.difficulty}` : '';
+  const winnerName = win === 0 || win === 1 ? t(NOM_JOUEUR[win]) : t('Partie en cours / nulle');
 
   let md = '';
-  md += `# Partie — ${modeLabel}${diffLabel}\n`;
-  md += `**Date:** ${formatTime(r.startTime)}  \n`;
-  md += `**Durée:** ${r.result.totalActions} actions (${formatDuration(r.result.duration)})  \n`;
-  md += `**Vainqueur:** ${NOM_JOUEUR[win]} — capture du roi 🏆\n`;
+  md += `# ${t('Partie')} — ${modeLabel}${diffLabel}\n`;
+  md += `**${t('Date')}:** ${formatTime(r.startTime)}  \n`;
+  md += `**${t('Durée')}:** ${r.result.totalActions} ${t('actions')} (${formatDuration(r.result.duration)})  \n`;
+  md += `**${t('Vainqueur')}:** ${winnerName}${win === 0 || win === 1 ? ` — ${t('capture du roi')} 🏆` : ''}\n`;
   // Variante locale (GDD §7.2 v3) : libellé lisible de l'en-tête (« Plafond 15 ×
   // Élim. ×2 »). Lookup direct dans les catalogues ECONOMIES / COMBATS (qui sont
   // importés au-dessus). Les parties standard (DEFAULT_VARIANT) et pré-v3 (variant
@@ -196,72 +206,72 @@ export function toMarkdown(state) {
   if (r.variant && r.variant !== DEFAULT_VARIANT) {
     const preset = VARIANT_PRESETS.find((v) => v.id === r.variant);
     if (preset) {
-      const ecoLabel = (ECONOMIES.find((e) => e.id === preset.economie) || {}).label || preset.economie;
-      const cbtLabel = (COMBATS.find((c) => c.id === preset.combat) || {}).label || preset.combat;
-      md += `**Variante:** ${ecoLabel} × ${cbtLabel}\n`;
+      const ecoLabel = t((ECONOMIES.find((e) => e.id === preset.economie) || {}).label || preset.economie);
+      const cbtLabel = t((COMBATS.find((c) => c.id === preset.combat) || {}).label || preset.combat);
+      md += `**${t('Variante')}:** ${ecoLabel} × ${cbtLabel}\n`;
     }
   }
   md += '\n';
 
   // Chronologie
-  md += '## Déroulement\n';
-  md += '| # | Joueur | Action | Détail |\n';
+  md += `## ${t('Déroulement')}\n`;
+  md += `| # | ${t('Joueur')} | ${t('Action')} | ${t('Détail')} |\n`;
   md += '|---|--------|--------|--------|\n';
   for (const e of r.events) {
-    const joueur = `${NOM_JOUEUR[e.owner]}`;
+    const joueur = t(NOM_JOUEUR[e.owner]);
     if (e.type === 'move') {
       const emoji = PIECE_EMOJI[e.piece];
-      const capture = e.captured ? ` × ${PIECE_EMOJI[e.captured]} capture ${PIECE_NOM[e.captured]}` : '';
-      const bonus = e.bonus ? ` (+${e.bonus + 2} écus)` : ' (+2 écus)'; // +2 base + bonus
-      const chainTag = e.chain ? ' 🔗 chaîne' : '';
-      md += `| ${e.idx + 1} | ${joueur} | ${emoji} ${PIECE_NOM[e.piece]} | ${e.from} → ${e.to}${capture}${bonus}${chainTag} |\n`;
+      const capture = e.captured ? ` × ${PIECE_EMOJI[e.captured]} ${t('capture')} ${pieceName(e.captured)}` : '';
+      const bonus = e.bonus ? ` (+${e.bonus + 2} ${t('écus')})` : ` (+2 ${t('écus')})`; // +2 base + bonus
+      const chainTag = e.chain ? ` 🔗 ${t('chaîne')}` : '';
+      md += `| ${e.idx + 1} | ${joueur} | ${emoji} ${pieceName(e.piece)} | ${e.from} → ${e.to}${capture}${bonus}${chainTag} |\n`;
     } else if (e.type === 'purchase') {
-      md += `| ${e.idx + 1} | ${joueur} | 🛒 Achat | ${PIECE_NOM[e.piece]} en ${e.pos} : ${e.upgrade} (−${e.cost} écus) |\n`;
+      md += `| ${e.idx + 1} | ${joueur} | 🛒 ${t('Achat')} | ${pieceName(e.piece)} ${t('en')} ${e.pos} : ${upgradeName(e.upgrade)} (−${e.cost} ${t('écus')}) |\n`;
     } else if (e.type === 'power') {
       const target = e.target ? ` → ${toAlgebraic(e.target.r, e.target.c, boardRows)}` : '';
-      md += `| ${e.idx + 1} | ${joueur} | ⚡ ${e.power} | ${PIECE_NOM[e.piece]}${target} (consomme le tour) |\n`;
+      md += `| ${e.idx + 1} | ${joueur} | ⚡ ${t(e.power)} | ${pieceName(e.piece)}${target} (${t('consomme le tour')}) |\n`;
     } else if (e.type === 'hunt-award') {
-      md += `| ${e.idx + 1} | ${joueur} | ✦ Chasse | ${PIECE_NOM[e.piece]} reçoit ${e.upgrade || 'aucune'} sur ${e.pos} |\n`;
+      md += `| ${e.idx + 1} | ${joueur} | ✦ ${t('Chasse')} | ${pieceName(e.piece)} ${t('reçoit')} ${upgradeName(e.upgrade) || t('aucune')} ${t('sur')} ${e.pos} |\n`;
     }
   }
   md += '\n';
 
   // Statistiques
-  md += '## Statistiques\n';
-  md += '| | Joueur 1 | Joueur 2 |\n';
+  md += `## ${t('Statistiques')}\n`;
+  md += `| | ${t('Joueur 1')} | ${t('Joueur 2')} |\n`;
   md += '|---|---|---|\n';
 
   const achatsLabel = (owner) => {
     const items = r.stats.purchases[owner];
     if (!items.length) return '—';
-    return items.map(p => `${p.id} (action ${p.turn + 1}, −${p.cost})`).join(', ');
+    return items.map(p => `${upgradeName(p.id)} (${t('action')} ${p.turn + 1}, −${p.cost})`).join(', ');
   };
-  md += `| Achats | ${achatsLabel(0)} | ${achatsLabel(1)} |\n`;
-  md += `| Pouvoirs activés | ${r.stats.powers[0]} | ${r.stats.powers[1]} |\n`;
-  md += `| Captures | ${r.stats.captures[0]} | ${r.stats.captures[1]} |\n`;
-  md += `| Écus max | ${r.stats.maxEcus[0]} | ${r.stats.maxEcus[1]} |\n`;
+  md += `| ${t('Achats')} | ${achatsLabel(0)} | ${achatsLabel(1)} |\n`;
+  md += `| ${t('Pouvoirs activés')} | ${r.stats.powers[0]} | ${r.stats.powers[1]} |\n`;
+  md += `| ${t('Captures')} | ${r.stats.captures[0]} | ${r.stats.captures[1]} |\n`;
+  md += `| ${t('Écus max')} | ${r.stats.maxEcus[0]} | ${r.stats.maxEcus[1]} |\n`;
   md += '\n';
 
   // Moments clés (captures de pièces majeures, achats ≥ 12 écus, chaînes)
-  md += '## Moments clés\n';
+  md += `## ${t('Moments clés')}\n`;
   let highlights = 0;
   for (const e of r.events) {
     if (e.type === 'move' && e.captured) {
       if (['Q', 'R', 'K'].includes(e.captured)) {
-        md += `- **Action ${e.idx + 1}:** ${PIECE_NOM[e.piece]} capture ${PIECE_NOM[e.captured]} en ${e.to}\n`;
+        md += `- **${t('Action')} ${e.idx + 1}:** ${pieceName(e.piece)} ${t('capture')} ${pieceName(e.captured)} ${t('en')} ${e.to}\n`;
         highlights++;
       }
     }
     if (e.type === 'purchase' && e.cost >= 12) {
-      md += `- **Action ${e.idx + 1}:** Achat décisif — ${e.upgrade} sur ${PIECE_NOM[e.piece]} (−${e.cost} écus)\n`;
+      md += `- **${t('Action')} ${e.idx + 1}:** ${t('Achat décisif')} — ${upgradeName(e.upgrade)} ${t('sur')} ${pieceName(e.piece)} (−${e.cost} ${t('écus')})\n`;
       highlights++;
     }
     if (e.type === 'move' && e.chain) {
-      md += `- **Action ${e.idx + 1}:** Chaîne — ${PIECE_NOM[e.piece]} enchaîne un 2e coup\n`;
+      md += `- **${t('Action')} ${e.idx + 1}:** ${t('Chaîne')} — ${pieceName(e.piece)} ${t('enchaîne un 2e coup')}\n`;
       highlights++;
     }
   }
-  if (!highlights) md += 'Aucun moment décisif détecté.\n';
+  if (!highlights) md += `${t('Aucun moment décisif détecté.')}\n`;
 
   return md;
 }

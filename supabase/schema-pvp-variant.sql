@@ -53,7 +53,7 @@ create function public.pvp_create_private(p_cadence int default 300, p_variant t
 returns table(match_id uuid, code text)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 declare
   v_me   uuid := auth.uid();
@@ -85,7 +85,7 @@ create function public.pvp_join_code(p_code text)
 returns table(match_id uuid, side int, opp_pseudo text, opp_trophies int, cadence int, variant text, taille text)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 declare
   v_me  uuid := auth.uid();
@@ -134,7 +134,7 @@ create function public.pvp_rematch(p_prev uuid)
 returns table(match_id uuid, side int, opp_pseudo text, opp_trophies int, cadence int, variant text, taille text)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 #variable_conflict use_column
 declare
@@ -148,6 +148,7 @@ declare
   v_side int;
   v_opp  uuid;
 begin
+  if v_me is null then raise exception 'not_authenticated'; end if;
   select * into v_prev from matches m where m.id = p_prev for update;
   if not found then raise exception 'match_not_found'; end if;
   if v_me <> v_prev.p1 and v_me <> v_prev.p2 then raise exception 'not_a_player'; end if;
@@ -175,22 +176,25 @@ end $$;
 grant execute on function public.pvp_rematch(uuid) to authenticated;
 
 -- ---------------------------------------------------------------------------
--- 4) pvp_report_result — REMPLACE la version schema-pvp-w3.sql. Ajout : les
+-- 4) pvp_report_result — REMPLACE la version schema-pvp-w3.sql. La signature
+DROP FUNCTION IF EXISTS public.pvp_report_result(uuid, text, boolean);
+DROP FUNCTION IF EXISTS public.pvp_report_result(uuid, text);
+-- historique a trois arguments est supprimee pour eviter tout overload
+-- vulnerable avant la recreation durcie a deux arguments. Ajout : les
 --    parties PRIVÉES (private = true, donc « Jouer avec un ami » ET revanches)
 --    ne comptent JAMAIS pour l'Elo (décision utilisateur 12/07, spec §4.3 v3.3).
 --    Le match est finalisé normalement (status 'ended', winner, ended_at) mais
 --    p1_delta = p2_delta = 0 et profiles.trophies n'est PAS touché.
---    Même signature → create or replace suffit (pas de drop nécessaire).
+--    La signature durcie est explicitement recreee ci-dessous.
 -- ---------------------------------------------------------------------------
-create or replace function public.pvp_report_result(
+create function public.pvp_report_result(
   p_match_id uuid,
-  p_result text,
-  p_opponent_abandoned boolean default false
+  p_result text
 )
 returns table(applied boolean, my_delta int, my_total int, match_status text)
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 #variable_conflict use_column
 declare
@@ -250,10 +254,6 @@ begin
     elsif v_m.result_p1 = 'draw' and v_m.result_p2 = 'draw' then v_concord := true; v_draw := true;
     else v_concord := false;  -- ex. deux « win » → litige
     end if;
-  elsif p_opponent_abandoned and p_result = 'win' then
-    -- Exception abandon/déconnexion (§8.3) : le survivant fait foi, rapport unilatéral.
-    v_concord := true;
-    v_winner  := case when v_is_p1 then 0 else 1 end;
   end if;
 
   if not v_concord then
@@ -312,4 +312,4 @@ begin
            'ended'::text;
 end $$;
 
-grant execute on function public.pvp_report_result(uuid, text, boolean) to authenticated;
+grant execute on function public.pvp_report_result(uuid, text) to authenticated;

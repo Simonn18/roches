@@ -329,7 +329,7 @@ function demarrerHandshake(isPrivate = false) {
     // n'aurait qu'UNE entrée même à deux connectés → faux « déconnecté ». Avec une clé
     // par side, chaque joueur a sa propre entrée et on compte les SIDES réellement présents.
     online.channel = online.supabase.channel(channelName, {
-      config: { broadcast: { self: false }, presence: { key: String(online.side) } },
+      config: { private: true, broadcast: { self: false }, presence: { key: String(online.side) } },
     });
 
     // Réception des messages Broadcast.
@@ -566,12 +566,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Rapporte le résultat de la partie au serveur (RPC pvp_report_result, §3.5/§8).
  *  - result : 'win' | 'loss' | 'draw' du point de vue local.
- *  - opponentAbandoned : true si je suis le survivant d'un abandon/déconnexion (§8.3).
  *  Renvoie { applied, delta, total, status, error }. Les trophées ne sont écrits que si
  *  les deux rapports concordent : quand JE rapporte en premier, le serveur répond
  *  'playing' (en attente) → on re-poll jusqu'à finalisation par l'adversaire (~12 s),
  *  puis on relit MON delta figé. Dégradation gracieuse : réseau KO → { error }. */
-export async function report(result, opponentAbandoned = false) {
+export async function report(result) {
   if (!online.supabase || !online.matchId) {
     return { applied: false, delta: 0, total: null, status: 'offline', error: 'offline' };
   }
@@ -581,7 +580,6 @@ export async function report(result, opponentAbandoned = false) {
       const { data, error } = await online.supabase.rpc('pvp_report_result', {
         p_match_id: online.matchId,
         p_result: result,
-        p_opponent_abandoned: opponentAbandoned,
       });
       if (error) throw error;
       // RETURNS TABLE → PostgREST renvoie un TABLEAU d'1 ligne.
