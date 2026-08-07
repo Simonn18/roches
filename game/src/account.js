@@ -14,7 +14,7 @@
 // l'inscription (envoie un email de confirmation Supabase). Le magic link reste
 // disponible via un toggle dans l'overlay.
 //
-import { appliquerTraductions, lireLangue, onLangueChange, traduire } from './i18n.js?v=2';
+import { appliquerTraductions, lireLangue, onLangueChange, traduire } from './i18n.js?v=3';
 
 // ISOLATION (garde-fou CLAUDE.md §7.3) : c'est le SEUL module du projet qui connaît
 // Supabase. Le reste du jeu ne voit qu'un objet d'état plat (getAccount()) et trois
@@ -574,7 +574,8 @@ async function gererSessionAuthentifiee(session) {
     afficherConfirmationEmail(user && user.email);
     return;
   }
-  if (await ouvrirDefiMfaSiNecessaire(user)) return;
+  // La validation 2FA obligatoire est temporairement désactivée.
+  // L'enrôlement volontaire reste disponible depuis l'écran de compte.
   chargerProfil(user);
 }
 
@@ -608,16 +609,40 @@ async function ouvrirDefiMfaSiNecessaire(user) {
   }
 }
 
-function proposerActivationMfa() {
-  if (!mfaDisponible()) return;
-  supabase.auth.mfa.listFactors().then(({ data, error }) => {
-    if (error) return;
+/** Ouvre l'écran d'activation 2FA depuis le menu, à la demande du joueur. */
+export async function ouvrirActivationMfa() {
+  if (account.status !== 'connected') {
+    startAuth();
+    return;
+  }
+  montrerEcran('mfa-prompt');
+  ouvrirOverlay();
+  // Bloque les doubles clics pendant la lecture des facteurs Supabase.
+  el.mfaEnable.disabled = true;
+  setUiText(el.mfaEnable, 'Vérification…');
+  message('', false);
+  if (!mfaDisponible()) {
+    setUiText(el.mfaEnable, 'Activer la 2FA');
+    message('La double authentification n’est pas disponible.', true);
+    return;
+  }
+  try {
+    const { data, error } = await supabase.auth.mfa.listFactors();
+    if (error) throw error;
     const verified = (data && data.totp || []).some((factor) => factor.status === 'verified');
-    if (!verified) {
-      montrerEcran('mfa-prompt');
-      ouvrirOverlay();
+    if (verified) {
+      setUiText(el.mfaEnable, '2FA déjà activée');
+      message('La double authentification est déjà activée.', false);
+    } else {
+      el.mfaEnable.disabled = false;
+      setUiText(el.mfaEnable, 'Activer la 2FA');
     }
-  }).catch(() => {});
+  } catch (e) {
+    console.warn('[account] MFA factors', e);
+    el.mfaEnable.disabled = false;
+    setUiText(el.mfaEnable, 'Activer la 2FA');
+    message('Impossible de vérifier le statut de la double authentification.', true);
+  }
 }
 
 async function commencerActivationMfa() {
@@ -647,10 +672,17 @@ async function commencerActivationMfa() {
       throw new Error('Réponse MFA invalide.');
     }
     pendingMfaFactorId = data.id;
-    // Supabase renvoie un SVG dans totp.qr_code : il peut être placé directement
-    // dans une data URL et affiché par l’image, sans bibliothèque QR tierce.
-    el.mfaQr.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(data.totp.qr_code)}`;
-    el.mfaQr.hidden = false;
+    // Supabase renvoie normalement une data-URI complète (data:image/svg+xml...).
+    // Ne pas l'encoder une seconde fois : cela rendrait le SVG illisible par le navigateur.
+    const qrCode = normaliserQrCode(data.totp.qr_code);
+    if (!qrCode) throw new Error('QR code MFA vide.');
+    el.mfaQr.onerror = () => {
+      el.mfaQr.hidden = true;
+      message('QR code impossible à afficher. Réessaie.', true);
+    };
+    el.mfaQr.onload = () => { el.mfaQr.hidden = false; };
+    el.mfaQr.hidden = true;
+    el.mfaQr.src = qrCode;
     el.mfaSetupCode.value = '';
     montrerEcran('mfa-setup');
     message('Scanne le QR code, puis saisis le code généré.', false);
@@ -668,6 +700,17 @@ async function commencerActivationMfa() {
     el.mfaEnable.disabled = false;
     message(traduireErreurMfa(e), true);
   }
+}
+
+function normaliserQrCode(value) {
+  const qrCode = String(value || '').trim();
+  if (!qrCode) return null;
+  if (/^data:image\/svg\+xml(?:;|,)/i.test(qrCode)) return qrCode;
+  if (/^(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(qrCode)) {
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrCode)}`;
+  }
+  // Les formats non-SVG ne sont pas des QR TOTP valides pour cet écran.
+  return null;
 }
 
 function estErreurFacteurMfa(error) {
@@ -791,7 +834,7 @@ async function confirmerPseudo() {
     account.pseudo = pseudo;
     account.trophies = 0;
     fermerOverlay();
-    proposerActivationMfa();
+
   } catch (e) {
     console.warn('[account] insert profil', e);
     resetPseudoBtn();
@@ -820,7 +863,7 @@ async function chargerProfil(user) {
     account.pseudo = data.pseudo;
     account.trophies = data.trophies || 0;
     fermerOverlay();
-    proposerActivationMfa();
+
   } catch (e) {
     console.warn('[account] chargerProfil', e);
     ouvrirPseudo();

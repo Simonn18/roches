@@ -15,7 +15,7 @@ import { demarrerApprendre, demarrerPuzzles, demarrerMiniJeu, demarrerPuzzle,
   marquerMiniJeuReussi, marquerPuzzleReussi, marquerPuzzleReponse, puzzleReponse,
   TOTAL_LEARN_GAMES, TOTAL_PUZZLES,
   apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
-import { initAccount, startAuth, logout, getAccount, getSupabaseClient } from './account.js?v=108';
+import { initAccount, startAuth, logout, ouvrirActivationMfa, getAccount, getSupabaseClient } from './account.js?v=110';
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue,
   sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=110';
@@ -32,7 +32,7 @@ import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBAT
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
 import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
-import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=2';
+import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=3';
 // La langue pilote à la fois le Canvas et les overlays DOM (auth + renommage de deck).
 // Un seul listener global évite qu'un modal oublié reste en français après le toggle.
 
@@ -2427,6 +2427,7 @@ function actionBouton(action) {
     // ne fait qu'ouvrir/fermer. Une panne réseau n'atteint jamais le reste du jeu.
     case 'login': startAuth(); break;
     case 'logout': logout(); break;
+    case 'mfa': ouvrirActivationMfa(); break;
     // Menu hamburger (31/07) : bascule l'ouverture du drawer latéral
     // (Compte/Apparence/Langues). hamburgerT0 anime le glissement d'ouverture.
     case 'toggleHamburger':
@@ -2718,7 +2719,8 @@ function boutonSous(x, y) {
 
 function estBoutonDrawer(button) {
   const kind = button && button.action && button.action.kind;
-  return kind === 'login' || kind === 'logout' || kind === 'toggleTheme' || kind === 'setLanguage';
+  return kind === 'login' || kind === 'logout' || kind === 'mfa'
+    || kind === 'toggleTheme' || kind === 'setLanguage';
 }
 
 function interactionAutoriseeParDrawer(button, x, y) {

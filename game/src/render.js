@@ -30,7 +30,7 @@ import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
   apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
-import { traduire } from './i18n.js?v=1';
+import { traduire } from './i18n.js?v=3';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -2156,6 +2156,9 @@ function dessineBandeauCompte(ctx, state) {
       y += 30;
       bouton(state, ctx, dx + pad, y, pw - 2 * pad, 34, 'Déconnexion', { kind: 'logout' },
         { color: UI_THEME.card, textColor: UI_THEME.text });
+      y += 34;
+      bouton(state, ctx, dx + pad, y, pw - 2 * pad, 34, 'Activer la 2FA', { kind: 'mfa' },
+        { color: UI_THEME.primary, textColor: UI_THEME.text });
       y += 34;
     } else {
       bouton(state, ctx, dx + pad, y, pw - 2 * pad, 40, 'Connexion', { kind: 'login' },
