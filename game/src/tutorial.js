@@ -347,16 +347,76 @@ export const STEPS = [
 // Nombre total d'étapes.
 export const TOTAL_STEPS = STEPS.length;
 
-// Démarre le tutoriel à l'étape 0.
-export function demarrerTutoriel(state) {
-  state.tutorialStep = 0;
+// Progression légère du parcours : les étapes terminées sont mémorisées par
+// index pour que le hub puisse déverrouiller la suivante, y compris après un
+// rechargement. Le tutoriel reste jouable sans localStorage (mode privé/tests).
+const TUTORIAL_PROGRESS_KEY = 'roychec-tutorial-progress-v1';
+function lireProgressionTutoriel() {
+  try {
+    const raw = localStorage.getItem(TUTORIAL_PROGRESS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const completed = Array.isArray(parsed?.completed)
+      ? parsed.completed.filter((index) => Number.isInteger(index) && index >= 0 && index < TOTAL_STEPS)
+      : [];
+    return { completed: [...new Set(completed)] };
+  } catch (_) {
+    return { completed: [] };
+  }
+}
+function sauverProgressionTutoriel(progress) {
+  try { localStorage.setItem(TUTORIAL_PROGRESS_KEY, JSON.stringify(progress)); } catch (_) { /* non bloquant */ }
+}
+
+export function progressionTutoriel(state) {
+  if (!state.tutorialProgress) state.tutorialProgress = lireProgressionTutoriel();
+  return state.tutorialProgress;
+}
+
+export function tutorielEtapeDebloquee(state, index) {
+  if (!Number.isInteger(index) || index < 0 || index >= TOTAL_STEPS) return false;
+  if (index === 0) return true;
+  return progressionTutoriel(state).completed.includes(index - 1);
+}
+
+// Ouvre le parcours avant de lancer une étape. Le hub ne possède pas de plateau
+// afin de laisser le rendu mobile réserver une vraie colonne scrollable aux niveaux.
+export function demarrerTutorielHub(state) {
+  state.mode = 'tutorial';
+  state.phase = 'tutorial-hub';
+  state.board = null;
+  state.tutorialStep = null;
+  state.tutorialProgress = lireProgressionTutoriel();
+  state.selected = null;
+  state.legalMoves = [];
+  state.panelPiece = null;
+  state.anim = null;
+  state.popups = [];
+  state.flashes = [];
+}
+
+// Lance une étape précise depuis le hub, uniquement si elle est débloquée.
+export function demarrerEtapeTutoriel(state, index) {
+  if (!tutorielEtapeDebloquee(state, index)) return false;
+  state.tutorialStep = index;
   state._tutorialAdvance = false;
   state._tutoBravoT = 0;
-  STEPS[0].setup(state);
+  STEPS[index].setup(state);
+  return true;
+}
+
+// Démarre le tutoriel à l'étape 0 (compatibilité avec les appels existants).
+export function demarrerTutoriel(state) {
+  demarrerEtapeTutoriel(state, 0);
 }
 
 // Passe à l'étape suivante. Renvoie true si le tutoriel est terminé.
 export function etapeSuivante(state) {
+  const completed = progressionTutoriel(state).completed;
+  if (Number.isInteger(state.tutorialStep) && !completed.includes(state.tutorialStep)) {
+    completed.push(state.tutorialStep);
+    completed.sort((a, b) => a - b);
+    sauverProgressionTutoriel(progressionTutoriel(state));
+  }
   state.tutorialStep++;
   state._tutorialAdvance = false;
   state._tutoDemo = null;

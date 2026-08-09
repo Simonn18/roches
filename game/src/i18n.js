@@ -119,6 +119,13 @@ const TEXT = {
     'ÉCUS': 'COINS',
     'cases maîtrisées': 'levels mastered',
     'puzzles résolus': 'puzzles solved',
+    'PARCOURS': 'PATH',
+    '✓ terminé': '✓ completed',
+    'à faire': 'to do',
+    'verrouillé': 'locked',
+    'à résoudre': 'to solve',
+    '✓ résolu': '✓ solved',
+    'Maîtrise les règles étape par étape.': 'Master the rules step by step.',
     'Avance case après case pour maîtriser les améliorations.': 'Advance one level at a time to master upgrades.',
     'Trouve l’amélioration nécessaire pour résoudre chaque situation.': 'Find the upgrade needed to solve each situation.',
     'Objectif': 'Objective',
@@ -826,6 +833,8 @@ function translateDynamic(value, lang) {
   if (match) return `STEP ${match[1]}`;
   match = value.match(/^(\d+)\/(\d+) cases maîtrisées$/);
   if (match) return `${match[1]}/${match[2]} levels mastered`;
+  match = value.match(/^(\d+)\/(\d+) étapes maîtrisées$/);
+  if (match) return `${match[1]}/${match[2]} steps mastered`;
   match = value.match(/^(\d+)\/(\d+) puzzles résolus$/);
   if (match) return `${match[1]}/${match[2]} puzzles solved`;
   match = value.match(/^✓\s*(.*?) acheté — résous la position$/);

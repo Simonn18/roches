@@ -4,12 +4,12 @@
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=192';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=204';
 import { iaDecideTour } from './ai.js?v=111';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
-import { demarrerTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
-  rejouerEtape, tutorielPermet } from './tutorial.js?v=107';
+import { demarrerTutorielHub, demarrerEtapeTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
+  rejouerEtape, tutorielPermet } from './tutorial.js?v=109';
 import { demarrerApprendre, demarrerPuzzles, demarrerMiniJeu, demarrerPuzzle,
   reinitialiserMiniJeu, reinitialiserPuzzle, verifierMiniJeu, verifierPuzzle,
   marquerMiniJeuReussi, marquerPuzzleReussi, marquerPuzzleReponse, puzzleReponse,
@@ -33,7 +33,7 @@ import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBAT
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
 import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
-import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=3';
+import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=5';
 // La langue pilote à la fois le Canvas et les overlays DOM (auth + renommage de deck).
 // Un seul listener global évite qu'un modal oublié reste en français après le toggle.
 
@@ -236,7 +236,8 @@ function synchroniserAffichage() {
   const gameplayMobile = mobile && !!state.board && gameplayModes.includes(state.mode);
   // Le menu principal et le lobby en ligne partagent la même surface mobile :
   // le lobby doit lui aussi recevoir le canvas scrollable et les dimensions téléphone.
-  state.ui.mobileLayout = mobile && (state.phase === 'menu' || state.phase === 'matchmaking');
+  const verticalHub = ['tutorial-hub', 'learn-hub', 'puzzle-hub', 'decks', 'deck-picker'].includes(state.phase);
+  state.ui.mobileLayout = mobile && (state.phase === 'menu' || state.phase === 'matchmaking' || verticalHub);
   state.ui.mobileGameplay = gameplayMobile;
   const menuMobile = state.ui.mobileLayout;
   const targetWidth = (menuMobile || gameplayMobile)
@@ -246,13 +247,26 @@ function synchroniserAffichage() {
   // principaux dans la même vue ; le défilement reste disponible pour un catalogue
   // exceptionnellement long ou un écran très court.
   const targetHeight = menuMobile
-    ? (state.phase === 'matchmaking' ? 720 : 1020)
+    ? (state.phase === 'matchmaking' ? 720
+      : state.phase === 'tutorial-hub' ? 1400
+        : state.phase === 'learn-hub'
+          // Apprendre reprend tout le catalogue desktop (23 niveaux) : la
+          // hauteur suit le nombre réel d'entrées pour que la dernière carte
+          // et les boutons de navigation restent accessibles sur téléphone.
+          ? 150 + TOTAL_LEARN_GAMES * 84 + 64 + 78 + 38 + 24
+          : state.phase === 'puzzle-hub'
+            ? 150 + TOTAL_PUZZLES * 108 + 64 + 78 + 38 + 24
+            : state.phase === 'decks' ? 1140
+              : state.phase === 'deck-picker' ? 1400
+                : 1020)
     : gameplayMobile
-      ? state.panelPiece
-        // Le catalogue mobile est désormais vertical : on réserve une surface
-        // scrollable suffisante pour afficher toutes les cartes et leurs actions.
-        ? 1680
-        : Math.max(700, Math.min(980, Math.floor(window.innerHeight || 844)))
+      ? state.mode === 'tutorial'
+        ? 1900
+        : state.panelPiece
+          // Le catalogue mobile est désormais vertical : on réserve une surface
+          // scrollable suffisante pour afficher toutes les cartes et leurs actions.
+          ? 1680
+          : Math.max(700, Math.min(980, Math.floor(window.innerHeight || 844)))
       : CANVAS_H;
   state.ui.renderWidth = targetWidth;
   state.ui.renderHeight = targetHeight;
@@ -2618,6 +2632,12 @@ function actionBouton(action) {
     case 'apprendre':
       if (state.phase === 'menu') demarrerApprendre(state);
       break;
+    case 'tutorialStart':
+      if (state.phase === 'tutorial-hub') demarrerEtapeTutoriel(state, action.index);
+      break;
+    case 'tutorialHub':
+      if (state.mode === 'tutorial' || state.phase === 'tutorial-done') demarrerTutorielHub(state);
+      break;
     case 'openPuzzles':
       if (state.mode === 'learn' && state.phase === 'learn-hub') demarrerPuzzles(state);
       break;
@@ -2667,8 +2687,10 @@ function actionBouton(action) {
         else demarrerPuzzles(state);
       }
       break;
-    // Abandonner la partie (PvP, PvAI, Chasse). L'abandonneur perd.
-    case 'tutoriel': demarrerTutoriel(state); break;
+    // Tutoriel : le menu ouvre désormais le parcours de niveaux avant la première étape.
+    case 'tutoriel':
+      if (state.phase === 'menu') demarrerTutorielHub(state);
+      break;
     case 'tutorialContinue': forcerAvancement(state); break;
     case 'tutorialRestart': rejouerEtape(state); break;
     case 'abandonner':
@@ -2932,11 +2954,14 @@ canvas.addEventListener('pointerdown', (e) => {
     const start = souris(e);
     const button = boutonSous(start.x, start.y);
     const kind = button && button.action && button.action.kind;
-    const matchmakingTap = state.phase === 'matchmaking' && [
+    const scrollableMobileTap = [
+      'startReplay', 'ouvrirReplays', 'togglePreview',
       'startSearch', 'createPrivateMatch', 'showJoinCode', 'quitterLobby',
       'pickCadence', 'cancelMatchmaking', 'joinByCode',
+      'tutorialStart', 'tutorialHub', 'learnStart', 'puzzleStart', 'openPuzzles', 'classicHub',
+      'switchDeck', 'editSlot', 'pickUpgrade', 'cancelPick',
     ].includes(kind);
-    if (button && (['startReplay', 'ouvrirReplays', 'togglePreview'].includes(kind) || matchmakingTap)) {
+    if (button && scrollableMobileTap) {
       // Marque aussi le mousedown de compatibilité avant de différer l’action.
       // Sinon certains navigateurs l’exécuteraient immédiatement malgré le scroll.
       dernierPointerTactile = performance.now();

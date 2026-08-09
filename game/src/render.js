@@ -23,14 +23,14 @@ import { creerPlateau } from './board.js?v=109';
 // zero-dep de tailles.js). Pas de cycle : tailles.js n'importe aucun autre module.
 import { TAILLES } from './tailles.js?v=108';
 import { DIRS8, coupsLegaux, roiEnEchec, ciblesVet } from './rules.js?v=116';
-import { STEPS, TOTAL_STEPS, tutorielPermet, tutorielHint, tutorielPanneauNormal } from './tutorial.js?v=107';
+import { STEPS, TOTAL_STEPS, progressionTutoriel, tutorielEtapeDebloquee, tutorielPermet, tutorielHint, tutorielPanneauNormal } from './tutorial.js?v=109';
 // Deck editor UI (recovery 29/07 [23:30]) : couche DONNÉES pure — loadDecks/getActiveDeck/
 // setSlot sont utilisés par main.js (handlers) et render.js (lecture seule du deck actif
 // pour l'affichage). Aucune dépendance inverse.
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
   apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
-import { traduire } from './i18n.js?v=3';
+import { traduire } from './i18n.js?v=5';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -554,14 +554,12 @@ function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '
   sub = traduire(sub, state && state.language);
   const button = enregistrerBouton(state, x, y, w, h, action, enabled, true);
   const motion = motionBouton(state, button);
-  // Sur téléphone, les boutons adoptent une hiérarchie plus douce : rayon plus
-  // généreux, ombre courte et déplacement réduit pour éviter l'effet « pavés ».
-  // Les hitboxes restent exactement celles enregistrées ci-dessus.
-  const mobile = !!(state && state.ui && (state.ui.mobileGameplay || state.ui.mobileLayout));
-  const r = mobile ? 12 : 10;
-  const lift = motion.hover * (mobile ? 3 : 5);
-  const press = motion.press * (mobile ? 1 : 2);
-  const appear = (1 - motion.appear) * (mobile ? 2 : 3);
+  // La direction artistique reste identique sur ordinateur et téléphone.
+  // Seules les dimensions des hitboxes sont adaptées au tactile par les appelants.
+  const r = 10;
+  const lift = motion.hover * 5;
+  const press = motion.press * 2;
+  const appear = (1 - motion.appear) * 3;
   // Position stable au repos : le bouton ne bouge qu'au survol ou à l'appui.
   const visualY = y + appear - lift + press;
   const visualColor = enabled ? eclaircir(color, motion.hover * 0.08) : disabledColor;
@@ -570,49 +568,25 @@ function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '
   // légèrement au survol pour donner une profondeur lisible sans déplacer le layout.
   if (enabled) {
     ctx.fillStyle = ombreBouton(color);
-    if (mobile) {
-      ctx.shadowColor = UI_THEME.shadow;
-      ctx.shadowBlur = 5;
-      ctx.shadowOffsetY = 2;
-    }
-    roundRect(ctx, x, visualY + (mobile ? 3 : 4) - motion.press * (mobile ? 2 : 3), w, h, r); ctx.fill();
-    if (mobile) ctx.shadowBlur = 0;
+    roundRect(ctx, x, visualY + 4 - motion.press * 3, w, h, r); ctx.fill();
   }
   ctx.globalAlpha = 0.92 + motion.appear * 0.08;
-  if (mobile && enabled) {
-    const gradient = ctx.createLinearGradient(0, visualY, 0, visualY + h);
-    gradient.addColorStop(0, eclaircir(visualColor, 0.07));
-    gradient.addColorStop(0.48, visualColor);
-    gradient.addColorStop(1, darken(visualColor, 0.06));
-    ctx.fillStyle = gradient;
-  } else {
-    ctx.fillStyle = visualColor;
-  }
+  ctx.fillStyle = visualColor;
   roundRect(ctx, x, visualY, w, h, r); ctx.fill();
-  // Une barre d'accent latérale donne un repère visuel sans surcharger le bouton.
-  if (mobile && enabled && w >= 100) {
-    const accent = color === UI_THEME.amber ? UI_THEME.amberLight
-      : color === UI_THEME.danger ? UI_THEME.danger
-        : color === UI_THEME.primary ? UI_THEME.primary
-          : UI_THEME.secondaryLight;
-    ctx.fillStyle = accent;
-    roundRect(ctx, x, visualY, 5, h, 2.5); ctx.fill();
-  }
-  // Le mobile utilise un contour fin et contrasté ; le desktop conserve son
-  // contour historique plus marqué.
-  ctx.lineWidth = mobile ? 1.5 : 2.5;
+  // Même contour et même présence visuelle que sur ordinateur.
+  ctx.lineWidth = 2.5;
   ctx.strokeStyle = enabled ? outlineColor : disabledOutlineColor;
   roundRect(ctx, x, visualY, w, h, r); ctx.stroke();
-  // Libellé principal : Archivo Black en CAPITALES (DA §3).
+  // Même police, taille et alignement que sur ordinateur.
   ctx.fillStyle = enabled ? textColor : disabledTextColor;
-  ctx.font = `${mobile ? 12 : 13}px ${F_DISPLAY}`;
-  ctx.textAlign = mobile && w >= 100 ? 'left' : 'center'; ctx.textBaseline = 'middle';
-  const textX = mobile && w >= 100 ? x + 17 : x + w / 2;
+  ctx.font = `13px ${F_DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const textX = x + w / 2;
   ctx.fillText(label.toUpperCase(), textX, visualY + h / 2 - (sub ? 7 : 0));
   if (sub) {
-    // Sous-titre descriptif : Nunito Sans, casse normale (texte plus long).
-    ctx.font = `${mobile ? 10 : 11}px ${F_TEXTE}`; ctx.fillStyle = enabled ? subColor : UI_THEME.disabledText;
-    ctx.textAlign = mobile && w >= 100 ? 'left' : 'center';
+    // Sous-titre descriptif : même taille que sur ordinateur, Nunito Sans.
+    ctx.font = `11px ${F_TEXTE}`; ctx.fillStyle = enabled ? subColor : UI_THEME.disabledText;
+    ctx.textAlign = 'center';
     ctx.fillText(sub, textX, visualY + h / 2 + 9);
   }
   ctx.restore();
@@ -1727,7 +1701,18 @@ function dessinePanneauMobile(ctx, state, now) {
   // de la marge réservée au plateau quand le catalogue est ouvert.
   const w = CANVAS_W - 32;
   const x = (CANVAS_W - w) / 2;
+  // Le tutoriel conserve ses consignes et sa progression avant les contrôles de
+  // pièce. Les étapes avec une pièce attendue réutilisent ensuite le panneau
+  // normal via tutorielPanneauNormal(), comme sur ordinateur.
+  if (state.mode === 'tutorial' && state.tutorialStep != null
+      && !state.panelPiece && !tutorielPanneauNormal(state)) {
+    dessineTutorielHUD(ctx, state, x, w, now);
+    return;
+  }
   let y = dessineSuiviJoueursMobile(ctx, state, x, OY, w, now);
+  if (state.mode === 'tutorial' && state.tutorialStep != null) {
+    y = dessineProgressionTutorielMobile(ctx, state, x, y + 8, w) + 12;
+  }
   const sel = state.selected;
   const selectedUsable = sel && sel.owner === state.turn && state.phase !== 'gameover';
   if (selectedUsable) {
@@ -1802,8 +1787,7 @@ function dessinePanneauMobile(ctx, state, now) {
       });
       y += 50;
     }
-  } else {
-    ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
+  } else {      ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `10px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText(traduire('Sélectionnez une pièce pour voir ses actions', state.language), x, y + 4);
     y += 26;
@@ -2773,13 +2757,12 @@ function dessineBandeauCompte(ctx, state) {
         }
         if (current) { ctx.fillText(current, dx + pad, y); y += 28; }
       }
-      ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
+      ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `11px ${F_TEXTE}`;
       ctx.fillText(traduire('Fermer avec Échap', language), dx + pad, y + 12);
     }
 
     // Pied du drawer : mention de version discrète.
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';      ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `10px ${F_TEXTE}`;
     ctx.fillText(traduire('Roychec · bêta', language), dx + pw / 2, py + ph - 16);
   } else {
     if (state.ui) state.ui.hamburgerPanel = null;
@@ -4085,10 +4068,21 @@ for (const [alias, token] of Object.entries({
 })) Object.defineProperty(DECK_UI, alias, { enumerable: true, get: () => UI_THEME[token] });
 
 function dessineDecks(ctx, state) {
+  const mobileDeck = !!(state.ui && state.ui.mobileLayout && CANVAS_W < 700);
+  const layoutCardW = mobileDeck ? CANVAS_W - 36 : DECK_CARD_W;
+  const layoutCardH = mobileDeck ? 112 : DECK_CARD_H;
+  const layoutPieceBoxW = mobileDeck ? 92 : DECK_PIECE_BOX_W;
+  const layoutInnerGap = mobileDeck ? 10 : DECK_PIECE_INNER_GAP;
+  const layoutPillW = layoutCardW - layoutPieceBoxW - layoutInnerGap;
+  const layoutRowStep = mobileDeck ? 130 : 120;
+  const deckPanelH = mobileDeck ? CANVAS_H - 48 : 744;
+  const deckReturnY = mobileDeck ? CANVAS_H - 68 : DECK_RET_Y;
+
   // Fond graphite + panneau flottant : adaptation Decks de la direction hybride.
   ctx.fillStyle = DECK_UI.bg;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  carte(ctx, 36, 24, CANVAS_W - 72, 744, 22, DECK_UI.panel,
+  carte(ctx, mobileDeck ? 12 : 36, 24,
+    mobileDeck ? CANVAS_W - 24 : CANVAS_W - 72, deckPanelH, 22, DECK_UI.panel,
     { shadow: false, stroke: DECK_UI.border });
   ctx.fillStyle = DECK_UI.ink;
   ctx.font = `24px ${F_DISPLAY}`;
@@ -4111,36 +4105,44 @@ function dessineDecks(ctx, state) {
   // decks ou les slots vides à cliquer-pour-créer). Le nom seul reste consultable via
   // l'info « active deck » exposée plus bas si besoin (placeholder pour extension).
 
+  const deckTabW = mobileDeck ? 50 : DECK_TAB_W;
+  const deckTabGap = mobileDeck ? 8 : DECK_TAB_GAP;
+  const deckTabsTotal = DECK_TAB_COUNT * deckTabW + (DECK_TAB_COUNT - 1) * deckTabGap;
+  const deckTabsX0 = mobileDeck ? (CANVAS_W - deckTabsTotal) / 2 : DECK_TABS_X0;
   for (let i = 0; i < DECK_TAB_COUNT; i++) {
-    const tabX = DECK_TABS_X0 + i * (DECK_TAB_W + DECK_TAB_GAP);
+    const tabX = deckTabsX0 + i * (deckTabW + deckTabGap);
     const hasDeck = i < ids.length;
     const isActive = hasDeck && ids[i] === root.active;
     const tabFill = isActive ? DECK_UI.green : (hasDeck ? DECK_UI.field : DECK_UI.panel);
     ctx.fillStyle = isActive ? DECK_UI.greenD : UI_THEME.shadow;
-    roundRect(ctx, tabX, DECK_TABS_Y + 3, DECK_TAB_W, DECK_TAB_H, 9); ctx.fill();
+    roundRect(ctx, tabX, DECK_TABS_Y + 3, deckTabW, DECK_TAB_H, 9); ctx.fill();
     ctx.fillStyle = tabFill;
-    roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 9); ctx.fill();
+    roundRect(ctx, tabX, DECK_TABS_Y, deckTabW, DECK_TAB_H, 9); ctx.fill();
     ctx.strokeStyle = isActive ? DECK_UI.green : (hasDeck ? DECK_UI.border : UI_THEME.field);
     ctx.lineWidth = isActive ? 3 : 2;
-    roundRect(ctx, tabX, DECK_TABS_Y, DECK_TAB_W, DECK_TAB_H, 9); ctx.stroke();
+    roundRect(ctx, tabX, DECK_TABS_Y, deckTabW, DECK_TAB_H, 9); ctx.stroke();
     ctx.fillStyle = isActive ? DECK_UI.ink : (hasDeck ? DECK_UI.ink : DECK_UI.muted);
     ctx.font = `24px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(String(i + 1), tabX + DECK_TAB_W / 2, DECK_TABS_Y + DECK_TAB_H / 2);
+    ctx.fillText(String(i + 1), tabX + deckTabW / 2, DECK_TABS_Y + DECK_TAB_H / 2);
     state.ui.buttons.push({
-      x: tabX, y: DECK_TABS_Y, w: DECK_TAB_W, h: DECK_TAB_H,
+      x: tabX, y: DECK_TABS_Y, w: deckTabW, h: DECK_TAB_H,
       action: { kind: 'switchDeck', value: i }, enabled: true, radius: 9,
     });
   }
 
-  for (let rowIdx = 0; rowIdx < DECK_ROWS.length; rowIdx++) {
-    const [typeL, typeR] = DECK_ROWS[rowIdx];
-    const cardY = DECK_ROW_Y[rowIdx];
-    const cardXL = DECK_X_MARGIN;
+  const mobileDeckTypes = mobileDeck ? DECK_ROWS.flat() : null;
+  const deckRowCount = mobileDeck ? mobileDeckTypes.length : DECK_ROWS.length;
+  for (let rowIdx = 0; rowIdx < deckRowCount; rowIdx++) {
+    const typeL = mobileDeck ? mobileDeckTypes[rowIdx] : DECK_ROWS[rowIdx][0];
+    const typeR = mobileDeck ? null : DECK_ROWS[rowIdx][1];
+    const cardY = mobileDeck ? 180 + rowIdx * layoutRowStep : DECK_ROW_Y[rowIdx];
+    const cardXL = mobileDeck ? 18 : DECK_X_MARGIN;
     const cardXR = DECK_X_MARGIN + DECK_CARD_W + DECK_CARD_GAP_X;
-    for (let col = 0; col < 2; col++) {
-      const type = col === 0 ? typeL : typeR;
-      const cardX = col === 0 ? cardXL : cardXR;
+    const columnCount = mobileDeck ? 1 : 2;
+    for (let col = 0; col < columnCount; col++) {
+      const type = mobileDeck ? typeL : (col === 0 ? typeL : typeR);
+      const cardX = mobileDeck ? cardXL : (col === 0 ? cardXL : cardXR);
       const slots = (activeDeck && activeDeck.slots && activeDeck.slots[type]) || {};
 
       const pbY = cardY;
@@ -4148,29 +4150,29 @@ function dessineDecks(ctx, state) {
       // pièce ET ses 3 améliorations — effet cellule de tableau. Fond + ombre
       // + bordure uniques, puis colonnes pièce | améliorations séparées.
       ctx.fillStyle = UI_THEME.shadow;
-      roundRect(ctx, cardX, cardY + 4, DECK_CARD_W, DECK_CARD_H, 12); ctx.fill();
+      roundRect(ctx, cardX, cardY + 4, layoutCardW, layoutCardH, 12); ctx.fill();
       ctx.fillStyle = DECK_UI.card;
-      roundRect(ctx, cardX, cardY, DECK_CARD_W, DECK_CARD_H, 12); ctx.fill();
+      roundRect(ctx, cardX, cardY, layoutCardW, layoutCardH, 12); ctx.fill();
       ctx.strokeStyle = DECK_UI.border; ctx.lineWidth = 2.5;
-      roundRect(ctx, cardX, cardY, DECK_CARD_W, DECK_CARD_H, 12); ctx.stroke();
+      roundRect(ctx, cardX, cardY, layoutCardW, layoutCardH, 12); ctx.stroke();
       // Encadré de pièce : inséré de 4 px pour que la bordure de l'encadré
       // extérieur reste lisible (double-bordure évitée). Le cadre pièce n'a pas
       // de hitbox (seules les pills D/A/S sont cliquables) → inset sûr.
       const pbInset = 4;
       const pbX = cardX + pbInset;
-      const pbW = DECK_PIECE_BOX_W - pbInset * 2;
+      const pbW = layoutPieceBoxW - pbInset * 2;
       ctx.fillStyle = DECK_UI.field;
-      roundRect(ctx, pbX, pbY, pbW, DECK_CARD_H, 10); ctx.fill();
+      roundRect(ctx, pbX, pbY, pbW, layoutCardH, 10); ctx.fill();
       ctx.strokeStyle = DECK_UI.border; ctx.lineWidth = 2.5;
-      roundRect(ctx, pbX, pbY, pbW, DECK_CARD_H, 10); ctx.stroke();
+      roundRect(ctx, pbX, pbY, pbW, layoutCardH, 10); ctx.stroke();
       ctx.strokeStyle = 'rgba(245,241,232,0.20)'; ctx.lineWidth = 1.5;
       roundRect(ctx, pbX + 5, pbY + 5,
-        pbW - 10, DECK_CARD_H - 10, 7); ctx.stroke();
+        pbW - 10, layoutCardH - 10, 7); ctx.stroke();
       // Séparateur vertical de colonne (pièce | améliorations) — effet tableau.
       ctx.strokeStyle = DECK_UI.border; ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(cardX + DECK_PIECE_BOX_W + DECK_PIECE_INNER_GAP / 2, cardY + 10);
-      ctx.lineTo(cardX + DECK_PIECE_BOX_W + DECK_PIECE_INNER_GAP / 2, cardY + DECK_CARD_H - 10);
+      ctx.moveTo(cardX + layoutPieceBoxW + layoutInnerGap / 2, cardY + 10);
+      ctx.lineTo(cardX + layoutPieceBoxW + layoutInnerGap / 2, cardY + layoutCardH - 10);
       ctx.stroke();
       // Sprite de la pièce (camp 0 = bleu) centré dans le piece_box. Fallback lettre
       // FR si le sprite n'est pas encore chargé (canplay race 1re frame). Le deck est
@@ -4179,8 +4181,8 @@ function dessineDecks(ctx, state) {
       // pour respirer face à l'encadré épais.
       const pieceImg = spritePret(0, type);
       const pieceCx = pbX + pbW / 2;
-      const pieceCy = pbY + DECK_CARD_H / 2;
-      const targetH = DECK_CARD_H - 28; // 72 px sur card 100, marge intérieure 14 px
+      const pieceCy = pbY + layoutCardH / 2;
+      const targetH = layoutCardH - 28; // 72 px sur card 100, marge intérieure 14 px
       if (pieceImg) {
         const ratio = pieceImg.naturalWidth / pieceImg.naturalHeight;
         const w = targetH * ratio;
@@ -4193,8 +4195,8 @@ function dessineDecks(ctx, state) {
         ctx.fillText(DECK_LETTRE_FR[type] || type, pieceCx, pieceCy + 1);
       }
 
-      const pillX = cardX + DECK_PIECE_BOX_W + DECK_PIECE_INNER_GAP + DECK_PILL_X_OFFSET;
-      const pillTopPad = (DECK_CARD_H -
+      const pillX = cardX + layoutPieceBoxW + layoutInnerGap + DECK_PILL_X_OFFSET;
+      const pillTopPad = (layoutCardH -
         (DECK_PILL_H * DECK_CATS.length + DECK_PILL_INNER_GAP * (DECK_CATS.length - 1))) / 2;
       for (let s = 0; s < DECK_CATS.length; s++) {
         const cat = DECK_CATS[s];
@@ -4204,9 +4206,9 @@ function dessineDecks(ctx, state) {
         const pillFill = COULEUR_CAT[cat];
         const pillStroke = darken(COULEUR_CAT[cat], 0.28);
         ctx.fillStyle = pillFill;
-        roundRect(ctx, pillX, pillY, DECK_PILL_W, DECK_PILL_H, DECK_PILL_RADIUS); ctx.fill();
+        roundRect(ctx, pillX, pillY, layoutPillW, DECK_PILL_H, DECK_PILL_RADIUS); ctx.fill();
         ctx.strokeStyle = pillStroke; ctx.lineWidth = 2;
-        roundRect(ctx, pillX, pillY, DECK_PILL_W, DECK_PILL_H, DECK_PILL_RADIUS); ctx.stroke();
+        roundRect(ctx, pillX, pillY, layoutPillW, DECK_PILL_H, DECK_PILL_RADIUS); ctx.stroke();
         const upgId = slots[cat];
         const upg = upgId && UPGRADES[upgId];
         const label = upg ? traduire(upg.nom, state.language).toUpperCase() : '—';
@@ -4214,22 +4216,23 @@ function dessineDecks(ctx, state) {
         ctx.fillStyle = UI_THEME.buttonText;
         ctx.font = `600 13px ${F_DISPLAY}`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(label, pillX + DECK_PILL_W / 2, pillY + DECK_PILL_H / 2 + 1);
+        ctx.fillText(label, pillX + layoutPillW / 2, pillY + DECK_PILL_H / 2 + 1);
         state.ui.buttons.push({
-          x: pillX, y: pillY, w: DECK_PILL_W, h: DECK_PILL_H,
+          x: pillX, y: pillY, w: layoutPillW, h: DECK_PILL_H,
           action: { kind: 'editSlot', type, cat }, enabled: true, radius: DECK_PILL_RADIUS,
         });
       }
     }
   }
 
-  bouton(state, ctx, DECK_RET_X, DECK_RET_Y, DECK_RET_W, DECK_RET_H,
+  bouton(state, ctx, mobileDeck ? (CANVAS_W - DECK_RET_W) / 2 : DECK_RET_X, deckReturnY, DECK_RET_W, DECK_RET_H,
     'Retour au menu', { kind: 'fermerDecks' },
     { color: DECK_UI.green, textColor: DECK_UI.ink, outlineColor: DECK_UI.greenD });
 }
 
 function dessineDeckPicker(ctx, state) {
   if (!state._deckEditor) return;
+  const mobilePicker = !!(state.ui && state.ui.mobileLayout && CANVAS_W < 700);
   const { type, cat } = state._deckEditor;
   if (!state.decksRoot) state.decksRoot = sanitizeRoot(loadDecks());
   const root = state.decksRoot;
@@ -4240,7 +4243,11 @@ function dessineDeckPicker(ctx, state) {
   // Cette surface opaque focalise le choix sur les améliorations compatibles.
   ctx.fillStyle = DECK_UI.bg;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  carte(ctx, 130, 38, 740, 700, 22, DECK_UI.panel,
+  const pickerPanelX = mobilePicker ? 12 : 130;
+  const pickerPanelY = mobilePicker ? 24 : 38;
+  const pickerPanelW = mobilePicker ? CANVAS_W - 24 : 740;
+  const pickerPanelH = mobilePicker ? CANVAS_H - 48 : 700;
+  carte(ctx, pickerPanelX, pickerPanelY, pickerPanelW, pickerPanelH, 22, DECK_UI.panel,
     { shadow: false, stroke: DECK_UI.border });
 
   // Titre.
@@ -4266,9 +4273,11 @@ function dessineDeckPicker(ctx, state) {
   const eligible = Object.values(UPGRADES)
     .filter((u) => u.piece === type && u.cat === cat)
     .sort((a, b) => a.cout - b.cout);
-  const cardW = 500, cardH = 100, cardGap = 12;
+  const cardW = mobilePicker ? CANVAS_W - 48 : 500;
+  const cardH = mobilePicker ? 116 : 100;
+  const cardGap = mobilePicker ? 12 : 12;
   const startX = (CANVAS_W - cardW) / 2;
-  let startY = 130;
+  let startY = mobilePicker ? 140 : 130;
   for (let i = 0; i < eligible.length; i++) {
     const u = eligible[i];
     const cx = startX;
@@ -4308,12 +4317,14 @@ function dessineDeckPicker(ctx, state) {
   const footerY = eligible.length > 0
     ? startY + eligible.length * (cardH + cardGap) + 12
     : startY + 40;
-  bouton(state, ctx, startX, footerY, 240, 38, '🗑️  Vider le slot',
+  const footerX = mobilePicker ? (CANVAS_W - 220) / 2 : startX;
+  bouton(state, ctx, footerX, footerY, 220, 38, '🗑️  Vider le slot',
     { kind: 'pickUpgrade', id: null },
     { enabled: currentSlot !== null, color: DECK_UI.field, textColor: DECK_UI.ink,
       outlineColor: DECK_UI.border, disabledColor: DECK_UI.panel,
       disabledTextColor: DECK_UI.muted, disabledOutlineColor: DECK_UI.border });
-  bouton(state, ctx, startX + cardW - 200, footerY, 200, 38, '← Retour',
+  bouton(state, ctx, mobilePicker ? footerX : startX + cardW - 200,
+    mobilePicker ? footerY + 48 : footerY, 200, 38, '← Retour',
     { kind: 'cancelPick' },
     { color: DECK_UI.green, textColor: DECK_UI.ink, outlineColor: DECK_UI.greenD });
 }
@@ -4334,54 +4345,223 @@ function learnWrap(ctx, text, x, y, maxWidth, lineHeight, maxLines = 4) {
   return lines.length;
 }
 
+// Direction artistique des parcours inspirée de `exemple.png` : forêt sombre,
+// aplats olive/terre et accents dorés. Les formes sont procédurales pour rester
+// nettes sur Canvas, légères et cohérentes avec les états du parcours.
+const PARCOURS_DA = {
+  forest: '#243A2A',
+  forestDeep: '#18291E',
+  leafDark: '#2D4B31',
+  leaf: '#46673B',
+  olive: '#71864A',
+  oliveLight: '#A6B86E',
+  earth: '#8A6543',
+  earthDark: '#573F2D',
+  gold: '#E6C981',
+  goldDark: '#927047',
+  cream: '#F4E7BE',
+  creamMuted: '#C9CDA8',
+  card: '#304A32',
+  cardLight: '#3D5B3B',
+  ink: '#17231A',
+  locked: '#415641',
+};
+
+function dessineFondParcours(ctx) {
+  ctx.fillStyle = PARCOURS_DA.forestDeep;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  // Texture plate de feuillage : motifs déterministes, sans image ni animation.
+  ctx.save();
+  ctx.globalAlpha = 0.42;
+  for (let i = 0; i < 18; i++) {
+    const x = (i * 83 + 31) % (CANVAS_W + 90) - 45;
+    const y = 104 + ((i * 137) % Math.max(120, CANVAS_H - 104));
+    ctx.fillStyle = i % 3 === 0 ? PARCOURS_DA.leaf : PARCOURS_DA.leafDark;
+    ctx.beginPath();
+    ctx.arc(x, y, 24 + (i % 4) * 9, 0, Math.PI * 2);
+    ctx.arc(x + 22, y + 13, 18 + (i % 3) * 7, 0, Math.PI * 2);
+    ctx.arc(x - 20, y + 18, 16 + (i % 2) * 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 0.18;
+  for (let i = 0; i < 11; i++) {
+    const x = (i * 127 + 12) % (CANVAS_W + 80) - 40;
+    ctx.fillStyle = PARCOURS_DA.olive;
+    ctx.fillRect(x, 104, 7 + (i % 3) * 3, CANVAS_H - 104);
+  }
+  ctx.restore();
+  // Voile central discret : les nœuds restent lisibles devant la forêt.
+  ctx.save();
+  ctx.globalAlpha = 0.22;
+  ctx.fillStyle = PARCOURS_DA.forest;
+  roundRect(ctx, 12, 104, CANVAS_W - 24, Math.max(80, CANVAS_H - 116), 24);
+  ctx.fill();
+  ctx.restore();
+}
+
+function dessineCheminParcours(ctx, positions) {
+  if (positions.length < 2) return;
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // Vague organique : chaque segment devient une courbe de Bézier dont les
+  // points de contrôle s'écartent perpendiculairement du segment, ce qui
+  // dessine un sentier qui serpente entre les niveaux comme sur la référence.
+  const controlPoints = [];
+  for (let i = 0; i < positions.length - 1; i++) {
+    const a = positions[i], b = positions[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    const amp = Math.min(34, Math.max(14, len * 0.22));
+    const nx = -dy / len, ny = dx / len;
+    const dir = (i % 2 === 0 ? 1 : -1);
+    controlPoints.push({
+      c1: { x: a.x + dx / 3 + nx * amp * dir, y: a.y + dy / 3 + ny * amp * dir },
+      c2: { x: a.x + (2 * dx) / 3 + nx * amp * dir, y: a.y + (2 * dy) / 3 + ny * amp * dir },
+    });
+  }
+  const trace = (width, color, dash) => {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    if (dash) ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(positions[0].x, positions[0].y);
+    for (let i = 0; i < controlPoints.length; i++) {
+      const p = controlPoints[i];
+      ctx.bezierCurveTo(p.c1.x, p.c1.y, p.c2.x, p.c2.y, positions[i + 1].x, positions[i + 1].y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  };
+  trace(26, PARCOURS_DA.earthDark);
+  trace(13, PARCOURS_DA.olive);
+  trace(3, PARCOURS_DA.oliveLight, [4, 14]);
+  ctx.restore();
+}
+
+// Niveau en forme de tuile carrée arrondie, comme les cases du plateau :
+// ombre, halo actif, fond plat, contour épais crème et numéro centré.
+function dessineTuileNiveau(ctx, cxNode, cyNode, size, radius, done, active, text, fill, stroke, numero) {
+  ctx.save();
+  const half = size / 2;
+  const x = cxNode - half, y = cyNode - half;
+  // Ombre plate sous la tuile (relief pierre posée sur le sentier).
+  ctx.fillStyle = PARCOURS_DA.ink;
+  roundRect(ctx, x + 2, y + 4, size, size, radius); ctx.fill();
+  if (active) {
+    ctx.globalAlpha = 0.30;
+    ctx.fillStyle = PARCOURS_DA.gold;
+    roundRect(ctx, x - 7, y - 7, size + 14, size + 14, radius + 6); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = fill;
+  roundRect(ctx, x, y, size, size, radius); ctx.fill();
+  ctx.lineWidth = done || active ? 3 : 2;
+  ctx.strokeStyle = stroke;
+  roundRect(ctx, x, y, size, size, radius); ctx.stroke();
+  // Liseré intérieur discret façon pierre taillée.
+  ctx.globalAlpha = 0.25;
+  ctx.strokeStyle = PARCOURS_DA.cream;
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, x + 5, y + 5, size - 10, size - 10, radius - 3); ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = text;
+  ctx.font = `700 20px ${F_DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(numero), cxNode, cyNode + 1);
+  ctx.restore();
+}
+
+function couleursNoeudParcours(done, active) {
+  if (done) return { fill: PARCOURS_DA.oliveLight, stroke: PARCOURS_DA.cream, text: PARCOURS_DA.ink };
+  if (active) return { fill: PARCOURS_DA.gold, stroke: PARCOURS_DA.cream, text: PARCOURS_DA.ink };
+  return { fill: PARCOURS_DA.locked, stroke: PARCOURS_DA.leaf, text: PARCOURS_DA.creamMuted };
+}
+
+function dessineTutorielHub(ctx, state) {
+  const mobile = !!(state.ui && state.ui.mobileLayout);
+  const cx = CANVAS_W / 2;
+  const progress = progressionTutoriel(state);
+  const completed = new Set(progress.completed || []);
+  const nodeW = 60, nodeH = 60, nodeRadius = 14;
+  const positions = STEPS.map((_, index) => mobile
+    ? { x: cx, y: 150 + index * 108 }
+    : { x: 270 + (index % 3) * 220, y: 180 + Math.floor(index / 3) * 150 });
+  const footerY = mobile ? 150 + STEPS.length * 108 + 64 : 680;
+
+  dessineFondParcours(ctx);
+
+  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `34px ${F_DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(traduire('TUTORIEL', state.language), cx, 55);
+  ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `13px ${F_TEXTE}`;
+  ctx.fillText(traduire('Maîtrise les règles étape par étape.', state.language), cx, 80);
+
+  dessineCheminParcours(ctx, positions);
+
+  STEPS.forEach((step, index) => {
+    const { x: cxNode, y: cyNode } = positions[index];
+    const unlocked = tutorielEtapeDebloquee(state, index);
+    const done = completed.has(index);
+    const active = unlocked && !done;
+    const nodeColors = couleursNoeudParcours(done, active);
+    const fill = nodeColors.fill;
+    const stroke = nodeColors.stroke;
+    const text = nodeColors.text;
+    ctx.save();
+    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1);
+    if (mobile) {
+      const labelX = cxNode + 46;
+      ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `13px ${F_DISPLAY}`; ctx.textAlign = 'left';
+      const title = traduire(step.title, state.language).toUpperCase();
+      const titleLines = wrapTextLines(ctx, title, labelX, cyNode - 10, Math.max(110, CANVAS_W - labelX - 24), 14);
+      ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `11px ${F_TEXTE}`;
+      ctx.fillText(traduire(done ? '✓ terminé' : active ? 'à faire' : 'verrouillé', state.language), labelX, cyNode + (titleLines > 1 ? 18 : 14));
+    }
+    ctx.restore();
+    motionMenuBouton(state, cxNode - nodeW / 2, cyNode - nodeH / 2, nodeW, nodeH,
+      { kind: 'tutorialStart', index }, unlocked, 12, 'rect');
+  });
+
+  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `700 12px ${F_TEXTE}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(traduire(`${completed.size}/${TOTAL_STEPS} étapes maîtrisées`, state.language), cx, footerY);
+  bouton(state, ctx, mobile ? cx - 110 : 32, footerY + 32, 220, 38, '← Menu principal',
+    { kind: 'retourMenu' }, { color: PARCOURS_DA.card, textColor: PARCOURS_DA.cream, outlineColor: PARCOURS_DA.oliveLight });
+}
+
 function dessineLearnHub(ctx, state) {
+  const mobile = !!(state.ui && state.ui.mobileLayout);
   const cx = CANVAS_W / 2;
   const completed = new Set(state.learnProgress?.completed || []);
-  // Le parcours s'adapte au nombre de cartes : trois rangées en lacet
-  // permettent d'afficher l'intégralité du catalogue sans sortir du canvas.
-  const columns = 9;
+  // Le téléphone reprend exactement les nœuds circulaires du desktop.
+  // Seul le pas vertical est resserré pour rester agréable à faire défiler.
+  const mobileNodeStep = 84;
+  // Le parcours s'adapte au nombre de niveaux sans modifier le catalogue.
+  const columns = mobile ? 1 : 9;
   const positions = LEARN_GAMES.map((_, index) => {
     const row = Math.floor(index / columns);
     const col = index % columns;
     const leftToRight = row % 2 === 0;
-    return {
-      x: leftToRight ? 60 + col * 110 : 940 - col * 110,
-      y: 180 + row * 145,
-    };
+    return mobile
+      ? { x: cx, y: 150 + row * mobileNodeStep }
+      : { x: leftToRight ? 60 + col * 110 : 940 - col * 110, y: 180 + row * 145 };
   });
-  const nodeW = 64, nodeH = 64;
-  const nodeRadius = 28;
+  const nodeW = 60, nodeH = 60;
+  const nodeRadius = 14;
 
-  // Fond de carte : une grille de tuiles discrète rappelle le plateau sans
-  // détourner l'attention du chemin pédagogique.
-  ctx.fillStyle = UI_THEME.background; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  ctx.save(); ctx.globalAlpha = 0.16;
-  for (let row = 0; row < 8; row++) {
-    for (let col = 0; col < 16; col++) {
-      ctx.fillStyle = (row + col) % 2 ? UI_THEME.wineDark : UI_THEME.card;
-      ctx.fillRect(col * 67, 112 + row * 67, 67, 67);
-    }
-  }
-  ctx.restore();
+  // Fond forêt commun aux trois parcours : la référence reste une ambiance,
+  // jamais une texture qui pixellise sur les grands écrans.
+  dessineFondParcours(ctx);
 
-  ctx.fillStyle = UI_THEME.text; ctx.font = `34px ${F_DISPLAY}`;
+  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `34px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillText(traduire('APPRENDRE', state.language), cx, 55);
-  ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `13px ${F_TEXTE}`;
   ctx.fillText(traduire('Avance case après case pour maîtriser les améliorations.', state.language), cx, 80);
 
-  // Chemin doré en lacet : la lecture va de gauche à droite, puis revient
-  // sur la ligne inférieure vers la gauche comme sur un vrai parcours.
-  ctx.save();
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.strokeStyle = UI_THEME.amberDark; ctx.lineWidth = 18;
-  ctx.beginPath();
-  ctx.moveTo(positions[0].x, positions[0].y);
-  for (let i = 1; i < positions.length; i++) ctx.lineTo(positions[i].x, positions[i].y);
-  ctx.stroke();
-  ctx.strokeStyle = UI_THEME.amberLight; ctx.lineWidth = 4;
-  ctx.setLineDash([10, 10]);
-  ctx.stroke(); ctx.restore();
+  // Chemin organique forêt : même langage que le Tutoriel et les Puzzles.
+  dessineCheminParcours(ctx, positions);
 
   LEARN_GAMES.forEach((game, index) => {
     const { x: cxNode, y: cyNode } = positions[index];
@@ -4392,80 +4572,56 @@ function dessineLearnHub(ctx, state) {
 
     // Les nœuds sont volontairement réduits à un rond numéroté : la couleur
     // décrit l'état du parcours, sans répéter le titre de la situation.
-    const fill = done ? UI_THEME.primary : active ? UI_THEME.amber : UI_THEME.disabled;
-    const stroke = done ? UI_THEME.primaryDark : active ? UI_THEME.amberLight : UI_THEME.disabledBorder;
-    const text = done || active ? UI_THEME.buttonText : UI_THEME.disabledText;
-    ctx.save();
-    if (active) {
-      ctx.globalAlpha = 0.22;
-      ctx.fillStyle = UI_THEME.amberLight;
-      ctx.beginPath(); ctx.arc(cxNode, cyNode, nodeRadius + 7, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-    ctx.fillStyle = fill;
-    ctx.beginPath(); ctx.arc(cxNode, cyNode, nodeRadius, 0, Math.PI * 2); ctx.fill();
-    ctx.lineWidth = done || active ? 3 : 2;
-    ctx.strokeStyle = stroke; ctx.stroke();
-    ctx.fillStyle = text;
-    ctx.font = `700 20px ${F_DISPLAY}`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(String(index + 1), cxNode, cyNode + 1);
-    ctx.restore();
+    const nodeColors = couleursNoeudParcours(done, active);
+    const fill = nodeColors.fill;
+    const stroke = nodeColors.stroke;
+    const text = nodeColors.text;
+    // Même tuile arrondie que sur desktop : la forme des niveaux est commune.
+    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1);
 
-    // La hitbox suit le diamètre du rond ; les nœuds verrouillés restent inertes.
+    // La hitbox recouvre toute la tuile visible.
     motionMenuBouton(state, x, y, nodeW, nodeH,
-      { kind: 'learnStart', index }, unlocked, nodeRadius, 'circle');
+      { kind: 'learnStart', index }, unlocked, 12, 'rect');
   });
 
   const doneCount = completed.size;
-  ctx.fillStyle = UI_THEME.text; ctx.font = `700 12px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(traduire(`${doneCount}/${TOTAL_LEARN_GAMES} cases maîtrisées`, state.language), cx, 590);
-  bouton(state, ctx, 32, 635, 220, 34, '✦ Puzzles tactiques', { kind: 'openPuzzles' },
-    { color: UI_THEME.amber, textColor: UI_THEME.buttonText, outlineColor: UI_THEME.amberLight });
-  bouton(state, ctx, cx - 110, 635, 220, 34, '← Menu principal', { kind: 'retourMenu' },
-    { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
+  const footerY = mobile ? 150 + LEARN_GAMES.length * mobileNodeStep + 64 : 590;
+  ctx.fillText(traduire(`${doneCount}/${TOTAL_LEARN_GAMES} cases maîtrisées`, state.language), cx, footerY);
+  bouton(state, ctx, mobile ? cx - 110 : 32, mobile ? footerY + 32 : 635, 220, mobile ? 38 : 34, '✦ Puzzles tactiques', { kind: 'openPuzzles' },
+    { color: PARCOURS_DA.gold, textColor: PARCOURS_DA.ink, outlineColor: PARCOURS_DA.cream });
+  bouton(state, ctx, cx - 110, mobile ? footerY + 78 : 635, 220, mobile ? 38 : 34, '← Menu principal', { kind: 'retourMenu' },
+    { color: PARCOURS_DA.card, textColor: PARCOURS_DA.cream, outlineColor: PARCOURS_DA.oliveLight });
 }
 
 function dessinePuzzleHub(ctx, state) {
+  const mobile = !!(state.ui && state.ui.mobileLayout);
   const cx = CANVAS_W / 2;
   const completed = new Set(state.puzzleProgress?.completed || []);
   // Sept puzzles : le dernier nœud prolonge le zigzag sur la droite.
   // Parcours en escalier : on part en bas à gauche, puis on monte
   // progressivement vers la droite. Chaque puzzle rejoint directement le
   // précédent, sans saut visuel ni croisement du chemin.
-  const positions = [
-    { x: 150, y: 620 }, { x: 150, y: 470 },
-    { x: 350, y: 470 }, { x: 350, y: 320 },
-    { x: 550, y: 320 }, { x: 550, y: 170 },
-    { x: 780, y: 170 },
-  ];
-  const nodeW = 64, nodeH = 64, nodeRadius = 28;
+  const positions = mobile
+    ? PUZZLES.map((_, index) => ({ x: cx, y: 150 + index * 84 }))
+    : [
+      { x: 150, y: 620 }, { x: 150, y: 470 },
+      { x: 350, y: 470 }, { x: 350, y: 320 },
+      { x: 550, y: 320 }, { x: 550, y: 170 },
+      { x: 780, y: 170 },
+    ];
+  const nodeW = 60, nodeH = 60, nodeRadius = 14;
 
-  ctx.fillStyle = UI_THEME.background; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  ctx.save(); ctx.globalAlpha = 0.16;
-  for (let row = 0; row < 8; row++) {
-    for (let col = 0; col < 16; col++) {
-      ctx.fillStyle = (row + col) % 2 ? UI_THEME.wineDark : UI_THEME.card;
-      ctx.fillRect(col * 67, 112 + row * 67, 67, 67);
-    }
-  }
-  ctx.restore();
+  dessineFondParcours(ctx);
 
-  ctx.fillStyle = UI_THEME.text; ctx.font = `34px ${F_DISPLAY}`;
+  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `34px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillText(traduire('PUZZLES TACTIQUES', state.language), cx, 55);
-  ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `13px ${F_TEXTE}`;
   ctx.fillText(traduire('Trouve l’amélioration nécessaire pour résoudre chaque situation.', state.language), cx, 80);
 
-  ctx.save();
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.strokeStyle = UI_THEME.amberDark; ctx.lineWidth = 18;
-  ctx.beginPath(); ctx.moveTo(positions[0].x, positions[0].y);
-  for (let i = 1; i < positions.length; i++) ctx.lineTo(positions[i].x, positions[i].y);
-  ctx.stroke();
-  ctx.strokeStyle = UI_THEME.amberLight; ctx.lineWidth = 4; ctx.setLineDash([10, 10]);
-  ctx.stroke(); ctx.restore();
+  dessineCheminParcours(ctx, positions);
 
   PUZZLES.forEach((puzzle, index) => {
     const { x: cxNode, y: cyNode } = positions[index];
@@ -4473,32 +4629,28 @@ function dessinePuzzleHub(ctx, state) {
     const done = completed.has(puzzle.id);
     const unlocked = apprendrePuzzleEstDebloque(state, index);
     const active = unlocked && !done;
-    const fill = done ? UI_THEME.primary : active ? UI_THEME.amber : UI_THEME.disabled;
-    const stroke = done ? UI_THEME.primaryDark : active ? UI_THEME.amberLight : UI_THEME.disabledBorder;
-    const text = done || active ? UI_THEME.buttonText : UI_THEME.disabledText;
+    const nodeColors = couleursNoeudParcours(done, active);
+    const fill = nodeColors.fill;
+    const stroke = nodeColors.stroke;
+    const text = nodeColors.text;
     ctx.save();
-    if (active) {
-      ctx.globalAlpha = 0.22; ctx.fillStyle = UI_THEME.amberLight;
-      ctx.beginPath(); ctx.arc(cxNode, cyNode, nodeRadius + 7, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-    ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(cxNode, cyNode, nodeRadius, 0, Math.PI * 2); ctx.fill();
-    ctx.lineWidth = done || active ? 3 : 2; ctx.strokeStyle = stroke; ctx.stroke();
-    ctx.fillStyle = text; ctx.font = `700 20px ${F_DISPLAY}`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(index + 1), cxNode, cyNode + 1);
+    // Même composition que le parcours classique : uniquement la tuile
+    // numérotée sur le chemin serpent, sans nom ni statut.
+    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1);
     ctx.restore();
     motionMenuBouton(state, x, y, nodeW, nodeH,
-      { kind: 'puzzleStart', index }, unlocked, nodeRadius, 'circle');
+      { kind: 'puzzleStart', index }, unlocked, 12, 'rect');
   });
 
   const doneCount = completed.size;
-  ctx.fillStyle = UI_THEME.text; ctx.font = `700 12px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(traduire(`${doneCount}/${TOTAL_PUZZLES} puzzles résolus`, state.language), cx, 590);
-  bouton(state, ctx, 32, 700, 220, 34, '← Parcours classique', { kind: 'classicHub' },
-    { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
-  bouton(state, ctx, cx - 110, 700, 220, 34, '← Menu principal', { kind: 'retourMenu' },
-    { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
+  const footerY = mobile ? 150 + PUZZLES.length * 84 + 64 : 590;
+  ctx.fillText(traduire(`${doneCount}/${TOTAL_PUZZLES} puzzles résolus`, state.language), cx, footerY);
+  bouton(state, ctx, mobile ? cx - 110 : 32, mobile ? footerY + 32 : 700, 220, mobile ? 38 : 34, '← Parcours classique', { kind: 'classicHub' },
+    { color: PARCOURS_DA.card, textColor: PARCOURS_DA.cream, outlineColor: PARCOURS_DA.oliveLight });
+  bouton(state, ctx, cx - 110, mobile ? footerY + 78 : 700, 220, mobile ? 38 : 34, '← Menu principal', { kind: 'retourMenu' },
+    { color: PARCOURS_DA.card, textColor: PARCOURS_DA.cream, outlineColor: PARCOURS_DA.oliveLight });
 }
 
 function dessineLearnPanel(ctx, state, now) {
@@ -4662,6 +4814,13 @@ export function render(ctx, state, now) {
   if (state.phase === 'menu') {
     if (state.ui && state.ui.mobile) dessineMenuMobile(ctx, state);
     else dessineMenuDashboard(ctx, state);
+    finaliserBoutons(ctx, state);
+    return;
+  }
+
+  // Parcours TUTORIEL — écran autonome avant le premier plateau.
+  if (state.phase === 'tutorial-hub') {
+    dessineTutorielHub(ctx, state);
     finaliserBoutons(ctx, state);
     return;
   }
@@ -4851,6 +5010,33 @@ function dessineTutorielCibles(ctx, state, now) {
 }
 
 // --- HUD du tutoriel (instructions dans le panneau latéral) ---
+function dessineProgressionTutorielMobile(ctx, state, x, y, w) {
+  const completed = new Set(progressionTutoriel(state).completed || []);
+  const rowH = 30;
+  const railX = x + 8;
+  ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(traduire('PARCOURS', state.language), x, y);
+  y += 22;
+  ctx.strokeStyle = UI_THEME.border; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(railX, y + 7); ctx.lineTo(railX, y + rowH * (TOTAL_STEPS - 1) + 7); ctx.stroke();
+  STEPS.forEach((item, index) => {
+    const cy = y + index * rowH + 7;
+    const done = completed.has(index);
+    const current = index === state.tutorialStep;
+    const unlocked = tutorielEtapeDebloquee(state, index);
+    ctx.fillStyle = done ? UI_THEME.primary : current ? UI_THEME.amber : UI_THEME.disabled;
+    ctx.beginPath(); ctx.arc(railX, cy, current ? 7 : 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = current ? UI_THEME.amberLight : UI_THEME.border;
+    ctx.lineWidth = current ? 2 : 1;
+    ctx.stroke();
+    ctx.fillStyle = unlocked ? UI_THEME.text : UI_THEME.disabledText;
+    ctx.font = `${current ? 12 : 11}px ${F_DISPLAY}`;
+    ctx.fillText(`${index + 1}. ${traduire(item.title, state.language)}`, x + 22, cy - 7);
+  });
+  return y + TOTAL_STEPS * rowH + 10;
+}
+
 function dessineTutorielHUD(ctx, state, x, w, now) {
   const step = STEPS[state.tutorialStep];
   if (!step) return;
@@ -4861,6 +5047,11 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
   ctx.fillText('♞ ROYCHEC', x, OY + 8);
 
   let y = OY + 40;
+  if (state.ui && state.ui.mobileGameplay) {
+    // Sous le plateau, le parcours devient une vraie colonne lisible avant les
+    // consignes : chaque étape garde sa couleur d'état et son numéro.
+    y = dessineProgressionTutorielMobile(ctx, state, x, OY + 38, w) + 18;
+  }
 
   // Badge étape + flash « BIEN JOUÉ ! » à l'arrivée sur l'étape.
   const badgeW = 110, badgeH = 28;
@@ -4934,7 +5125,7 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
 
   // Bouton Quitter le tutoriel (toujours visible).
   bouton(state, ctx, x + w - 160, CANVAS_H - 48, 150, 32, '◀  Menu',
-    { kind: 'retourMenu' },
+    { kind: 'tutorialHub' },
     { color: UI_THEME.card, textColor: UI_THEME.text });
 }
 
@@ -4969,7 +5160,7 @@ function dessineTutorielFin(ctx, state) {
 
   // Bouton Menu.
   bouton(state, ctx, cx - 100, py + ph - 62, 200, 48, 'Menu',
-    { kind: 'restart' },
+    { kind: 'tutorialHub' },
     { color: UI_THEME.primary, textColor: UI_THEME.text });
 }
 
