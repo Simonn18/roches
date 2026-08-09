@@ -4,7 +4,7 @@
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=184';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=188';
 import { iaDecideTour } from './ai.js?v=111';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
@@ -234,18 +234,20 @@ function synchroniserAffichage() {
   // devient pleine largeur et le panneau d'améliorations est empilé dessous.
   const gameplayModes = ['pvp', 'pvai', 'pvw', 'hunt', 'tutorial', 'learn', 'spectator'];
   const gameplayMobile = mobile && !!state.board && gameplayModes.includes(state.mode);
-  state.ui.mobileLayout = mobile && state.phase === 'menu';
+  // Le menu principal et le lobby en ligne partagent la même surface mobile :
+  // le lobby doit lui aussi recevoir le canvas scrollable et les dimensions téléphone.
+  state.ui.mobileLayout = mobile && (state.phase === 'menu' || state.phase === 'matchmaking');
   state.ui.mobileGameplay = gameplayMobile;
   const menuMobile = state.ui.mobileLayout;
   const targetWidth = (menuMobile || gameplayMobile)
     ? Math.max(320, Math.min(MOBILE_BREAKPOINT, Math.floor(window.innerWidth || 390)))
     : CANVAS_W;
-  // Le panneau de partie peut contenir le HUD, les pouvoirs et le catalogue
-  // d'améliorations : on lui réserve une grande hauteur et on laisse le document
-  // défiler naturellement via le canvas CSS.
-  // Le dashboard mobile accueille maintenant l’aperçu puis un historique compact.
-  // Le Canvas reste scrollable sur téléphone pour conserver des cibles tactiles lisibles.
-  const targetHeight = menuMobile ? 1020 : gameplayMobile ? 1500 : CANVAS_H;
+  // Le gameplay mobile est compacté pour afficher le plateau et les contrôles
+  // principaux dans la même vue ; le défilement reste disponible pour un catalogue
+  // exceptionnellement long ou un écran très court.
+  const targetHeight = menuMobile
+    ? (state.phase === 'matchmaking' ? 720 : 1020)
+    : gameplayMobile ? Math.max(700, Math.min(980, Math.floor(window.innerHeight || 844))) : CANVAS_H;
   state.ui.renderWidth = targetWidth;
   state.ui.renderHeight = targetHeight;
   if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
@@ -2924,7 +2926,11 @@ canvas.addEventListener('pointerdown', (e) => {
     const start = souris(e);
     const button = boutonSous(start.x, start.y);
     const kind = button && button.action && button.action.kind;
-    if (button && ['startReplay', 'ouvrirReplays', 'togglePreview'].includes(kind)) {
+    const matchmakingTap = state.phase === 'matchmaking' && [
+      'startSearch', 'createPrivateMatch', 'showJoinCode', 'quitterLobby',
+      'pickCadence', 'cancelMatchmaking', 'joinByCode',
+    ].includes(kind);
+    if (button && (['startReplay', 'ouvrirReplays', 'togglePreview'].includes(kind) || matchmakingTap)) {
       // Marque aussi le mousedown de compatibilité avant de différer l’action.
       // Sinon certains navigateurs l’exécuteraient immédiatement malgré le scroll.
       dernierPointerTactile = performance.now();

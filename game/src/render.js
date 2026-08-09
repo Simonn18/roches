@@ -76,14 +76,20 @@ function computeGeometry(state) {
     ? Math.max(320, Number(state.ui.renderWidth) || 390)
     : CANVAS_W_DESKTOP;
   CANVAS_H = mobileGameplay
-    ? Math.max(1100, Number(state.ui.renderHeight) || 1450)
+    ? Math.max(700, Number(state.ui.renderHeight) || 844)
     : CANVAS_H_DESKTOP;
-  OX = mobileGameplay ? 12 : OX_DESKTOP;
-  OY = mobileGameplay ? 72 : OY_DESKTOP;
+  // Quand le catalogue mobile est ouvert, on réduit et centre légèrement le
+  // plateau pour réserver une vraie zone aux améliorations sans les repousser
+  // sous un long défilement. Le plateau reste entièrement visible et cliquable.
+  const mobilePanelOpen = mobileGameplay && !!state.panelPiece;
+  OX = mobileGameplay
+    ? (mobilePanelOpen ? Math.max(44, Math.round(CANVAS_W * 0.14)) : 12)
+    : OX_DESKTOP;
+  OY = mobileGameplay ? (mobilePanelOpen ? 40 : 72) : OY_DESKTOP;
 
   // Pour le desktop, les plateaux larges gardent la réserve du panneau latéral.
-  // Pour le téléphone, le plateau est pleine largeur : aucune place latérale
-  // n'est soustraite pour le panneau, désormais empilé sous le plateau.
+  // Pour le téléphone, le plateau est pleine largeur (ou légèrement compacté
+  // quand le catalogue est ouvert) ; le panneau reste aligné sur le bord tactile.
   const boardAvailableWidth = mobileGameplay
     ? CANVAS_W - OX * 2
     : CANVAS_W - OX - 280;
@@ -93,7 +99,7 @@ function computeGeometry(state) {
   __BOARD_W = __COLS * __CELL_SIZE;
   __BOARD_H = __ROWS * __CELL_SIZE;
   __TILE_R = Math.round(__CELL_SIZE * 0.14);
-  __PANEL_X_RUNTIME = mobileGameplay ? OX : OX + __BOARD_W + 30;
+  __PANEL_X_RUNTIME = mobileGameplay ? 12 : OX + __BOARD_W + 30;
 }
 // Export pour permettre aux appelants externes (main.js click handlers entre frames)
 // de lire la géométrie courante sans la recalculer — source-of-truth unique du module.
@@ -1549,6 +1555,188 @@ function dessinePanneau(ctx, state, now) {
   //  x, CANVAS_H - 12);
 }
 
+// Panneau mobile compact : le plateau reste visible au-dessus et les actions
+// de la pièce sélectionnée sont regroupées dans une grille tactile. Le catalogue
+// passe lui aussi en deux colonnes, sans supprimer aucune amélioration.
+function dessineCatalogueMobile(ctx, state, x, y, w, now) {
+  const p = state.panelPiece;
+  const ids = upgradesForPiece(state.activeDeck, p.type, UPGRADES_PAR_TYPE[p.type]);
+  const gap = 6;
+  const cardW = (w - gap) / 2;
+  const cardH = 44;
+  const headerY = y;
+  ctx.fillStyle = UI_THEME.text;
+  ctx.font = `12px ${F_DISPLAY}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(`${traduire('AMÉLIORER', state.language)} · ${nomType(p.type, state.language).toUpperCase()}`, x, headerY);
+  bouton(state, ctx, x + w - 44, headerY - 8, 44, 44, '×', { kind: 'closePanel' }, {
+    color: UI_THEME.dangerDark, textColor: UI_THEME.text, outlineColor: UI_THEME.danger,
+  });
+  y += 22;
+  dessineLegendeCategories(ctx, state, x, y + 5);
+  y += 18;
+
+  const solde = state.ecus[state.turn];
+  const trembler = now - state.buzz < 300;
+  const hintTuto = state.mode === 'tutorial' ? tutorielHint(state) : null;
+  ids.forEach((id, index) => {
+    const u = UPGRADES[id];
+    const row = Math.floor(index / 2);
+    const col = index % 2;
+    const cardX = x + col * (cardW + gap);      const cardY = y + row * (cardH + gap);
+    const bientot = !!u.nonImplemente;
+    const verrou = state.mode === 'tutorial' && !tutorielPermet(state, { type: 'buy', id });
+    const deja = p.upgrades.includes(id);
+    const plein = p.upgrades.length >= MAX_UPGRADES_PAR_PIECE;
+    const abordable = solde >= u.cout;
+    const learnVerrou = state.mode === 'learn' && !learnPermet(state, { type: 'buy', id });
+    const achetable = !bientot && !verrou && !learnVerrou && !deja && !plein && abordable;
+    state.ui.buttons.push({
+      x: cardX, y: cardY, w: cardW, h: cardH,
+      action: { kind: 'buy', id }, enabled: !learnVerrou, radius: 8,
+    });
+    const bg = bientot || verrou || !abordable ? UI_THEME.disabled
+      : deja ? UI_THEME.panelAlt : UI_THEME.card;
+    carte(ctx, cardX, cardY, cardW, cardH, 8, bg, { shadow: achetable || deja, stroke: null });
+    ctx.lineWidth = deja ? 2 : 1;
+    ctx.strokeStyle = deja ? UI_THEME.primaryDark : UI_THEME.border;
+    roundRect(ctx, cardX, cardY, cardW, cardH, 8); ctx.stroke();
+    ctx.fillStyle = deja ? UI_THEME.primaryDark : COULEUR_CAT[u.cat];
+    roundRect(ctx, cardX, cardY, 6, cardH, 3); ctx.fill();
+
+    ctx.save();
+    roundRect(ctx, cardX, cardY, cardW, cardH, 8); ctx.clip();
+    ctx.fillStyle = (achetable || deja) && !bientot ? UI_THEME.text : UI_THEME.disabledText;
+    const title = traduire(u.nom, state.language).toUpperCase();
+    ctx.font = `10px ${F_DISPLAY}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    if (ctx.measureText(title).width > cardW - 38) ctx.font = `9px ${F_DISPLAY}`;
+    ctx.fillText(title, cardX + 12, cardY + 7);
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `9px ${F_TEXTE}`;
+    wrapTextLimite(ctx, traduire(u.desc, state.language), cardX + 12, cardY + 23, cardW - 40, 10, 2);
+    ctx.restore();
+
+    const badgeX = cardX + cardW - 17;
+    const badgeY = cardY + 2;
+    ctx.beginPath(); ctx.arc(badgeX, badgeY, 12, 0, Math.PI * 2);
+    ctx.fillStyle = deja ? UI_THEME.primary : (u.cout >= 12 ? UI_THEME.amber : COULEUR_CAT[u.cat]);
+    ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
+    ctx.fillStyle = abordable || deja ? UI_THEME.text : UI_THEME.danger;
+    ctx.font = `10px ${F_DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(deja ? '✓' : String(u.cout), badgeX, badgeY + 1);
+    if (hintTuto && hintTuto.buyId === id) pulseRect(ctx, cardX, cardY, cardW, cardH, now);
+    if (trembler && state.buzzId === id) {
+      // Le tremblement reste visuel uniquement ; la hitbox conserve sa position.
+      ctx.strokeStyle = UI_THEME.danger; ctx.lineWidth = 2;
+      roundRect(ctx, cardX + (Math.random() * 4 - 2), cardY, cardW, cardH, 8); ctx.stroke();
+    }
+  });
+  return y + Math.ceil(ids.length / 2) * (cardH + gap) - gap;
+}
+
+function dessinePanneauMobile(ctx, state, now) {
+  const x = __PANEL_X_RUNTIME;
+  const w = CANVAS_W - x - 24;
+  let y = OY;
+  // Ligne d'état compacte : elle remplace les deux grandes cartes joueurs du desktop.
+  carte(ctx, x, y, w, 26, 8, UI_THEME.panelAlt, { shadow: false });
+  ctx.fillStyle = UI_THEME.text; ctx.font = `11px ${F_DISPLAY}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const tour = state.phase === 'gameover' ? 'FIN DE PARTIE' : `TOUR ${state.turn + 1}`;
+  ctx.fillText(traduire(tour, state.language), x + 10, y + 13);
+  ctx.textAlign = 'right'; ctx.font = `10px ${F_TEXTE}`;
+  ctx.fillText(`${state.ecus[0]} / ${state.ecus[1]} écus`, x + w - 10, y + 13);
+  y += 34;
+
+  const sel = state.selected;
+  const selectedUsable = sel && sel.owner === state.turn && state.phase !== 'gameover';
+  if (selectedUsable) {
+    carte(ctx, x, y, w, 24, 7, UI_THEME.card, { shadow: false });
+    ctx.fillStyle = UI_THEME.text; ctx.font = `11px ${F_TEXTE}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(`${nomType(sel.type, state.language)} · ${traduire('valeur', state.language)} ${valeurAffichee(sel)}`, x + 10, y + 12);
+    y += 34;
+
+    const powersBlocked = sel.debuffs && sel.debuffs.sht > 0;
+    const powers = [];
+    const addPower = (id, label, action, enabled, sub) => powers.push({ id, label, action, enabled, sub });
+    if (sel.type === 'P' && sel.upgrades.includes('epine')) {
+      const cd = sel.cooldowns.epine || 0;
+      addPower('epine', 'Épine', { kind: 'epine' }, !powersBlocked && cd === 0 && !sel.epineZone && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'epine' }), cd ? `recharge ${cd}` : sel.epineZone ? 'gelée' : 'actif');
+    }
+    if (sel.type === 'P' && sel.upgrades.includes('vet')) {
+      const cd = sel.cooldowns.vet || 0;
+      addPower('vet', 'Vétéran', { kind: 'vet' }, !powersBlocked && cd === 0 && state.phase === 'play' && ciblesVet(state.board, sel).length > 0 && tutorielPermet(state, { type: 'power', kind: 'vet' }), cd ? `recharge ${cd}` : 'actif');
+    }
+    if (sel.type === 'N' && sel.upgrades.includes('ruee')) {
+      const cd = sel.cooldowns.ruee || 0;
+      addPower('ruee', 'Ruée', { kind: 'ruee' }, !powersBlocked && cd === 0 && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'ruee' }), cd ? `recharge ${cd}` : 'actif');
+    }
+    if (sel.type === 'N' && sel.upgrades.includes('cavalerie')) {
+      const cd = sel.cooldowns.cavalerie || 0;
+      addPower('cavalerie', 'Cavalerie', { kind: 'cavalerie' }, !powersBlocked && cd === 0 && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'cavalerie' }), cd ? `recharge ${cd}` : 'actif');
+    }
+    if (sel.type === 'R' && sel.upgrades.includes('rempart')) {
+      const cd = sel.cooldowns.rempart || 0;
+      addPower('rempart', 'Rempart', { kind: 'rempart' }, !powersBlocked && cd === 0 && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'rempart' }), cd ? `recharge ${cd}` : 'actif');
+    }
+    if (sel.type === 'R' && sel.upgrades.includes('echange')) {
+      const cd = sel.cooldowns.echange || 0;
+      addPower('echange', 'Échange', { kind: 'echange' }, !powersBlocked && cd === 0 && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'echange' }), cd ? `recharge ${cd}` : 'actif');
+    }
+    if (sel.type === 'B' && sel.upgrades.includes('Rayon')) {
+      const cd = sel.cooldowns.Rayon || 0;
+      addPower('Rayon', 'Rayon sacré', { kind: 'rayon' }, !powersBlocked && cd === 0 && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'rayon' }), cd ? `recharge ${cd}` : 'actif');
+    }
+    if (sel.type === 'B' && sel.upgrades.includes('hypnose')) {
+      const cd = sel.cooldowns.hypnose || 0;
+      addPower('hypnose', 'Hypnose', { kind: 'hypnose' }, !powersBlocked && cd === 0 && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'hypnose' }), cd ? `recharge ${cd}` : 'actif');
+    }
+    if (sel.type === 'Q' && sel.upgrades.includes('sht')) {
+      addPower('sht', 'S.H.T.', { kind: 'sht' }, !powersBlocked && !sel.shtUsed && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'sht' }), sel.shtUsed ? 'utilisé' : 'actif');
+    }
+    if (sel.type === 'K' && sel.upgrades.includes('sacrifice')) {
+      const cd = sel.cooldowns.sacrifice || 0;
+      addPower('sacrifice', 'Mariage strat.', { kind: 'sacrifice' }, !powersBlocked && cd === 0 && !sel.sacrificeArmed && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'sacrifice' }), sel.sacrificeArmed ? 'armé' : cd ? `recharge ${cd}` : 'actif');
+    }
+    if (sel.type === 'K' && sel.upgrades.includes('decret')) {
+      addPower('decret', 'Décret', { kind: 'decret' }, !powersBlocked && !sel.decretUsed && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'decret' }), sel.decretUsed ? 'utilisé' : 'actif');
+    }
+    if (powers.length) {
+      const powerGap = 6;
+      const powerW = (w - powerGap) / 2;
+      powers.forEach((power, index) => {
+        const px = x + (index % 2) * (powerW + powerGap);
+        const py = y + Math.floor(index / 2) * 40;
+        bouton(state, ctx, px, py, powerW, 44, power.label, power.action, {
+          enabled: power.enabled, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: power.sub,
+        });
+      });
+      y += Math.ceil(powers.length / 2) * 44 + Math.max(0, Math.ceil(powers.length / 2) - 1) * powerGap + 4;
+    }
+
+    const cartes = UPGRADES_PAR_TYPE[sel.type] || [];
+    if (!state.panelPiece && cartes.length && sel.upgrades.length < MAX_UPGRADES_PAR_PIECE) {
+      bouton(state, ctx, x, y, w, 44, 'Améliorer', { kind: 'ameliorer' }, {
+        enabled: !powersBlocked && tutorielPermet(state, { type: 'panel', piece: sel }),
+      });
+      y += 50;
+    }
+  } else {
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(traduire('Sélectionnez une pièce pour voir ses actions', state.language), x, y + 4);
+    y += 26;
+  }
+
+  if (state.panelPiece && state.phase !== 'gameover') y = dessineCatalogueMobile(ctx, state, x, y, w, now) + 8;
+
+  if (state.phase !== 'gameover' && state.phase !== 'menu' && state.phase !== 'replay') {
+    bouton(state, ctx, x + w - 118, y, 118, 44, state.mode === 'spectator' ? '◀ Retour' : 'Abandonner', {
+      kind: state.mode === 'spectator' ? 'retourMenu' : 'abandonner',
+    }, { color: state.mode === 'spectator' ? UI_THEME.primary : UI_THEME.danger, textColor: UI_THEME.text });
+  }
+}
+
 // En mobile, le panneau conserve toutes ses cartes et actions mais est rendu sous
 // le plateau. On décale temporairement son origine verticale afin que les fonctions
 // de catalogue existantes enregistrent leurs hitboxes au même endroit que le dessin.
@@ -1558,9 +1746,10 @@ function dessinePanneauGameplay(ctx, state, now) {
     return;
   }
   const originePlateau = OY;
-  OY = originePlateau + __BOARD_H + 24;
+  OY = originePlateau + __BOARD_H + 16;
   try {
-    dessinePanneau(ctx, state, now);
+    if (state.mode !== 'learn') dessinePanneauMobile(ctx, state, now);
+    else dessinePanneau(ctx, state, now);
   } finally {
     OY = originePlateau;
   }
@@ -2648,11 +2837,13 @@ function dessineMenuMobile(ctx, state) {
   const columnW = (inner - columnsGap) / 2;
   const previewX = pad;
   const historyX = pad + columnW + columnsGap;
+  // Cartes carrées sur téléphone : la largeur de chaque colonne devient leur
+  // hauteur pour garder une composition nette et équilibrée.
   const previewY = 588;
-  const previewH = 360;
+  const previewH = columnW;
   const historyY = previewY;
   const historyH = previewH;
-  mobileCard(ctx, previewX, previewY, columnW, previewH, C.panel, 18);
+  mobileCard(ctx, previewX, previewY, columnW, previewH, C.panel, 16);
   mobileText(ctx, 'APERÇU', previewX + 12, previewY + 22, `700 10px ${F_DISPLAY}`, C.text);
 
   // Même aperçu que sur ordinateur, mais compact : on conserve la vraie position
@@ -2666,17 +2857,16 @@ function dessineMenuMobile(ctx, state) {
   );
   const previewRows = previewBoard.length || 8;
   const previewCols = previewBoard[0]?.length || 8;
-  const previewPad = 8;
-  const previewTop = previewY + 42;
-  const previewBottom = previewY + previewH - 18;
-  // Ne bride pas l'aperçu standard à 18 px : sur un téléphone, la hauteur de la
-  // carte est la contrainte utile et un 8×8 doit rester lisible. Le plafond protège
-  // les écrans très hauts sans faire déborder le bouton et le cadre ambre.
-  const previewCell = Math.max(10, Math.min(
-    34,
+  const previewPad = 10;
+  const previewTop = previewY + 38;
+  const previewBottom = previewY + previewH - 14;
+  // Plateau volontairement plus petit dans sa carte carrée : il respire autour
+  // des cases et laisse le titre ainsi que le bouton d'aperçu bien lisibles.
+  const previewCell = Math.max(8, Math.min(
+    27,
     (columnW - previewPad * 2) / previewCols,
     (previewBottom - previewTop) / previewRows,
-  ));
+  ) * 0.82);
   const previewBoardW = previewCell * previewCols;
   const previewBoardH = previewCell * previewRows;
   const previewBoardX = previewX + (columnW - previewBoardW) / 2;
@@ -2803,7 +2993,7 @@ function dessineMenuMobile(ctx, state) {
 
   // Historique mobile : même source que le dashboard desktop, dans la seconde
   // carte de la ligne côte à côte avec l’aperçu.
-  mobileCard(ctx, historyX, historyY, columnW, historyH, C.panel, 18);
+  mobileCard(ctx, historyX, historyY, columnW, historyH, C.panel, 16);
   mobileText(ctx, traduire('HISTORIQUE', state.language), historyX + 12, historyY + 24,
     `700 10px ${F_DISPLAY}`, C.text);
   const replays = (Array.isArray(state._replayList) ? state._replayList : [])
@@ -2830,10 +3020,11 @@ function dessineMenuMobile(ctx, state) {
   } else {
     // Retour au design précédent : une ligne légère par partie, séparée de la
     // suivante. On réduit l'écart à 4 px, tout en gardant une vraie cible tactile.
-    const listTop = historyY + 48;
-    const listBottom = historyY + historyH - 54;
+    const listTop = historyY + 36;
+    const listBottom = historyY + historyH - 48;
+    // Ligne visuellement compacte, mais zone tactile confortable et séparée.
     const rowH = 44;
-    const rowGap = 4;
+    const rowGap = 8;
     const maxVisible = Math.max(1, Math.floor((listBottom - listTop + rowGap) / (rowH + rowGap)));
     const visibleReplays = replays.slice(0, maxVisible);
     visibleReplays.forEach((replay, index) => {
@@ -2851,7 +3042,7 @@ function dessineMenuMobile(ctx, state) {
         `8px ${F_TEXTE}`, C.muted, 'right');
     });
   }
-  mobileButton(state, ctx, historyX + 8, historyY + historyH - 54, columnW - 16, 44,
+  mobileButton(state, ctx, historyX + 8, historyY + historyH - 48, columnW - 16, 44,
     'Toutes les parties', { kind: 'ouvrirReplays' }, { color: C.card, textColor: C.text });
   dessineBandeauCompte(ctx, state);
 }
@@ -3407,7 +3598,11 @@ function dessineBadgeClasse(ctx, state, cx, y, variantId, tailleId) {
 
 function dessineMatchmaking(ctx, state) {
   const mm = state.matchmaking || {};
+  const mobileLobby = !!(state.ui && state.ui.mobileLayout);
   const cx = CANVAS_W / 2, cy = CANVAS_H / 2;
+  const contentW = Math.max(280, CANVAS_W - 32);
+  const lobbyW = mobileLobby ? Math.min(340, contentW) : 320;
+  const titleY = mobileLobby ? 196 : 180;
 
   // Fond UI centralisé.
   ctx.fillStyle = UI_THEME.background;
@@ -3419,16 +3614,19 @@ function dessineMatchmaking(ctx, state) {
   // Fix collision bannière↔wordmark identifiée par code-reviewer RECHECK.
   // Texte multi-lignes via wrapText (cap 3 lignes pour erreurs futures plus longues).
   if (mm.error) {
-    const bx = 200, by = 180, bw = 600, bh = 48;
-    carte(ctx, bx, by, bw, bh, 10, UI_THEME.card, { shadow: true });
+    const bx = mobileLobby ? 16 : 200;
+    const by = mobileLobby ? 112 : 180;
+    const bw = mobileLobby ? CANVAS_W - 32 : 600;
+    const bh = mobileLobby ? 58 : 48;
+    carte(ctx, bx, by, bw, bh, mobileLobby ? 8 : 10, UI_THEME.card, { shadow: true });
     ctx.strokeStyle = UI_THEME.danger;
     ctx.lineWidth = 2.5;
-    roundRect(ctx, bx, by, bw, bh, 10); ctx.stroke();ctx.fillStyle = UI_THEME.danger;
+    roundRect(ctx, bx, by, bw, bh, mobileLobby ? 8 : 10); ctx.stroke();ctx.fillStyle = UI_THEME.danger;
      ctx.font = `600 14px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     // ⚠ + message, wrap sur 2-3 lignes si trop long.
-    ctx.fillText('⚠', bx + 30, by + 8);
-    wrapText(ctx, traduire(mm.error, state.language), bx + 50, by + 10, bw - 70, 16, 2);
+    ctx.fillText('⚠', bx + 24, by + 9);
+    wrapText(ctx, traduire(mm.error, state.language), bx + 44, by + 10, bw - 60, mobileLobby ? 15 : 16, 2);
   }
 
   // Wordmark.
@@ -3436,7 +3634,7 @@ function dessineMatchmaking(ctx, state) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillText('♞ ROYCHEC', cx, 86);
 
-  const wB = 320, hB = 52;
+  const wB = lobbyW, hB = mobileLobby ? 56 : 52;
 
   if (mm.mode === 'lobby') {
     // LOBBY EN LIGNE — 100 % local, aucun appel réseau (spec-pvp-online §9.2).
@@ -3444,28 +3642,28 @@ function dessineMatchmaking(ctx, state) {
     const acc = state.account || {};
     ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(traduire('JOUER EN LIGNE', state.language), cx, 180);
+    ctx.fillText(traduire('JOUER EN LIGNE', state.language), cx, titleY);
 
     // Sous-titre : pseudo + trophées du joueur connecté.
     if (acc.status === 'connected') {
       ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(`♟ ${acc.pseudo || ''}  ·  🏆 ${acc.trophies || 0} ${traduire('Trophées', state.language).toLowerCase()}`, cx, 208);
+      ctx.fillText(`♟ ${acc.pseudo || ''}  ·  🏆 ${acc.trophies || 0} ${traduire('Trophées', state.language).toLowerCase()}`, cx, titleY + 28);
     }
 
     // 3 gros boutons distincts.
-    bouton(state, ctx, cx - wB / 2, 244, wB, 58, '🔍 Lancer une recherche',
+    bouton(state, ctx, cx - wB / 2, mobileLobby ? 254 : 244, wB, 58, '🔍 Lancer une recherche',
       { kind: 'startSearch' }, { color: UI_THEME.amber, textColor: UI_THEME.buttonText,
         sub: traduire('trouver un adversaire au hasard', state.language) });
-    bouton(state, ctx, cx - wB / 2, 314, wB, 58, '👥 Jouer avec un ami',
+    bouton(state, ctx, cx - wB / 2, mobileLobby ? 324 : 314, wB, 58, '👥 Jouer avec un ami',
       { kind: 'createPrivateMatch' }, { color: UI_THEME.primary, textColor: UI_THEME.text,
         sub: traduire('créer une partie privée', state.language) });
 
-    bouton(state, ctx, cx - wB / 2, 384, wB, 58, '🔑 Rejoindre par code',
+    bouton(state, ctx, cx - wB / 2, mobileLobby ? 394 : 384, wB, 58, '🔑 Rejoindre par code',
       { kind: 'showJoinCode' },
       { color: UI_THEME.card, textColor: UI_THEME.text, sub: traduire("entrer un code d'invitation", state.language) });
 
     // Retour au menu.
-    bouton(state, ctx, cx - wB / 2, 460, wB, hB, '← Retour',
+    bouton(state, ctx, cx - wB / 2, mobileLobby ? 470 : 460, wB, hB, '← Retour',
       { kind: 'quitterLobby' },
       { color: UI_THEME.card, textColor: UI_THEME.text });
 
@@ -3479,19 +3677,23 @@ function dessineMatchmaking(ctx, state) {
     // Le titre rappelle l'action d'origine ; deux joueurs ne s'apparient que sur la
     // même cadence (file publique) / le créateur impose la sienne (partie privée).
     ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';      ctx.fillText(traduire('CADENCE DE JEU', state.language), cx, 180);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';      ctx.fillText(traduire('CADENCE DE JEU', state.language), cx, titleY);
 
     ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
     ctx.fillText(traduire(mm.pendingAction === 'private'
       ? 'Temps de réflexion de la partie privée (ton ami en hérite)'
-      : 'Temps de réflexion — tu ne rencontres que des joueurs de la même cadence', state.language), cx, 208);
+      : 'Temps de réflexion — tu ne rencontres que des joueurs de la même cadence', state.language), cx, titleY + 28);
 
     // Grille 2×2 de cadences (sans incrément — spec §6.1 v3.1).
-    const gw = 155, gh = 58, gap = 10;
+    const gw = mobileLobby ? Math.min(310, contentW) : 155;
+    const gh = 58, gap = 10;
     PVW_CADENCES.forEach((c, i) => {
-      const col = i % 2, row = Math.floor(i / 2);
+      const col = mobileLobby ? 0 : i % 2;
+      const row = mobileLobby ? i : Math.floor(i / 2);
+      const cadenceX = mobileLobby ? cx - gw / 2 : cx - gw - gap / 2 + col * (gw + gap);
+      const cadenceY = mobileLobby ? 248 + row * (gh + gap) : 244 + row * (gh + gap + 4);
       bouton(state, ctx,
-        cx - gw - gap / 2 + col * (gw + gap), 244 + row * (gh + gap + 4), gw, gh,
+        cadenceX, cadenceY, gw, gh,
         `${c.emoji} ${traduire(c.label, state.language)}`,
         { kind: 'pickCadence', cadence: c.s },
         { color: c.s === 300 ? UI_THEME.amber : UI_THEME.card, textColor: c.s === 300 ? UI_THEME.buttonText : UI_THEME.text, sub: traduire(c.sub, state.language) });
@@ -3500,7 +3702,7 @@ function dessineMatchmaking(ctx, state) {
     // Les variantes historiques ÉCUS/COMBAT ont été retirées de la création privée.
     // Une partie « Jouer avec un ami » démarre désormais en Standard × Standard ;
     // le Plateau bonus reste sélectionnable séparément via TAILLE DE PLATEAU.
-    const retourY = 432;
+    const retourY = mobileLobby ? 524 : 432;
 
     // Retour au lobby (aucun réseau engagé à ce stade).
     bouton(state, ctx, cx - wB / 2, retourY, wB, hB, '← Retour',
@@ -3524,38 +3726,45 @@ function dessineMatchmaking(ctx, state) {
 
     // Infos (la cadence choisie borne la file : rappel visible pendant l'attente).
     ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-    ctx.fillText(`${traduire('Temps écoulé', state.language)} : ${elapsed}s  ·  ${traduire('Niveau', state.language)} : ${traduire(bandLabel, state.language)}  ·  ⏱ ${traduire(cadenceLabel(mm.cadence || 300), state.language)}`, cx, 270);
+    const searchInfo = `${traduire('Temps écoulé', state.language)} : ${elapsed}s  ·  ${traduire('Niveau', state.language)} : ${traduire(bandLabel, state.language)}  ·  ⏱ ${traduire(cadenceLabel(mm.cadence || 300), state.language)}`;
+    if (mobileLobby) {
+      wrapText(ctx, searchInfo, 24, 250, CANVAS_W - 48, 16, 3);
+    } else {
+      ctx.fillText(searchInfo, cx, 270);
+    }
 
     // Badge CLASSÉ / HORS COMPÉTITION : la file bonus est publique mais dédiée,
     // et reste volontairement hors classement.
-    dessineBadgeClasse(ctx, state, cx, 296, 'pvp_standard',
+    dessineBadgeClasse(ctx, state, cx, mobileLobby ? 310 : 296, 'pvp_standard',
       mm.taille || (state.menu && state.menu.taille) || 'std');
 
     // Bouton Annuler : ramène AU LOBBY (retire de la file publique via cancelWait).
-    bouton(state, ctx, cx - wB / 2, 320, wB, hB, '✕ Annuler',
+    bouton(state, ctx, cx - wB / 2, mobileLobby ? 348 : 320, wB, hB, '✕ Annuler',
       { kind: 'cancelMatchmaking' },
       { color: UI_THEME.card, textColor: UI_THEME.text, sub: traduire('revenir au lobby', state.language) });
 
     if (mm.error) {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(traduire(mm.error, state.language), cx, 400);
+      if (mobileLobby) wrapText(ctx, traduire(mm.error, state.language), 24, 420, CANVAS_W - 48, 16, 2);
+      else ctx.fillText(traduire(mm.error, state.language), cx, 400);
     }
 
   } else if (mm.mode === 'private_create') {
     // Écran CRÉATION partie privée.
     ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(traduire('PARTIE PRIVÉE CRÉÉE', state.language), cx, 194);
+    ctx.fillText(traduire('PARTIE PRIVÉE CRÉÉE', state.language), cx, mobileLobby ? 190 : 194);
 
     if (mm.privateCode) {
       // Code en gros.
       ctx.fillStyle = UI_THEME.amber; ctx.font = `42px ${F_DISPLAY}`;
-      ctx.fillText(mm.privateCode, cx, 250);
+      ctx.fillText(mm.privateCode, cx, mobileLobby ? 244 : 250);
       ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(traduire('Partage ce code avec ton adversaire', state.language), cx, 284);
+      ctx.fillText(traduire('Partage ce code avec ton adversaire', state.language), cx, mobileLobby ? 278 : 284);
       const varSuffix = mm.variant && mm.variant !== 'pvp_standard'
         ? `  ·  ⚔ ${traduire(variantLabel(mm.variant), state.language)}` : '';
-      ctx.fillText(`${traduire('Cadence', state.language)} : ⏱ ${traduire(cadenceLabel(mm.cadence || 300), state.language)}${varSuffix}  ·  ${traduire('En attente', state.language)}…`, cx, 308);
+      if (mobileLobby) wrapText(ctx, `${traduire('Cadence', state.language)} : ⏱ ${traduire(cadenceLabel(mm.cadence || 300), state.language)}${varSuffix}  ·  ${traduire('En attente', state.language)}…`, 24, 304, CANVAS_W - 48, 16, 2);
+      else ctx.fillText(`${traduire('Cadence', state.language)} : ⏱ ${traduire(cadenceLabel(mm.cadence || 300), state.language)}${varSuffix}  ·  ${traduire('En attente', state.language)}…`, cx, 308);
     } else {
       ctx.fillStyle = UI_THEME.muted; ctx.font = `15px ${F_TEXTE}`;
       ctx.fillText(traduire('Création en cours…', state.language), cx, 240);
@@ -3563,30 +3772,32 @@ function dessineMatchmaking(ctx, state) {
 
     // Badge CLASSÉ / HORS COMPÉTITION : config imposée par le créateur (variante +
     // taille sélectionnées au menu / écran cadence).
-    dessineBadgeClasse(ctx, state, cx, 334,
+    dessineBadgeClasse(ctx, state, cx, mobileLobby ? 350 : 334,
       mm.variant || variantIdFromMenu(state),
       mm.taille || (state.menu && state.menu.taille) || 'std');
 
-    bouton(state, ctx, cx - wB / 2, 354, wB, hB, '✕ Annuler',
+    bouton(state, ctx, cx - wB / 2, mobileLobby ? 382 : 354, wB, hB, '✕ Annuler',
       { kind: 'cancelMatchmaking' },
       { color: UI_THEME.card, textColor: UI_THEME.text });
 
     if (mm.error) {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(traduire(mm.error, state.language), cx, 430);
+      if (mobileLobby) wrapText(ctx, traduire(mm.error, state.language), 24, 460, CANVAS_W - 48, 16, 2);
+      else ctx.fillText(traduire(mm.error, state.language), cx, 430);
     }
 
   } else if (mm.mode === 'private_join') {
     // Écran REJOINDRE partie privée.
     ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(traduire('REJOINDRE UNE PARTIE', state.language), cx, 194);
+    ctx.fillText(traduire('REJOINDRE UNE PARTIE', state.language), cx, mobileLobby ? 190 : 194);
 
     ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
-    ctx.fillText(traduire('Entre le code à 6 caractères :', state.language), cx, 230);
+    ctx.fillText(traduire('Entre le code à 6 caractères :', state.language), cx, mobileLobby ? 228 : 230);
 
     // Bouton qui déclenche un prompt (simplifié — pas de DOM input en v1).
-    bouton(state, ctx, cx - 120, 264, 240, 46, 'Entrer le code',
+    bouton(state, ctx, cx - (mobileLobby ? Math.min(155, contentW / 2) : 120), mobileLobby ? 266 : 264,
+      mobileLobby ? Math.min(310, contentW) : 240, 52, 'Entrer le code',
       { kind: 'joinByCode', code: '' },
       { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: traduire('cliquer pour saisir', state.language) });
 
@@ -3594,41 +3805,42 @@ function dessineMatchmaking(ctx, state) {
     // On override le code vide → au clic, un prompt s'ouvre, puis on rappelle
     // actionBouton avec le code saisi. Géré par le handler mousedown.
 
-    bouton(state, ctx, cx - wB / 2, 330, wB, hB, '← Retour',
+    bouton(state, ctx, cx - wB / 2, mobileLobby ? 344 : 330, wB, hB, '← Retour',
       { kind: 'cancelMatchmaking' },
       { color: UI_THEME.card, textColor: UI_THEME.text, sub: traduire('revenir au lobby', state.language) });
 
     if (mm.error) {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(traduire(mm.error, state.language), cx, 390);
+      if (mobileLobby) wrapText(ctx, traduire(mm.error, state.language), 24, 420, CANVAS_W - 48, 16, 2);
+      else ctx.fillText(traduire(mm.error, state.language), cx, 390);
     }
 
   } else if (mm.mode === 'matched') {
     // Écran MATCH TROUVÉ (spec §9.2).
     ctx.fillStyle = UI_THEME.primary; ctx.font = `22px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(traduire('✓ ADVERSAIRE TROUVÉ !', state.language), cx, 194);
+    ctx.fillText(traduire('✓ ADVERSAIRE TROUVÉ !', state.language), cx, mobileLobby ? 190 : 194);
 
     // Infos adversaire.
     ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
-    ctx.fillText(`♟ ${(mm.oppPseudo || traduire('Adversaire', state.language)).toUpperCase()}`, cx, 244);
+    ctx.fillText(`♟ ${(mm.oppPseudo || traduire('Adversaire', state.language)).toUpperCase()}`, cx, mobileLobby ? 240 : 244);
     ctx.fillStyle = UI_THEME.amberDark; ctx.font = `15px ${F_DISPLAY}`;
-    ctx.fillText(`🏆 ${mm.oppTrophies || 0} ${traduire('Trophées', state.language).toLowerCase()}`, cx, 274);
+    ctx.fillText(`🏆 ${mm.oppTrophies || 0} ${traduire('Trophées', state.language).toLowerCase()}`, cx, mobileLobby ? 270 : 274);
 
     // Variante héritée (partie privée non-standard) : le rejoignant découvre ici
     // la variante imposée par le créateur (GDD §7.2 v3.1).
     if (mm.variant && mm.variant !== 'pvp_standard') {
       ctx.fillStyle = UI_THEME.danger; ctx.font = `13px ${F_TEXTE}`;
-      ctx.fillText(`⚔ ${traduire('Variante', state.language)} : ${traduire(variantLabel(mm.variant), state.language)}`, cx, 296);
+      ctx.fillText(`⚔ ${traduire('Variante', state.language)} : ${traduire(variantLabel(mm.variant), state.language)}`, cx, mobileLobby ? 300 : 296);
     }
 
     // Compte à rebours visuel.
     ctx.fillStyle = UI_THEME.muted; ctx.font = `14px ${F_TEXTE}`;
-    ctx.fillText(traduire('Connexion en cours…', state.language), cx, 318);
+    ctx.fillText(traduire('Connexion en cours…', state.language), cx, mobileLobby ? 330 : 318);
 
     // Badge CLASSÉ / HORS COMPÉTITION : config confirmée par le serveur (privé :
     // imposée par le créateur ; public : Standard × Standard × 8×8).
-    dessineBadgeClasse(ctx, state, cx, 342,
+    dessineBadgeClasse(ctx, state, cx, mobileLobby ? 360 : 342,
       mm.variant || 'pvp_standard',
       mm.taille || (state.menu && state.menu.taille) || 'std');
   }
