@@ -67,16 +67,24 @@ let __BOARD_H = 560;        // frame height = ROWS * cellSize (std 8×70 = 560)
 let __PANEL_X_RUNTIME = 610; // PANEL_X historique d'origine (ré-évalué par compute)
 function computeGeometry(state) {
   const mobileGameplay = !!(state && state.ui && state.ui.mobileGameplay);
+  const mobileLayout = !!(state && state.ui && state.ui.mobileLayout);
+  // Le menu et le matchmaking mobile n'ont pas de plateau, mais leur rendu
+  // utilise tout de même les dimensions logiques du canvas téléphone. Sans ce
+  // flag, dessineMatchmaking() calculait son centre sur la largeur desktop
+  // (980 px) alors que le canvas réel faisait 320–768 px.
+  const mobileCanvas = mobileGameplay || mobileLayout;
   __COLS = state && state.board ? state.board[0].length : 8;
   __ROWS = state && state.board ? state.board.length : 8;
   // Le menu et le desktop gardent exactement leur géométrie historique. En
   // gameplay mobile, le plateau réserve seulement une marge tactile de 12 px
   // de chaque côté et prend toute la largeur logique du téléphone.
-  CANVAS_W = mobileGameplay
+  CANVAS_W = mobileCanvas
     ? Math.max(320, Number(state.ui.renderWidth) || 390)
     : CANVAS_W_DESKTOP;
-  CANVAS_H = mobileGameplay
-    ? Math.max(700, Number(state.ui.renderHeight) || 844)
+  CANVAS_H = mobileCanvas
+    ? (mobileGameplay
+      ? Math.max(700, Number(state.ui.renderHeight) || 844)
+      : Math.max(640, Number(state.ui.renderHeight) || 720))
     : CANVAS_H_DESKTOP;
   // Quand le catalogue mobile est ouvert, on réduit et centre légèrement le
   // plateau pour réserver une vraie zone aux améliorations sans les repousser
@@ -381,6 +389,7 @@ function roundRect(ctx, x, y, w, h, r) {
 
 // Assombrit un hex #rrggbb d'un facteur (DA §11.4.a : ombre plate de bouton).
 function darken(hex, f = 0.17) {
+  if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return hex;
   const n = parseInt(hex.slice(1), 16);
   const r = Math.round(((n >> 16) & 255) * (1 - f));
   const g = Math.round(((n >> 8) & 255) * (1 - f));
@@ -545,10 +554,14 @@ function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '
   sub = traduire(sub, state && state.language);
   const button = enregistrerBouton(state, x, y, w, h, action, enabled, true);
   const motion = motionBouton(state, button);
-  const r = 10;
-  const lift = motion.hover * 5;
-  const press = motion.press * 2;
-  const appear = (1 - motion.appear) * 3;
+  // Sur téléphone, les boutons adoptent une hiérarchie plus douce : rayon plus
+  // généreux, ombre courte et déplacement réduit pour éviter l'effet « pavés ».
+  // Les hitboxes restent exactement celles enregistrées ci-dessus.
+  const mobile = !!(state && state.ui && (state.ui.mobileGameplay || state.ui.mobileLayout));
+  const r = mobile ? 12 : 10;
+  const lift = motion.hover * (mobile ? 3 : 5);
+  const press = motion.press * (mobile ? 1 : 2);
+  const appear = (1 - motion.appear) * (mobile ? 2 : 3);
   // Position stable au repos : le bouton ne bouge qu'au survol ou à l'appui.
   const visualY = y + appear - lift + press;
   const visualColor = enabled ? eclaircir(color, motion.hover * 0.08) : disabledColor;
@@ -557,23 +570,50 @@ function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '
   // légèrement au survol pour donner une profondeur lisible sans déplacer le layout.
   if (enabled) {
     ctx.fillStyle = ombreBouton(color);
-    roundRect(ctx, x, visualY + 4 - motion.press * 3, w, h, r); ctx.fill();
+    if (mobile) {
+      ctx.shadowColor = UI_THEME.shadow;
+      ctx.shadowBlur = 5;
+      ctx.shadowOffsetY = 2;
+    }
+    roundRect(ctx, x, visualY + (mobile ? 3 : 4) - motion.press * (mobile ? 2 : 3), w, h, r); ctx.fill();
+    if (mobile) ctx.shadowBlur = 0;
   }
   ctx.globalAlpha = 0.92 + motion.appear * 0.08;
-  ctx.fillStyle = visualColor;
+  if (mobile && enabled) {
+    const gradient = ctx.createLinearGradient(0, visualY, 0, visualY + h);
+    gradient.addColorStop(0, eclaircir(visualColor, 0.07));
+    gradient.addColorStop(0.48, visualColor);
+    gradient.addColorStop(1, darken(visualColor, 0.06));
+    ctx.fillStyle = gradient;
+  } else {
+    ctx.fillStyle = visualColor;
+  }
   roundRect(ctx, x, visualY, w, h, r); ctx.fill();
-  // Contour marqué 2.5 px : signale « cliquable » (DA §11.4.a).
-  ctx.lineWidth = 2.5; ctx.strokeStyle = enabled ? outlineColor : disabledOutlineColor;
+  // Une barre d'accent latérale donne un repère visuel sans surcharger le bouton.
+  if (mobile && enabled && w >= 100) {
+    const accent = color === UI_THEME.amber ? UI_THEME.amberLight
+      : color === UI_THEME.danger ? UI_THEME.danger
+        : color === UI_THEME.primary ? UI_THEME.primary
+          : UI_THEME.secondaryLight;
+    ctx.fillStyle = accent;
+    roundRect(ctx, x, visualY, 5, h, 2.5); ctx.fill();
+  }
+  // Le mobile utilise un contour fin et contrasté ; le desktop conserve son
+  // contour historique plus marqué.
+  ctx.lineWidth = mobile ? 1.5 : 2.5;
+  ctx.strokeStyle = enabled ? outlineColor : disabledOutlineColor;
   roundRect(ctx, x, visualY, w, h, r); ctx.stroke();
   // Libellé principal : Archivo Black en CAPITALES (DA §3).
   ctx.fillStyle = enabled ? textColor : disabledTextColor;
-  ctx.font = `13px ${F_DISPLAY}`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(label.toUpperCase(), x + w / 2, visualY + h / 2 - (sub ? 7 : 0));
+  ctx.font = `${mobile ? 12 : 13}px ${F_DISPLAY}`;
+  ctx.textAlign = mobile && w >= 100 ? 'left' : 'center'; ctx.textBaseline = 'middle';
+  const textX = mobile && w >= 100 ? x + 17 : x + w / 2;
+  ctx.fillText(label.toUpperCase(), textX, visualY + h / 2 - (sub ? 7 : 0));
   if (sub) {
     // Sous-titre descriptif : Nunito Sans, casse normale (texte plus long).
-    ctx.font = `11px ${F_TEXTE}`; ctx.fillStyle = enabled ? subColor : UI_THEME.disabledText;
-    ctx.fillText(sub, x + w / 2, visualY + h / 2 + 9);
+    ctx.font = `${mobile ? 10 : 11}px ${F_TEXTE}`; ctx.fillStyle = enabled ? subColor : UI_THEME.disabledText;
+    ctx.textAlign = mobile && w >= 100 ? 'left' : 'center';
+    ctx.fillText(sub, textX, visualY + h / 2 + 9);
   }
   ctx.restore();
 }
@@ -1561,9 +1601,9 @@ function dessinePanneau(ctx, state, now) {
 function dessineCatalogueMobile(ctx, state, x, y, w, now) {
   const p = state.panelPiece;
   const ids = upgradesForPiece(state.activeDeck, p.type, UPGRADES_PAR_TYPE[p.type]);
-  const gap = 6;
-  const cardW = (w - gap) / 2;
-  const cardH = 44;
+  const gap = 8;
+  const cardW = w;
+  const cardH = 58;
   const headerY = y;
   ctx.fillStyle = UI_THEME.text;
   ctx.font = `12px ${F_DISPLAY}`;
@@ -1581,9 +1621,8 @@ function dessineCatalogueMobile(ctx, state, x, y, w, now) {
   const hintTuto = state.mode === 'tutorial' ? tutorielHint(state) : null;
   ids.forEach((id, index) => {
     const u = UPGRADES[id];
-    const row = Math.floor(index / 2);
-    const col = index % 2;
-    const cardX = x + col * (cardW + gap);      const cardY = y + row * (cardH + gap);
+    const cardX = x;
+    const cardY = y + index * (cardH + gap);
     const bientot = !!u.nonImplemente;
     const verrou = state.mode === 'tutorial' && !tutorielPermet(state, { type: 'buy', id });
     const deja = p.upgrades.includes(id);
@@ -1630,23 +1669,65 @@ function dessineCatalogueMobile(ctx, state, x, y, w, now) {
       roundRect(ctx, cardX + (Math.random() * 4 - 2), cardY, cardW, cardH, 8); ctx.stroke();
     }
   });
-  return y + Math.ceil(ids.length / 2) * (cardH + gap) - gap;
+  return y + ids.length * (cardH + gap) - gap;
+}
+
+function dessineSuiviJoueursMobile(ctx, state, x, y, w, now) {
+  // Même lecture que sur ordinateur : deux cartes persistantes, le joueur actif
+  // signalé par son liseré de camp et le solde visible à droite. Sur téléphone,
+  // on conserve la structure mais avec une hauteur plus compacte.
+  ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('♞ ROYCHEC', x, y + 14);
+  y += 24;
+
+  if (state.mode === 'pvw' && state.pvw) y = dessineHorlogesPvw(ctx, state, x, w, y, now);
+
+  const cardH = 42;
+  const gap = 8;
+  for (let j = 0; j < 2; j++) {
+    const actif = j === state.turn && state.phase !== 'gameover';
+    const vj = campVisuel(state, j);
+    carte(ctx, x, y, w, cardH, 8, actif ? UI_THEME.panelAlt : UI_THEME.card, { shadow: actif });
+    if (actif) {
+      ctx.fillStyle = ACCENT[vj];
+      roundRect(ctx, x, y, 4, cardH, 2); ctx.fill();
+    }
+    ctx.fillStyle = ACCENT[vj];
+    ctx.beginPath(); ctx.arc(x + 20, y + cardH / 2, 9, 0, Math.PI * 2); ctx.fill();
+
+    let nomJ = NOM_JOUEUR[j];
+    if (state.mode === 'pvw' && state.pvw) {
+      nomJ = j === state.pvw.side ? 'Toi' : (state.pvw.oppPseudo || 'Adversaire');
+    }
+    const statut = actif ? `  ·  ${traduire('à jouer', state.language)}` : '';
+    ctx.fillStyle = UI_THEME.text; ctx.font = `11px ${F_DISPLAY}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText((traduire(nomJ, state.language) + statut).toUpperCase(), x + 36, y + cardH / 2);
+
+    const eW = 66, eH = 24;
+    const eX = x + w - eW - 8, eY = y + (cardH - eH) / 2;
+    ctx.fillStyle = ACCENT[vj];
+    roundRect(ctx, eX, eY, eW, eH, eH / 2); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.border;
+    roundRect(ctx, eX, eY, eW, eH, eH / 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(eX + 13, eY + eH / 2, 7, 0, Math.PI * 2);
+    ctx.fillStyle = UI_THEME.card; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
+    ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(state.ecus[j]), eX + eW - 8, eY + eH / 2 + 1);
+    y += cardH + gap;
+  }
+  return y + 2;
 }
 
 function dessinePanneauMobile(ctx, state, now) {
-  const x = __PANEL_X_RUNTIME;
-  const w = CANVAS_W - x - 24;
-  let y = OY;
-  // Ligne d'état compacte : elle remplace les deux grandes cartes joueurs du desktop.
-  carte(ctx, x, y, w, 26, 8, UI_THEME.panelAlt, { shadow: false });
-  ctx.fillStyle = UI_THEME.text; ctx.font = `11px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  const tour = state.phase === 'gameover' ? 'FIN DE PARTIE' : `TOUR ${state.turn + 1}`;
-  ctx.fillText(traduire(tour, state.language), x + 10, y + 13);
-  ctx.textAlign = 'right'; ctx.font = `10px ${F_TEXTE}`;
-  ctx.fillText(`${state.ecus[0]} / ${state.ecus[1]} écus`, x + w - 10, y + 13);
-  y += 34;
-
+  // Le panneau est centré dans la largeur logique du téléphone, indépendamment
+  // de la marge réservée au plateau quand le catalogue est ouvert.
+  const w = CANVAS_W - 32;
+  const x = (CANVAS_W - w) / 2;
+  let y = dessineSuiviJoueursMobile(ctx, state, x, OY, w, now);
   const sel = state.selected;
   const selectedUsable = sel && sel.owner === state.turn && state.phase !== 'gameover';
   if (selectedUsable) {
@@ -1702,16 +1783,16 @@ function dessinePanneauMobile(ctx, state, now) {
       addPower('decret', 'Décret', { kind: 'decret' }, !powersBlocked && !sel.decretUsed && state.phase === 'play' && tutorielPermet(state, { type: 'power', kind: 'decret' }), sel.decretUsed ? 'utilisé' : 'actif');
     }
     if (powers.length) {
-      const powerGap = 6;
-      const powerW = (w - powerGap) / 2;
+      // Une seule colonne sur téléphone : chaque pouvoir garde une cible tactile
+      // de 44 px et la lecture suit le même axe vertical que le catalogue.
+      const powerGap = 8;
       powers.forEach((power, index) => {
-        const px = x + (index % 2) * (powerW + powerGap);
-        const py = y + Math.floor(index / 2) * 40;
-        bouton(state, ctx, px, py, powerW, 44, power.label, power.action, {
+        const py = y + index * (44 + powerGap);
+        bouton(state, ctx, x, py, w, 44, power.label, power.action, {
           enabled: power.enabled, color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: power.sub,
         });
       });
-      y += Math.ceil(powers.length / 2) * 44 + Math.max(0, Math.ceil(powers.length / 2) - 1) * powerGap + 4;
+      y += powers.length * (44 + powerGap) - powerGap + 4;
     }
 
     const cartes = UPGRADES_PAR_TYPE[sel.type] || [];

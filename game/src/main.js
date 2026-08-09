@@ -4,7 +4,7 @@
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=188';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=192';
 import { iaDecideTour } from './ai.js?v=111';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
@@ -247,7 +247,13 @@ function synchroniserAffichage() {
   // exceptionnellement long ou un écran très court.
   const targetHeight = menuMobile
     ? (state.phase === 'matchmaking' ? 720 : 1020)
-    : gameplayMobile ? Math.max(700, Math.min(980, Math.floor(window.innerHeight || 844))) : CANVAS_H;
+    : gameplayMobile
+      ? state.panelPiece
+        // Le catalogue mobile est désormais vertical : on réserve une surface
+        // scrollable suffisante pour afficher toutes les cartes et leurs actions.
+        ? 1680
+        : Math.max(700, Math.min(980, Math.floor(window.innerHeight || 844)))
+      : CANVAS_H;
   state.ui.renderWidth = targetWidth;
   state.ui.renderHeight = targetHeight;
   if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
