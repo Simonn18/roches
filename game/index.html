@@ -65,6 +65,14 @@
       display: block; width: 100%; max-width: none; height: auto;
       background: var(--ui-background);
       transition: width 0.18s ease;
+      touch-action: none;
+      user-select: none;
+    }
+    /* Le gameplay mobile empile un long panneau sous le plateau : le doigt doit
+       pouvoir faire défiler la page verticalement après un geste hors plateau. */
+    canvas.mobile-gameplay,
+    canvas.mobile-menu {
+      touch-action: pan-y;
     }
     /* Les écrans de partie sont plus compacts que le dashboard : le plateau ne
        remplit plus toute la hauteur/largeur sur desktop, mais reste fluide sur mobile. */
@@ -411,6 +419,6 @@
     </div>
   </div>
 
-  <script type="module" src="./src/main.js?v=171"></script>
+  <script type="module" src="./src/main.js?v=184"></script>
 </body>
 </html>

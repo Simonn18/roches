@@ -4,7 +4,7 @@
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=164';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=184';
 import { iaDecideTour } from './ai.js?v=111';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
@@ -16,9 +16,10 @@ import { demarrerApprendre, demarrerPuzzles, demarrerMiniJeu, demarrerPuzzle,
   TOTAL_LEARN_GAMES, TOTAL_PUZZLES,
   apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
 import { initAccount, startAuth, logout, ouvrirActivationMfa, getAccount, getSupabaseClient } from './account.js?v=110';
-import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, leave as onlineLeave, getOnline, on as onOnline,
-  sendAction, startPlaying, takeNextAction, __debugEnqueue,
-  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=110';
+import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, resumeMatch, leave as onlineLeave, getOnline, on as onOnline,
+  sendAction, startPlaying, takeNextAction, __debugEnqueue, requestResync, sendResync,
+  setSeq as onlineSetSeq, clearInbox as onlineClearInbox,
+  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=111';
 // Deck editor (recovery 29/07 [23:30]) : API complète de decks.js (couche DONNÉES).
 // loadDecks/saveDecks étaient déjà importés ; on ajoute les helpers d'id/active/clone.
 import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
@@ -120,6 +121,85 @@ onLangueChange((nextLanguage) => {
 const PVW_TEMPS_INITIAL = 300;   // secondes par joueur (fallback si cadence absente)
 const PVW_RECO_WINDOW = 30;      // fenêtre de reconnexion (s) avant victoire par abandon (§7.2)
 const PVW_GAP_RESYNC_MS = 2000;  // trou de seq persistant → demande de resync (§5.6/§7.3)
+const PVW_RESUME_STORAGE_KEY = 'roychec-pvp-resume-v1';
+const PVW_RESUME_TTL_MS = 48 * 60 * 60 * 1000;
+
+// La reprise est isolée par compte (l'email est déjà exposé par account.js) :
+// un autre utilisateur du même navigateur ne voit pas le match précédent.
+function cleReprisePvP() {
+  const account = getAccount();
+  const identity = account.id || String(account.email || 'guest').trim().toLowerCase();
+  return `${PVW_RESUME_STORAGE_KEY}:${encodeURIComponent(identity)}`;
+}
+
+// La reprise ne conserve que l'identité du match et les métadonnées d'affichage.
+// L'autorisation et l'état réel restent toujours vérifiés par Supabase + Realtime.
+function lireReprisePvP() {
+  try {
+    const raw = localStorage.getItem(cleReprisePvP());
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    if (!value || typeof value.matchId !== 'string' || !value.matchId
+        || (value.side !== 0 && value.side !== 1)
+        || !Number.isFinite(value.savedAt)
+        || Date.now() - value.savedAt > PVW_RESUME_TTL_MS) {
+      localStorage.removeItem(cleReprisePvP());
+      return null;
+    }
+    return value;
+  } catch (_) {
+    return null;
+  }
+}
+
+function sauverReprisePvP(meta) {
+  if (!meta || !meta.matchId || (meta.side !== 0 && meta.side !== 1)) return;
+  try {
+    localStorage.setItem(cleReprisePvP(), JSON.stringify({
+      matchId: meta.matchId,
+      side: meta.side,
+      oppPseudo: meta.oppPseudo || null,
+      oppTrophies: Number.isFinite(meta.oppTrophies) ? meta.oppTrophies : null,
+      cadence: meta.cadence | 0 || PVW_TEMPS_INITIAL,
+      variant: meta.variant || DEFAULT_VARIANT,
+      taille: meta.taille || DEFAULT_TAILLE,
+      savedAt: Date.now(),
+    }));
+  } catch (_) { /* stockage local indisponible : la partie reste jouable */ }
+}
+
+function effacerReprisePvP() {
+  try { localStorage.removeItem(cleReprisePvP()); } catch (_) { /* non bloquant */ }
+}
+
+function reprendrePartiePvP() {
+  const saved = lireReprisePvP();
+  if (!saved) return;
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    entrerMatchmaking();
+    state.matchmaking.error = 'Service en ligne indisponible. Réessayez dans quelques secondes.';
+    return;
+  }
+  entrerMatchmaking();
+  state.matchmaking.mode = 'resume';
+  state.matchmaking.error = null;
+  initOnline(supabase);
+  resumeMatch(saved.matchId, saved.side, saved).then((ok) => {
+    if (!ok && state.phase === 'matchmaking') {
+      const message = getOnline().error || 'Cette partie ne peut plus être reprise.';
+      state.matchmaking.mode = 'lobby';
+      state.matchmaking.error = message;
+      // Une panne réseau ou une session expirée ne doit pas détruire une reprise
+      // potentiellement valide. On la retire uniquement pour un état terminal connu.
+      if (/terminée ou annulée/i.test(message)) {
+        state.resumeAvailable = false;
+        effacerReprisePvP();
+      }
+    }
+  });
+}
+
 
 // Le Plateau bonus partage le même seed dans une partie en ligne : le matchId
 // Supabase est commun aux deux clients et évite tout tirage local divergent.
@@ -136,6 +216,45 @@ function seedChasseDepuisMatch(matchId) {
 // État initial : menu d'accueil (SPEC §1.4). Pas de plateau tant que
 // l'utilisateur n'a pas choisi un mode (PvP / PvAI + difficulté).
 let state = menuState();
+
+// Responsive v1 : le menu mobile reçoit une résolution logique proche de l'écran
+// pour conserver des textes et des zones tactiles lisibles. Les écrans de partie
+// gardent encore leur canvas logique desktop (leur layout sera adapté dans une
+// tranche dédiée, sans risquer de modifier ici la géométrie du plateau).
+const MOBILE_BREAKPOINT = 768;
+function estAffichageMobile() {
+  return typeof window !== 'undefined' && window.innerWidth <= MOBILE_BREAKPOINT;
+}
+
+function synchroniserAffichage() {
+  const mobile = estAffichageMobile();
+  if (!state.ui) state.ui = { buttons: [] };
+  state.ui.mobile = mobile;
+  // L'accueil garde son layout mobile dédié. Pendant une partie, le plateau
+  // devient pleine largeur et le panneau d'améliorations est empilé dessous.
+  const gameplayModes = ['pvp', 'pvai', 'pvw', 'hunt', 'tutorial', 'learn', 'spectator'];
+  const gameplayMobile = mobile && !!state.board && gameplayModes.includes(state.mode);
+  state.ui.mobileLayout = mobile && state.phase === 'menu';
+  state.ui.mobileGameplay = gameplayMobile;
+  const menuMobile = state.ui.mobileLayout;
+  const targetWidth = (menuMobile || gameplayMobile)
+    ? Math.max(320, Math.min(MOBILE_BREAKPOINT, Math.floor(window.innerWidth || 390)))
+    : CANVAS_W;
+  // Le panneau de partie peut contenir le HUD, les pouvoirs et le catalogue
+  // d'améliorations : on lui réserve une grande hauteur et on laisse le document
+  // défiler naturellement via le canvas CSS.
+  // Le dashboard mobile accueille maintenant l’aperçu puis un historique compact.
+  // Le Canvas reste scrollable sur téléphone pour conserver des cibles tactiles lisibles.
+  const targetHeight = menuMobile ? 1020 : gameplayMobile ? 1500 : CANVAS_H;
+  state.ui.renderWidth = targetWidth;
+  state.ui.renderHeight = targetHeight;
+  if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+  }
+}
+
+window.addEventListener('resize', synchroniserAffichage, { passive: true });
 // Phase A.5 v2 Phase 3 : expose la sélection actuelle au menu pour le tracé
 // (state.menu.taille defaut 'std'). Au clic sur un chip TAILLE → actionBouton.
 
@@ -183,6 +302,7 @@ function menuState() {
     _dashboardReplay: null,
     _dashboardReplayKey: null,
     _hasReplays: false,
+    resumeAvailable: !!lireReprisePvP(),
     menu: { difficulty: null,
              themeMode,
              language,
@@ -197,7 +317,7 @@ function menuState() {
              combat: 'standard',
              taille: DEFAULT_TAILLE,   // 'std' par défaut (legacy MVP v2 byte-équivalent)
            },
-    ui: { buttons: [], hamburgerOpen: false },
+    ui: { buttons: [], hamburgerOpen: false, drawerTab: 'account' },
   };
 }
 
@@ -247,12 +367,22 @@ function commencerPartie(mode, difficultyOrOptions) {
       voided: false,                  // match annulé (désync confirmée) — aucun trophée (§3.4)
       rematch: null,                  // { offeredByMe, offeredByOpp, declined } — revanche (§9.4)
     };
+    sauverReprisePvP({
+      matchId: state.pvw.matchId,
+      side: state.pvw.side,
+      oppPseudo: state.pvw.oppPseudo,
+      oppTrophies: state.pvw.oppTrophies,
+      cadence: state.pvw.cadence,
+      variant: state.pvw.variant,
+      taille: state.pvw.taille,
+    });
     initReplay(state);
     if (state.bonusMode) {
       state.replay.huntBonuses = state.huntBonuses.map((cell) => cell ? { ...cell } : null);
       state.replay.huntRngSeed = state.huntRngSeed;
     }
     startPlaying();                   // online.js : passage en partie, remise seq/inbox à 0
+    if (opts.resume) requestResync(); // après un rechargement, l'adversaire renvoie l'état vérité
     return;
   }
   // Variantes locales (GDD §7.2) : variantePourMode force le fallback 'pvp_standard'
@@ -501,6 +631,7 @@ function finPartie(winner) {
     state.pvw.ended = true;
     state.pvw.draw = (winner === null);
     state.pvw.oppDisconnected = false; // ferme toute fenêtre de reconnexion en cours
+    effacerReprisePvP();
   }
   // Tutoriel : pas de replay, pas de trophées.
   if (state.mode !== 'tutorial') {
@@ -1671,6 +1802,7 @@ function commencerPartiePvP() {
     oppTrophies: ol.oppTrophies,
     cadence: ol.cadence,   // choisie côté file publique / créateur privé, confirmée serveur
     variant: ol.variant,   // privé : imposée par le créateur (v3.1) ; public : 'pvp_standard'
+    resume: state.matchmaking && state.matchmaking.mode === 'resume',
     // Phase A.5 v2 Phase 5.A — taille plateau imposée par le serveur (privé : créateur ;
     // public : std confirmé par online.js pollMatchmaking ou joinByCode). Mirror dans
     // state.pvw.taille côté main.js. Sans ça, l15 en PvP en ligne retombait en std 8x8.
@@ -2429,11 +2561,19 @@ function actionBouton(action) {
     case 'logout': logout(); break;
     case 'mfa': ouvrirActivationMfa(); break;
     // Menu hamburger (31/07) : bascule l'ouverture du drawer latéral
-    // (Compte/Apparence/Langues). hamburgerT0 anime le glissement d'ouverture.
+    // (onglets Compte/Apparence/Langues/À propos). hamburgerT0 anime le glissement d'ouverture.
     case 'toggleHamburger':
       if (state.ui) {
         state.ui.hamburgerOpen = !state.ui.hamburgerOpen;
-        if (state.ui.hamburgerOpen) state.ui.hamburgerT0 = performance.now();
+        if (state.ui.hamburgerOpen) {
+          state.ui.hamburgerT0 = performance.now();
+          if (!state.ui.drawerTab) state.ui.drawerTab = 'account';
+        }
+      }
+      break;
+    case 'selectDrawerTab':
+      if (state.ui && ['account', 'appearance', 'language', 'about'].includes(action.tab)) {
+        state.ui.drawerTab = action.tab;
       }
       break;
     case 'toggleTheme':
@@ -2592,6 +2732,9 @@ function actionBouton(action) {
     // Matchmaking — boutons
     // Lobby → « Lancer une recherche » : ouvre d'abord l'écran de CADENCE (aucun réseau).
     // L'inscription en file n'a lieu qu'au pickCadence (lancerRecherchePublique).
+    case 'resumeMatch':
+      if (state.phase === 'menu') reprendrePartiePvP();
+      break;
     case 'startSearch':
       // [00:05] Le clic sur « Lancer une recherche » du MENU atterrit sur le LOBBY
       // matchmaking (mode='lobby') o\u00f9 user peut choisir « 🔍 En ligne au hasard »
@@ -2720,7 +2863,7 @@ function boutonSous(x, y) {
 function estBoutonDrawer(button) {
   const kind = button && button.action && button.action.kind;
   return kind === 'login' || kind === 'logout' || kind === 'mfa'
-    || kind === 'toggleTheme' || kind === 'setLanguage';
+    || kind === 'toggleTheme' || kind === 'setLanguage' || kind === 'selectDrawerTab';
 }
 
 function interactionAutoriseeParDrawer(button, x, y) {
@@ -2770,9 +2913,78 @@ canvas.addEventListener('mouseleave', () => {
   canvas.style.cursor = 'default';
 });
 
+// Pointer Events unifient doigt et stylet avec la souris. Les pointeurs tactiles
+// délèguent au chemin mousedown existant afin de conserver un seul hit-test.
+let pendingMobileTap = null;
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse') return;
+  // Dans l’historique mobile, différer l’action jusqu’au relâchement permet
+  // d’entamer un scroll sur une ligne sans ouvrir accidentellement le replay.
+  if (state.ui && state.ui.mobileLayout) {
+    const start = souris(e);
+    const button = boutonSous(start.x, start.y);
+    const kind = button && button.action && button.action.kind;
+    if (button && ['startReplay', 'ouvrirReplays', 'togglePreview'].includes(kind)) {
+      // Marque aussi le mousedown de compatibilité avant de différer l’action.
+      // Sinon certains navigateurs l’exécuteraient immédiatement malgré le scroll.
+      dernierPointerTactile = performance.now();
+      pendingMobileTap = { x: start.x, y: start.y, action: button.action, moved: false };
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* non bloquant */ }
+      return;
+    }
+  }
+  if (!(state.ui && (state.ui.mobileGameplay || state.ui.mobileLayout))) e.preventDefault();
+  dernierPointerTactile = performance.now();
+  const synthetic = new MouseEvent('mousedown', {
+    bubbles: true, button: 0, clientX: e.clientX, clientY: e.clientY,
+  });
+  Object.defineProperty(synthetic, '__royTouch', { value: true });
+  canvas.dispatchEvent(synthetic);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'mouse') return;
+  if (pendingMobileTap) {
+    const point = souris(e);
+    if (Math.hypot(point.x - pendingMobileTap.x, point.y - pendingMobileTap.y) > 10) {
+      pendingMobileTap.moved = true;
+    }
+    return;
+  }
+  if (!(state.ui && (state.ui.mobileGameplay || state.ui.mobileLayout))) e.preventDefault();
+  canvas.dispatchEvent(new MouseEvent('mousemove', {
+    bubbles: true, clientX: e.clientX, clientY: e.clientY,
+  }));
+});
+canvas.addEventListener('pointerup', (e) => {
+  if (e.pointerType === 'mouse') return;
+  if (pendingMobileTap) {
+    const point = souris(e);
+    const button = boutonSous(point.x, point.y);
+    const sameAction = button && JSON.stringify(button.action) === JSON.stringify(pendingMobileTap.action);
+    const action = pendingMobileTap.moved || !sameAction ? null : pendingMobileTap.action;
+    pendingMobileTap = null;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* non bloquant */ }
+    if (action) actionBouton(action);
+    libererBoutonPresse();
+    return;
+  }
+  if (!(state.ui && (state.ui.mobileGameplay || state.ui.mobileLayout))) e.preventDefault();
+  libererBoutonPresse();
+});
+canvas.addEventListener('pointercancel', (e) => {
+  pendingMobileTap = null;
+  try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* non bloquant */ }
+  libererBoutonPresse();
+});
+
 window.addEventListener('mouseup', libererBoutonPresse);
 
+let dernierPointerTactile = 0;
 canvas.addEventListener('mousedown', (e) => {
+  // Les navigateurs peuvent émettre un mousedown de compatibilité après
+  // pointerdown. Le pointerdown synthétique a déjà traité l'action : on ignore
+  // uniquement ce doublon, sans perturber la souris réelle.
+  if (!e.__royTouch && performance.now() - dernierPointerTactile < 500) return;
   if (e.button === 2) return; // géré par contextmenu
   const { x, y } = souris(e);
   if (state.ui) state.ui.pointer = { x, y, inside: true };
@@ -2794,7 +3006,8 @@ canvas.addEventListener('mousedown', (e) => {
     // Drawer : un bouton ACTIVÉ dans le panneau (Connexion, Déconnexion, thème)
     // referme après l'action. La ligne désactivée « Français » garde le panneau
     // ouvert — l'action y est de toute façon ignorée (enabled=false).
-    if (state.ui && state.ui.hamburgerOpen && b.enabled && b.action && b.action.kind !== 'toggleHamburger') {
+    if (state.ui && state.ui.hamburgerOpen && b.enabled && b.action
+        && !['toggleHamburger', 'selectDrawerTab'].includes(b.action.kind)) {
       state.ui.hamburgerOpen = false;
     }
     return;
@@ -3024,7 +3237,13 @@ function update(now) {
 }
 
 function loop(now) {
+  // Synchronise les dimensions avant le tick et le rendu : les hitboxes et la
+  // résolution logique du Canvas restent cohérentes pendant toute la frame.
+  synchroniserAffichage();
   update(now);
+  // Une action peut changer de phase pendant update() (menu → partie ou inverse) :
+  // resynchroniser ici évite d'afficher une frame avec le mauvais layout.
+  synchroniserAffichage();
   // Injecte l'état compte (réf. vivante) pour le rendu du bandeau menu, sans coupler
   // le rendu à account.js. Toujours défini avant render, y compris après un retourMenu().
   state.account = getAccount();
@@ -3034,6 +3253,9 @@ function loop(now) {
   state.language = language;
   state._hasReplays = hasReplays(); // pour la liste REPLAYS du menu (render.js)
   if (state.phase === 'menu' || state.phase === 'replays') {
+    // L'authentification est asynchrone : le menu peut être créé en invité,
+    // puis découvrir la reprise dès que le profil est chargé.
+    state.resumeAvailable = !!lireReprisePvP();
     state._replayList = getReplayList();
     // La feuille de partie du dashboard lit le replay complet le plus récent,
     // tandis que l'historique conserve les synthèses pour rester léger.
@@ -3069,6 +3291,8 @@ function loop(now) {
   // Le dashboard reste pleine largeur ; les écrans qui affichent réellement
   // un plateau utilisent une largeur plus compacte sur desktop.
   canvas.classList.toggle('game-screen', !!state.board);
+  canvas.classList.toggle('mobile-gameplay', !!(state.ui && state.ui.mobileGameplay));
+  canvas.classList.toggle('mobile-menu', !!(state.ui && state.ui.mobileLayout));
   render(ctx, state, now);
   requestAnimationFrame(loop);
 }

@@ -6,7 +6,7 @@
 // pièces tournées, chrome (HUD, panneaux) en carton ivoire — pas d'interface
 // "app sombre" plaquée par-dessus. Toute la palette vient de constants.js.
 import {
-  CELL, OX, OY, PANEL_X, CANVAS_W, CANVAS_H,
+  CELL, OX as OX_DESKTOP, OY as OY_DESKTOP, PANEL_X, CANVAS_W as CANVAS_W_DESKTOP, CANVAS_H as CANVAS_H_DESKTOP,
   C_CLAIR, C_FONCE, C_SEL, C_MOVE, C_CAP, C_RUEE,
   LETTRE, VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, COULEUR_CAT,
   MAX_UPGRADES_PAR_PIECE, ACCENT, NOM_JOUEUR,
@@ -40,6 +40,13 @@ import { traduire } from './i18n.js?v=3';
 const F_DISPLAY = '"Archivo Black", system-ui, sans-serif';
 const F_TEXTE = '"Nunito Sans", system-ui, -apple-system, "Segoe UI", sans-serif';
 
+// Géométrie active : desktop par défaut, ou largeur/hauteur logiques du gameplay
+// mobile. Les primitives de rendu partagent ces alias pour garder un seul moteur.
+let OX = OX_DESKTOP;
+let OY = OY_DESKTOP;
+let CANVAS_W = CANVAS_W_DESKTOP;
+let CANVAS_H = CANVAS_H_DESKTOP;
+
 // Conserve la géométrie des tuiles au même endroit (DA §4).
 const TILE_GAP = 4;                     // gouttière Brume entre cases (~4 px à cellSize=70)
 
@@ -59,19 +66,34 @@ let __BOARD_W = 560;        // frame width  = COLS * cellSize (std 8×70 = 560)
 let __BOARD_H = 560;        // frame height = ROWS * cellSize (std 8×70 = 560)
 let __PANEL_X_RUNTIME = 610; // PANEL_X historique d'origine (ré-évalué par compute)
 function computeGeometry(state) {
+  const mobileGameplay = !!(state && state.ui && state.ui.mobileGameplay);
   __COLS = state && state.board ? state.board[0].length : 8;
   __ROWS = state && state.board ? state.board.length : 8;
-  // cellSize : 70 pour std, FLOOR(W_disponible / COLS) pour >8. W_disponible = CANVAS_W
-  // moins OX (marge gauche) moins 280 (panel reserve à droite avec marge). Pour l15 :
-  // floor((1072-20-280)/15) = floor(772/15) = 51 px → board 765×408, panel à 815 px.
-  // Pour Phase A.5 v3 (l11, big), FLOOR gère naturellement tout >8 cols.
-  __CELL_SIZE = __COLS > 8
-    ? Math.floor((CANVAS_W - OX - 280) / __COLS)
+  // Le menu et le desktop gardent exactement leur géométrie historique. En
+  // gameplay mobile, le plateau réserve seulement une marge tactile de 12 px
+  // de chaque côté et prend toute la largeur logique du téléphone.
+  CANVAS_W = mobileGameplay
+    ? Math.max(320, Number(state.ui.renderWidth) || 390)
+    : CANVAS_W_DESKTOP;
+  CANVAS_H = mobileGameplay
+    ? Math.max(1100, Number(state.ui.renderHeight) || 1450)
+    : CANVAS_H_DESKTOP;
+  OX = mobileGameplay ? 12 : OX_DESKTOP;
+  OY = mobileGameplay ? 72 : OY_DESKTOP;
+
+  // Pour le desktop, les plateaux larges gardent la réserve du panneau latéral.
+  // Pour le téléphone, le plateau est pleine largeur : aucune place latérale
+  // n'est soustraite pour le panneau, désormais empilé sous le plateau.
+  const boardAvailableWidth = mobileGameplay
+    ? CANVAS_W - OX * 2
+    : CANVAS_W - OX - 280;
+  __CELL_SIZE = __COLS > 8 || mobileGameplay
+    ? Math.max(10, Math.floor(boardAvailableWidth / __COLS))
     : 70;
   __BOARD_W = __COLS * __CELL_SIZE;
   __BOARD_H = __ROWS * __CELL_SIZE;
   __TILE_R = Math.round(__CELL_SIZE * 0.14);
-  __PANEL_X_RUNTIME = OX + __BOARD_W + 30;
+  __PANEL_X_RUNTIME = mobileGameplay ? OX : OX + __BOARD_W + 30;
 }
 // Export pour permettre aux appelants externes (main.js click handlers entre frames)
 // de lire la géométrie courante sans la recalculer — source-of-truth unique du module.
@@ -385,6 +407,9 @@ function ensureButtonUI(state) {
   // Menu hamburger (31/07) : état persistant d'ouverture du panneau. Défaut sûr
   // pour les états recréés sans ce champ (menuState le pose explicitement).
   if (state.ui.hamburgerOpen == null) state.ui.hamburgerOpen = false;
+  if (!['account', 'appearance', 'language', 'about'].includes(state.ui.drawerTab)) {
+    state.ui.drawerTab = 'account';
+  }
   if (!state.ui.preview) state.ui.preview = {};
   for (const taille of ['std', 'l15', 'bonus']) {
     if (!state.ui.preview[taille]) {
@@ -439,7 +464,7 @@ function boutonDrawerAutorise(state, button, x, y) {
   if (!ui || !ui.hamburgerOpen) return true;
   const kind = button && button.action && button.action.kind;
   if (kind === 'toggleHamburger') return true;
-  if (!['login', 'logout', 'toggleTheme', 'setLanguage'].includes(kind)) return false;
+  if (!['login', 'logout', 'mfa', 'toggleTheme', 'setLanguage', 'selectDrawerTab'].includes(kind)) return false;
   const panel = ui.hamburgerPanel;
   return !!panel && x >= panel.x && x <= panel.x + panel.w
     && y >= panel.y && y <= panel.y + panel.h;
@@ -1524,6 +1549,23 @@ function dessinePanneau(ctx, state, now) {
   //  x, CANVAS_H - 12);
 }
 
+// En mobile, le panneau conserve toutes ses cartes et actions mais est rendu sous
+// le plateau. On décale temporairement son origine verticale afin que les fonctions
+// de catalogue existantes enregistrent leurs hitboxes au même endroit que le dessin.
+function dessinePanneauGameplay(ctx, state, now) {
+  if (!(state.ui && state.ui.mobileGameplay)) {
+    dessinePanneau(ctx, state, now);
+    return;
+  }
+  const originePlateau = OY;
+  OY = originePlateau + __BOARD_H + 24;
+  try {
+    dessinePanneau(ctx, state, now);
+  } finally {
+    OY = originePlateau;
+  }
+}
+
 // Petite légende D / A / S — rend lisible le code couleur utilisé sur chaque carte.
 function dessineLegendeCategories(ctx, state, x, y) {
   const items = [['D', 'DÉPLACEMENT'], ['A', 'ACTIF'], ['S', 'STAT']];
@@ -2075,7 +2117,185 @@ function wrapTextLimite(ctx, text, x, y, maxW, lh, maxLines = 2) {
 // un PANNEAU LATÉRAL (drawer) glissant depuis le bord droit, avec voile (scrim).
 // Les formulaires (email / code / pseudo) restent gérés en DOM (overlay).
 // S'ouvre via { kind: 'toggleHamburger' } ; se ferme au clic sur le scrim ou Échap.
+function mobileWrap(ctx, text, x, y, maxWidth, lineHeight, maxLines = 4) {
+  const words = String(text || '').split(/\\s+/);
+  let line = '';
+  let lines = 0;
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (ctx.measureText(candidate).width > maxWidth && line) {
+      ctx.fillText(line, x, y + lines * lineHeight);
+      lines++;
+      if (lines >= maxLines) return lines * lineHeight;
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line && lines < maxLines) {
+    ctx.fillText(line, x, y + lines * lineHeight);
+    lines++;
+  }
+  return lines * lineHeight;
+}
+
+function mobileCard(ctx, x, y, w, h, fill = UI_THEME.panel, radius = 16) {
+  ctx.save();
+  ctx.shadowColor = UI_THEME.shadow;
+  ctx.shadowBlur = 12;
+  ctx.shadowOffsetY = 3;
+  ctx.fillStyle = fill;
+  roundRect(ctx, x, y, w, h, radius); ctx.fill();
+  ctx.restore();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = UI_THEME.border;
+  roundRect(ctx, x, y, w, h, radius); ctx.stroke();
+}
+
+function mobileText(ctx, text, x, y, font, color = UI_THEME.text, align = 'left', baseline = 'middle') {
+  ctx.fillStyle = color;
+  ctx.font = font;
+  ctx.textAlign = align;
+  ctx.textBaseline = baseline;
+  ctx.fillText(traduire(text), x, y);
+}
+
+function mobileButton(state, ctx, x, y, w, h, label, action, options = {}) {
+  bouton(state, ctx, x, y, w, h, traduire(label), action, options);
+}
+
+function dessineBandeauCompteMobile(ctx, state) {
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  const acc = state.account || { status: 'guest' };
+  const language = state.language === 'en' ? 'en' : 'fr';
+  const opened = !!(state.ui && state.ui.hamburgerOpen);
+  const size = 44;
+  const right = W - 16;
+  const top = 16;
+  const hb = enregistrerBouton(state, right - size, top, size, size,
+    { kind: 'toggleHamburger' }, true, true, 12);
+
+  if (opened) {
+    const px = 12, py = 12, pw = W - 24, ph = H - 24, pad = 16;
+    ctx.fillStyle = 'rgba(10, 11, 13, 0.50)';
+    ctx.fillRect(0, 0, W, H);
+    if (state.ui) state.ui.hamburgerPanel = { x: px, y: py, w: pw, h: ph };
+    mobileCard(ctx, px, py, pw, ph, UI_THEME.panel, 18);
+
+    mobileText(ctx, 'MENU', px + pw / 2, py + 27, `16px ${F_DISPLAY}`, UI_THEME.text, 'center');
+    ctx.strokeStyle = UI_THEME.border;
+    ctx.beginPath(); ctx.moveTo(px + pad, py + 49); ctx.lineTo(px + pw - pad, py + 49); ctx.stroke();
+
+    const tab = state.ui.drawerTab || 'account';
+    const tabs = [['account', 'Compte'], ['appearance', 'Apparence'], ['language', 'Langues'], ['about', 'À propos']];
+    const tabGap = 6;
+    const tabW = (pw - 2 * pad - tabGap) / 2;
+    tabs.forEach(([id, label], index) => {
+      const tx = px + pad + (index % 2) * (tabW + tabGap);
+      const ty = py + 62 + Math.floor(index / 2) * 36;
+      const selected = tab === id;
+      enregistrerBouton(state, tx, ty, tabW, 30,
+        { kind: 'selectDrawerTab', tab: id }, true, true, 9);
+      ctx.fillStyle = selected ? UI_THEME.wine : UI_THEME.card;
+      roundRect(ctx, tx, ty, tabW, 30, 9); ctx.fill();
+      ctx.lineWidth = selected ? 2 : 1;
+      ctx.strokeStyle = selected ? UI_THEME.amber : UI_THEME.border;
+      roundRect(ctx, tx, ty, tabW, 30, 9); ctx.stroke();
+      mobileText(ctx, label.toUpperCase(), tx + tabW / 2, ty + 15, `700 9px ${F_DISPLAY}`,
+        selected ? UI_THEME.buttonText : UI_THEME.text, 'center');
+    });
+
+    const contentY = py + 150;
+    if (tab === 'account') {
+      mobileText(ctx, 'Compte', px + pad, contentY, `700 11px ${F_DISPLAY}`, UI_THEME.muted);
+      if (acc.status === 'connected') {
+        mobileText(ctx, `♟ ${(acc.pseudo || '').toUpperCase()}`, px + pad, contentY + 34, `15px ${F_DISPLAY}`);
+        mobileText(ctx, `🏆 ${acc.trophies || 0}`, px + pw - pad, contentY + 34, `14px ${F_DISPLAY}`, UI_THEME.amberDark, 'right');
+        const email = String(acc.email || '');
+        const [local, domain] = email.split('@');
+        const masked = local && domain ? `${local.slice(0, Math.min(2, local.length))}•••@${domain}` : (email || '—');
+        mobileText(ctx, `${traduire('Email', language)} : ${masked}`, px + pad, contentY + 62, `10px ${F_TEXTE}`, UI_THEME.muted);
+        mobileText(ctx, `${traduire('Statut', language)} : ${traduire('Compte connecté', language)}`,
+          px + pad, contentY + 82, `10px ${F_TEXTE}`, UI_THEME.muted);
+        mobileButton(state, ctx, px + pad, contentY + 106, (pw - 2 * pad - 8) / 2, 32,
+          'Déconnexion', { kind: 'logout' }, { color: UI_THEME.card, textColor: UI_THEME.text });
+        mobileButton(state, ctx, px + pad + (pw - 2 * pad + 8) / 2, contentY + 106,
+          (pw - 2 * pad - 8) / 2, 32, '2FA', { kind: 'mfa' },
+          { color: UI_THEME.primary, textColor: UI_THEME.text });
+      } else {
+        mobileButton(state, ctx, px + pad, contentY + 28, pw - 2 * pad, 40,
+          'Connexion', { kind: 'login' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
+        mobileText(ctx, `${traduire('Statut', language)} : ${traduire('Mode invité', language)}`,
+          px + pad, contentY + 88, `10px ${F_TEXTE}`, UI_THEME.muted);
+      }
+    } else if (tab === 'appearance') {
+      mobileText(ctx, 'Apparence', px + pad, contentY, `700 11px ${F_DISPLAY}`, UI_THEME.muted);
+      ctx.font = `12px ${F_TEXTE}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillStyle = UI_THEME.text;
+      ctx.fillText(traduire('Choisis le thème qui te convient.', language), px + pad, contentY + 24);
+      const themeLabel = traduire(state.themeMode === 'light' ? '☾ Sombre' : '☀ Clair', language);
+      mobileButton(state, ctx, px + pad, contentY + 58, pw - 2 * pad, 38, themeLabel,
+        { kind: 'toggleTheme' }, { color: UI_THEME.card, textColor: UI_THEME.text });
+    } else if (tab === 'language') {
+      mobileText(ctx, 'Langues', px + pad, contentY, `700 11px ${F_DISPLAY}`, UI_THEME.muted);
+      ctx.font = `12px ${F_TEXTE}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillStyle = UI_THEME.text;
+      ctx.fillText(traduire('Choisis la langue de l’interface.', language), px + pad, contentY + 24);
+      [['fr', '🇫🇷  Français'], ['en', '🇬🇧  English']].forEach(([code, label], index) => {
+        const yy = contentY + 58 + index * 44;
+        enregistrerBouton(state, px + pad, yy, pw - 2 * pad, 36,
+          { kind: 'setLanguage', code }, true, true, 10);
+        ctx.fillStyle = language === code ? UI_THEME.field : UI_THEME.card;
+        roundRect(ctx, px + pad, yy, pw - 2 * pad, 36, 10); ctx.fill();
+        ctx.lineWidth = language === code ? 2 : 1;
+        ctx.strokeStyle = language === code ? UI_THEME.amberDark : UI_THEME.border;
+        roundRect(ctx, px + pad, yy, pw - 2 * pad, 36, 10); ctx.stroke();
+        mobileText(ctx, label, px + pad + 12, yy + 18, `13px ${F_TEXTE}`);
+        if (language === code) mobileText(ctx, '✓', px + pw - pad - 14, yy + 18, `14px ${F_DISPLAY}`, UI_THEME.amber, 'right');
+      });
+    } else {
+      mobileText(ctx, 'But du jeu', px + pad, contentY, `700 11px ${F_DISPLAY}`, UI_THEME.muted);
+      ctx.font = `12px ${F_TEXTE}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillStyle = UI_THEME.text;
+      let yy = contentY + 26;
+      for (const line of [
+        'ROYCHEC est un jeu d’échecs augmenté. Capture le roi adverse pour gagner.',
+        'Déplace tes pièces, gagne des écus et achète des améliorations pour créer des ouvertures tactiques.',
+        'Les règles restent lisibles : chaque amélioration ouvre une nouvelle façon de jouer.',
+      ]) yy += mobileWrap(ctx, traduire(line, language), px + pad, yy, pw - 2 * pad, 17, 4) + 9;
+      ctx.fillStyle = UI_THEME.muted;
+      ctx.fillText(traduire('Fermer avec Échap', language), px + pad, Math.min(py + ph - 30, yy + 4));
+    }
+    mobileText(ctx, 'Roychec · bêta', px + pw / 2, py + ph - 17, `10px ${F_TEXTE}`, UI_THEME.muted, 'center');
+  } else if (state.ui) {
+    state.ui.hamburgerPanel = null;
+  }
+
+  ctx.save();
+  ctx.fillStyle = UI_THEME.card;
+  roundRect(ctx, right - size, top + 4, size, size, 12); ctx.fill();
+  ctx.fillStyle = UI_THEME.card;
+  roundRect(ctx, right - size, top, size, size, 12); ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = opened ? UI_THEME.amber : UI_THEME.border;
+  roundRect(ctx, right - size, top, size, size, 12); ctx.stroke();
+  const cx = right - size / 2, cy = top + size / 2;
+  ctx.strokeStyle = UI_THEME.text; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath();
+  if (opened) {
+    ctx.moveTo(cx - 9, cy - 7); ctx.lineTo(cx + 9, cy + 7);
+    ctx.moveTo(cx + 9, cy - 7); ctx.lineTo(cx - 9, cy + 7);
+  } else {
+    for (const offset of [-6, 0, 6]) { ctx.moveTo(cx - 9, cy + offset); ctx.lineTo(cx + 9, cy + offset); }
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 function dessineBandeauCompte(ctx, state) {
+  if (state.ui && state.ui.mobileLayout) {
+    dessineBandeauCompteMobile(ctx, state);
+    return;
+  }
   const acc = state.account || { status: 'guest' };
   const right = CANVAS_W - 20;
   const top = 16;
@@ -2129,12 +2349,39 @@ function dessineBandeauCompte(ctx, state) {
     ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
     ctx.fillText(traduire('MENU', language), dx + pw / 2, y);
     y += 15;
-    ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
-    ctx.fillText(traduire('Compte · Apparence · Langues', language), dx + pw / 2, y);
-    y += 12;
     ctx.strokeStyle = UI_THEME.border; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(dx + pad, y); ctx.lineTo(dx + pw - pad, y); ctx.stroke();
-    y += 22;
+    y += 12;
+
+    // Navigation interne : un seul panneau du drawer est visible à la fois.
+    const drawerTab = state.ui && state.ui.drawerTab ? state.ui.drawerTab : 'account';
+    const tabs = [
+      ['account', 'Compte'],
+      ['appearance', 'Apparence'],
+      ['language', 'Langues'],
+      ['about', 'À propos'],
+    ];
+    const tabGap = 6;
+    const tabW = (pw - 2 * pad - tabGap) / 2;
+    tabs.forEach(([tab, label], index) => {
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      const tx = dx + pad + col * (tabW + tabGap);
+      const ty = y + row * 38;
+      const selected = drawerTab === tab;
+      enregistrerBouton(state, tx, ty, tabW, 32,
+        { kind: 'selectDrawerTab', tab }, true, true, 9);
+      ctx.fillStyle = selected ? UI_THEME.wine : UI_THEME.card;
+      roundRect(ctx, tx, ty, tabW, 32, 9); ctx.fill();
+      ctx.lineWidth = selected ? 2 : 1;
+      ctx.strokeStyle = selected ? UI_THEME.amber : UI_THEME.border;
+      roundRect(ctx, tx, ty, tabW, 32, 9); ctx.stroke();
+      ctx.fillStyle = selected ? UI_THEME.buttonText : UI_THEME.text;
+      ctx.font = `700 10px ${F_DISPLAY}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(traduire(label, language).toUpperCase(), tx + tabW / 2, ty + 16);
+    });
+    y += 84;
 
     const entete = (label) => {
       ctx.fillStyle = UI_THEME.muted; ctx.font = `700 11px ${F_DISPLAY}`;
@@ -2144,66 +2391,120 @@ function dessineBandeauCompte(ctx, state) {
     };
 
     // --- COMPTE ---
-    entete(traduire('Compte', language));
-    if (connected) {
-      // Ligne pseudo + trophées (DA §11.3 : ambre/or).
-      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
-      ctx.fillText(('♟ ' + (acc.pseudo || '')).toUpperCase(), dx + pad, y + 12);
-      ctx.textAlign = 'right';
-      ctx.fillStyle = UI_THEME.amberDark; ctx.font = `14px ${F_DISPLAY}`;
-      ctx.fillText('🏆 ' + (acc.trophies || 0), dx + pw - pad, y + 12);
-      y += 30;
-      bouton(state, ctx, dx + pad, y, pw - 2 * pad, 34, 'Déconnexion', { kind: 'logout' },
-        { color: UI_THEME.card, textColor: UI_THEME.text });
-      y += 34;
-      bouton(state, ctx, dx + pad, y, pw - 2 * pad, 34, 'Activer la 2FA', { kind: 'mfa' },
-        { color: UI_THEME.primary, textColor: UI_THEME.text });
-      y += 34;
-    } else {
-      bouton(state, ctx, dx + pad, y, pw - 2 * pad, 40, 'Connexion', { kind: 'login' },
-        { color: UI_THEME.primary, textColor: UI_THEME.text, sub: 'sauvegarde ta progression' });
-      y += 40;
-      // Compteur RAM éphémère (spec §2.4) : seulement si des trophées ont été gagnés
-      // durant la session (perdus au reload).
-      if (acc.trophies > 0) {
+    if (drawerTab === 'account') {
+      entete(traduire('Compte', language));
+      if (connected) {
+        // Informations du compte réellement disponibles côté client.
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.fillStyle = UI_THEME.disabledText; ctx.font = `10px ${F_TEXTE}`;
-        ctx.fillText(`🏆 ${acc.trophies} ${traduire('éphémères — connecte-toi pour sauvegarder', language)}`, dx + pad, y + 8);
-        y += 16;
+        ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
+        ctx.fillText(('♟ ' + (acc.pseudo || '')).toUpperCase(), dx + pad, y + 12);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = UI_THEME.amberDark; ctx.font = `14px ${F_DISPLAY}`;
+        ctx.fillText('🏆 ' + (acc.trophies || 0), dx + pw - pad, y + 12);
+        y += 28;
+        ctx.textAlign = 'left'; ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
+        const email = String(acc.email || '');
+        const [emailLocal, emailDomain] = email.split('@');
+        const emailAffiche = emailLocal && emailDomain
+          ? `${emailLocal.slice(0, Math.min(2, emailLocal.length))}•••@${emailDomain}`
+          : (email.length > 31 ? `${email.slice(0, 28)}…` : email);
+        ctx.fillText(`${traduire('Email', language)} : ${emailAffiche || '—'}`, dx + pad, y + 8);
+        y += 18;
+        ctx.fillText(`${traduire('Statut', language)} : ${traduire('Compte connecté', language)}`, dx + pad, y + 8);
+        y += 24;
+        const accountButtonGap = 8;
+        const accountButtonW = (pw - 2 * pad - accountButtonGap) / 2;
+        bouton(state, ctx, dx + pad, y, accountButtonW, 32, 'Déconnexion', { kind: 'logout' },
+          { color: UI_THEME.card, textColor: UI_THEME.text });
+        bouton(state, ctx, dx + pad + accountButtonW + accountButtonGap, y,
+          accountButtonW, 32, 'Activer la 2FA', { kind: 'mfa' },
+          { color: UI_THEME.primary, textColor: UI_THEME.text });
+        y += 32;
+      } else {
+        bouton(state, ctx, dx + pad, y, pw - 2 * pad, 40, 'Connexion', { kind: 'login' },
+          { color: UI_THEME.primary, textColor: UI_THEME.text, sub: 'sauvegarde ta progression' });
+        y += 40;
+        // Compteur RAM éphémère (spec §2.4) : seulement si des trophées ont été gagnés
+        // durant la session (perdus au reload).
+        if (acc.trophies > 0) {
+          ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+          ctx.fillStyle = UI_THEME.disabledText; ctx.font = `10px ${F_TEXTE}`;
+          ctx.fillText(`🏆 ${acc.trophies} ${traduire('éphémères — connecte-toi pour sauvegarder', language)}`, dx + pad, y + 8);
+          y += 18;
+        }
+        ctx.textAlign = 'left'; ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
+        ctx.fillText(`${traduire('Statut', language)} : ${traduire('Mode invité', language)}`, dx + pad, y + 8);
       }
     }
-    y += 16;
 
-    // --- APPARE... ---
-    entete(traduire('Apparence', language));
-    bouton(state, ctx, dx + pad, y, pw - 2 * pad, 36, themeLabel, { kind: 'toggleTheme' },
-      { color: UI_THEME.card, textColor: UI_THEME.text });
-    y += 36 + 16;
+    // --- APPARENCE ---
+    if (drawerTab === 'appearance') {
+      entete(traduire('Apparence', language));
+      ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_TEXTE}`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(traduire('Choisis le thème qui te convient.', language), dx + pad, y + 4);
+      y += 30;
+      bouton(state, ctx, dx + pad, y, pw - 2 * pad, 36, themeLabel, { kind: 'toggleTheme' },
+        { color: UI_THEME.card, textColor: UI_THEME.text });
+    }
 
     // --- LANGUES ---
-    entete(traduire('Langues', language));
-    // Deux choix persistants : le bouton actif est signalé par un contour ambre.
-    const langOptions = [
-      ['fr', '🇫🇷  Français'],
-      ['en', '🇬🇧  English'],
-    ];
-    for (const [code, label] of langOptions) {
-      const selected = language === code;
-      enregistrerBouton(state, dx + pad, y, pw - 2 * pad, 36,
-        { kind: 'setLanguage', code }, true, true, 10);
-      ctx.fillStyle = selected ? UI_THEME.field : UI_THEME.card;
-      roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.fill();
-      ctx.lineWidth = selected ? 2 : 1; ctx.strokeStyle = selected ? UI_THEME.amberDark : UI_THEME.border;
-      roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.stroke();
-      ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_TEXTE}`;
-      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillText(traduire(label, language), dx + pad + 12, y + 18);
-      if (selected) {
-        ctx.fillStyle = UI_THEME.amber; ctx.font = `14px ${F_DISPLAY}`;
-        ctx.textAlign = 'right'; ctx.fillText('✓', dx + pw - pad - 12, y + 18);
+    if (drawerTab === 'language') {
+      entete(traduire('Langues', language));
+      ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_TEXTE}`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillText(traduire('Choisis la langue de l’interface.', language), dx + pad, y + 4);
+      y += 30;
+      const langOptions = [
+        ['fr', '🇫🇷  Français'],
+        ['en', '🇬🇧  English'],
+      ];
+      for (const [code, label] of langOptions) {
+        const selected = language === code;
+        enregistrerBouton(state, dx + pad, y, pw - 2 * pad, 36,
+          { kind: 'setLanguage', code }, true, true, 10);
+        ctx.fillStyle = selected ? UI_THEME.field : UI_THEME.card;
+        roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.fill();
+        ctx.lineWidth = selected ? 2 : 1; ctx.strokeStyle = selected ? UI_THEME.amberDark : UI_THEME.border;
+        roundRect(ctx, dx + pad, y, pw - 2 * pad, 36, 10); ctx.stroke();
+        ctx.fillStyle = UI_THEME.text; ctx.font = `13px ${F_TEXTE}`;
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText(traduire(label, language), dx + pad + 12, y + 18);
+        if (selected) {
+          ctx.fillStyle = UI_THEME.amber; ctx.font = `14px ${F_DISPLAY}`;
+          ctx.textAlign = 'right'; ctx.fillText('✓', dx + pw - pad - 12, y + 18);
+        }
+        y += 42;
       }
-      y += 42;
+    }
+
+    // --- À PROPOS ---
+    if (drawerTab === 'about') {
+      entete(traduire('But du jeu', language));
+      ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_TEXTE}`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      const aboutLines = [
+        'ROYCHEC est un jeu d’échecs augmenté. Capture le roi adverse pour gagner.',
+        'Déplace tes pièces, gagne des écus et achète des améliorations pour créer des ouvertures tactiques.',
+        'Les règles restent lisibles : chaque amélioration ouvre une nouvelle façon de jouer.',
+      ];
+      for (const line of aboutLines) {
+        const words = traduire(line, language).split(' ');
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (ctx.measureText(candidate).width > pw - 2 * pad && current) {
+            ctx.fillText(current, dx + pad, y);
+            y += 21;
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) { ctx.fillText(current, dx + pad, y); y += 28; }
+      }
+      ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
+      ctx.fillText(traduire('Fermer avec Échap', language), dx + pad, y + 12);
     }
 
     // Pied du drawer : mention de version discrète.
@@ -2244,6 +2545,315 @@ function dessineBandeauCompte(ctx, state) {
     }
   }
   ctx.restore();
+}
+
+function dessineMenuMobile(ctx, state) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  const pad = 16, inner = W - pad * 2;
+  const activeMode = state.menu?.activeMode || 'pvw';
+  const selectedDiff = state.menu?.difficulty || null;
+  const selectedSize = state.menu?.taille || 'std';
+  const C = UI_THEME;
+
+  ctx.fillStyle = C.background; ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(20, 0, 0, 20, 260, 340);
+  glow.addColorStop(0, `${C.wine}66`); glow.addColorStop(1, `${C.wine}00`);
+  ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
+  ctx.font = `600 28px Georgia, "Times New Roman", serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = C.text; ctx.fillText('♞ ROY', 18, 42);
+  ctx.fillStyle = C.amberLight; ctx.fillText('CHEC', 112, 42);
+
+  // Navigation d'apprentissage en premier : Tutoriel / Apprendre au-dessus de Jouer.
+  const modeY = 136, modeH = 230;
+  mobileCard(ctx, pad, modeY, inner, modeH, C.panel, 18);
+  mobileText(ctx, 'JOUER', pad + 16, modeY + 22, `700 12px ${F_DISPLAY}`, C.muted);
+  const modes = [['pvw', 'EN LIGNE'], ['pvp', 'LOCAL'], ['pvai', 'ORDINATEUR']];
+  const gap = 5, tabW = (inner - 32 - gap * 2) / 3;
+  modes.forEach(([id, label], i) => {
+    const x = pad + 16 + i * (tabW + gap), y = modeY + 38;
+    const selected = activeMode === id;
+    enregistrerBouton(state, x, y, tabW, 32, { kind: 'selectMode', mode: id }, true, true, 9);
+    ctx.fillStyle = selected ? C.wine : C.field; roundRect(ctx, x, y, tabW, 32, 9); ctx.fill();
+    ctx.lineWidth = selected ? 2 : 1; ctx.strokeStyle = selected ? C.amber : C.border;
+    roundRect(ctx, x, y, tabW, 32, 9); ctx.stroke();
+    mobileText(ctx, label, x + tabW / 2, y + 16, `700 8px ${F_DISPLAY}`,
+      selected ? C.buttonText : C.text, 'center');
+  });
+
+  const contentX = pad + 16, contentY = modeY + 82, contentW = inner - 32;
+  if (activeMode === 'pvp') {
+    mobileText(ctx, 'JOUEUR 1        VS        JOUEUR 2', contentX + contentW / 2, contentY + 20,
+      `700 12px ${F_DISPLAY}`, C.text, 'center');
+    mobileText(ctx, 'Partie locale · chacun son tour', contentX + contentW / 2, contentY + 49,
+      `10px ${F_TEXTE}`, C.muted, 'center');
+    mobileButton(state, ctx, contentX + 58, contentY + 72, contentW - 116, 38, 'Jouer',
+      { kind: 'pickMode', mode: 'pvp' }, { color: C.card, textColor: C.text });
+  } else if (activeMode === 'pvw') {
+    mobileText(ctx, 'PRÊT À CHERCHER UN ADVERSAIRE', contentX, contentY + 17, `700 10px ${F_DISPLAY}`);
+    mobileText(ctx, 'Classement estimé · partie en ligne', contentX, contentY + 40, `10px ${F_TEXTE}`, C.muted);
+    mobileButton(state, ctx, contentX + 54, contentY + 65, contentW - 108, 38, 'Lancer une recherche',
+      { kind: 'startSearch' }, { color: C.amber, textColor: C.buttonText });
+    if (state.resumeAvailable) {
+      mobileButton(state, ctx, contentX + 54, contentY + 109, contentW - 108, 36, 'Reprendre la partie',
+        { kind: 'resumeMatch' }, { color: C.primary, textColor: C.text });
+    }
+  } else {
+    mobileText(ctx, 'DIFFICULTÉ', contentX, contentY + 12, `700 10px ${F_DISPLAY}`, C.muted);
+    const diffGap = 5, diffW = (contentW - diffGap * 2) / 3;
+    ['Débutant', 'Intermédiaire', 'Avancé'].forEach((label, i) => mobileButton(state, ctx,
+      contentX + i * (diffW + diffGap), contentY + 27, diffW, 32, label,
+      { kind: 'pickDifficulty', level: i + 1 }, { color: selectedDiff === i + 1 ? C.wine : C.card,
+        textColor: C.text }));
+    mobileButton(state, ctx, contentX + 12, contentY + 70, contentW - 24, 36,
+      'Jouer contre l’ordinateur', { kind: 'pickMode', mode: 'pvai' },
+      { enabled: !!selectedDiff, color: C.primary, textColor: C.text });
+  }
+
+  const variantY = 382, variantH = 190;
+  mobileCard(ctx, pad, variantY, inner, variantH, C.panel, 18);
+  mobileText(ctx, 'RÉGLAGES DE PARTIE', pad + 16, variantY + 22, `700 11px ${F_DISPLAY}`, C.muted);
+  const variantRows = [
+    ['ÉCUS', ECONOMIES.slice(0, 3).map((item) => ({ value: item.id, label: item.id === 'standard' ? '30 max' : item.id === 'plafond15' ? '15 max' : '∞ max' })), 'pickEconomie', state.menu?.economie || 'standard'],
+    ['COMBAT', COMBATS.map((item) => ({ value: item.id, label: item.id === 'standard' ? '+2 / coup' : 'capture ×2' })), 'pickCombat', state.menu?.combat || 'standard'],
+    ['PLATEAU', [['std', '8 × 8'], ['l15', '15 × 8'], ['bonus', 'BONUS']].map(([value, label]) => ({ value, label })), 'pickTaille', selectedSize],
+  ];
+  variantRows.forEach(([label, options, kind, selectedValue], row) => {
+    const yy = variantY + 42 + row * 29;
+    mobileText(ctx, label, pad + 16, yy + 12, `700 8px ${F_DISPLAY}`, C.muted);
+    const startX = pad + 72, chipGap = 4;
+    const chipW = (inner - 88 - chipGap * (options.length - 1)) / options.length;
+    options.forEach(({ value, label: optionLabel }, i) => {
+      const selected = value === selectedValue;
+      mobileButton(state, ctx, startX + i * (chipW + chipGap), yy, chipW, 24, optionLabel,
+        { kind, value }, { color: selected ? (row === 1 ? C.wine : C.primary) : C.field,
+          textColor: selected ? C.text : C.muted });
+    });
+  });
+  // Decks appartient aux réglages de partie : il reste proche des variantes
+  // sans encombrer la grille de navigation principale.
+  // Même largeur, rayon et traitement que les contrôles de réglages ; la hauteur
+  // reste de 44 px pour conserver une cible tactile confortable.
+  mobileButton(state, ctx, pad + 72, variantY + 141, inner - 88, 24, 'DECKS  ›',
+    { kind: 'ouvrirDecks' }, { color: C.field, textColor: C.text });
+
+  const navY = 82, navW = (inner - 8) / 2;
+  mobileButton(state, ctx, pad, navY, navW, 44, '✦  TUTORIEL', { kind: 'tutoriel' }, { color: C.panelAlt, textColor: C.text });
+  mobileButton(state, ctx, pad + navW + 8, navY, navW, 44, '◎  APPRENDRE', { kind: 'apprendre' }, { color: C.wine, textColor: C.text });
+  // L’historique reste accessible dans sa carte dédiée sous l’aperçu.
+
+  // Sur téléphone, l’aperçu et l’historique partagent la même ligne : deux
+  // cartes équilibrées restent plus lisibles qu’une longue colonne unique.
+  const columnsGap = 12;
+  const columnW = (inner - columnsGap) / 2;
+  const previewX = pad;
+  const historyX = pad + columnW + columnsGap;
+  const previewY = 588;
+  const previewH = 360;
+  const historyY = previewY;
+  const historyH = previewH;
+  mobileCard(ctx, previewX, previewY, columnW, previewH, C.panel, 18);
+  mobileText(ctx, 'APERÇU', previewX + 12, previewY + 22, `700 10px ${F_DISPLAY}`, C.text);
+
+  // Même aperçu que sur ordinateur, mais compact : on conserve la vraie position
+  // initiale et les dimensions de `creerPlateau()` pour éviter un faux damier 8×8.
+  // Le plateau est construit avant la géométrie afin que toute taille future reste
+  // automatiquement cadrée (std/bonus = 8×8, l15 = 15×8).
+  const previewState = state.ui.preview[selectedSize] || state.ui.preview.std;
+  const previewMoves = previewSequence(selectedSize);
+  const previewBoard = decoratePreviewBoard(
+    clonePreviewBoard(previewBoardInitial(selectedSize)), selectedSize,
+  );
+  const previewRows = previewBoard.length || 8;
+  const previewCols = previewBoard[0]?.length || 8;
+  const previewPad = 8;
+  const previewTop = previewY + 42;
+  const previewBottom = previewY + previewH - 18;
+  // Ne bride pas l'aperçu standard à 18 px : sur un téléphone, la hauteur de la
+  // carte est la contrainte utile et un 8×8 doit rester lisible. Le plafond protège
+  // les écrans très hauts sans faire déborder le bouton et le cadre ambre.
+  const previewCell = Math.max(10, Math.min(
+    34,
+    (columnW - previewPad * 2) / previewCols,
+    (previewBottom - previewTop) / previewRows,
+  ));
+  const previewBoardW = previewCell * previewCols;
+  const previewBoardH = previewCell * previewRows;
+  const previewBoardX = previewX + (columnW - previewBoardW) / 2;
+  const previewBoardY = previewTop + Math.max(0, (previewBottom - previewTop - previewBoardH) / 2);
+  const previewNow = state.ui.frameNow || performance.now();
+  const previewStepMs = 1250;
+  const previewTotalMs = Math.max(previewStepMs, previewMoves.length * previewStepMs);
+  if (previewState.playing) {
+    if (previewState.startedAt == null) previewState.startedAt = previewNow - previewState.elapsed;
+    previewState.elapsed = Math.min(previewTotalMs, Math.max(0, previewNow - previewState.startedAt));
+    if (previewState.elapsed >= previewTotalMs) {
+      previewState.elapsed = previewTotalMs;
+      previewState.playing = false;
+      previewState.finished = true;
+      previewState.startedAt = null;
+    }
+  }
+  const previewElapsed = Math.min(previewTotalMs, Math.max(0, previewState.elapsed));
+  const previewMoveIndex = previewMoves.length
+    ? Math.min(previewMoves.length, Math.floor(previewElapsed / previewStepMs)) : 0;
+  const previewProgress = previewMoveIndex < previewMoves.length
+    ? (previewElapsed % previewStepMs) / previewStepMs : 1;
+  for (let i = 0; i < previewMoveIndex; i++) applyPreviewMove(previewBoard, previewMoves[i]);
+  const previewCurrent = previewMoves[previewMoveIndex] || null;
+  const previewPieceAt = (r, c) => previewBoard[r]?.[c] || null;
+  const previewGlyphs = { P: '♟', N: '♞', B: '♝', R: '♜', Q: '♛', K: '♚' };
+
+  // Le bouton couvre la carte du plateau : le geste est utilisable même si le
+  // doigt tombe entre deux cases ou sur une pièce.
+  enregistrerBouton(state, previewBoardX, previewBoardY, previewBoardW, previewBoardH,
+    { kind: 'togglePreview', taille: selectedSize }, true, true, 9);
+  ctx.fillStyle = C.amber;
+  roundRect(ctx, previewBoardX - 4, previewBoardY - 4, previewBoardW + 8, previewBoardH + 8, 9); ctx.fill();
+  for (let r = 0; r < previewRows; r++) {
+    for (let c = 0; c < previewCols; c++) {
+      ctx.fillStyle = (r + c) % 2 ? '#6B3A52' : '#F1E6D4';
+      ctx.fillRect(previewBoardX + c * previewCell, previewBoardY + r * previewCell,
+        previewCell + 0.5, previewCell + 0.5);
+    }
+  }
+  if (selectedSize === 'bonus') {
+    for (const bonus of PREVIEW_BONUS_CELLS) {
+      if (bonus.c >= previewCols) continue;
+      const bx = previewBoardX + (bonus.c + 0.5) * previewCell;
+      const by = previewBoardY + (bonus.r + 0.5) * previewCell;
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = C.amberLight;
+      ctx.beginPath(); ctx.arc(bx, by, Math.max(3, previewCell * 0.28), 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = C.amber;
+      ctx.lineWidth = Math.max(1, previewCell * 0.06);
+      ctx.beginPath();
+      ctx.moveTo(bx, by - previewCell * 0.2);
+      ctx.lineTo(bx + previewCell * 0.2, by);
+      ctx.lineTo(bx, by + previewCell * 0.2);
+      ctx.lineTo(bx - previewCell * 0.2, by);
+      ctx.closePath(); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  const drawPreviewPiece = (piece, r, c, x = previewBoardX + (c + 0.5) * previewCell,
+    y = previewBoardY + (r + 0.52) * previewCell) => {
+    if (!piece) return;
+    // L’aperçu téléphone doit parler le même langage visuel que la partie :
+    // sprite de camp réel, puis flamme derrière la pièce si une amélioration est
+    // équipée. Le glyph Unicode reste uniquement le fallback de chargement.
+    const img = spritePret(piece.owner, piece.type);
+    const fire = optionsFeuPour(piece);
+    const previewRadius = Math.max(8, previewCell * 0.72);
+    const previewStateRadius = Math.max(5, previewCell * 0.36);
+    if (fire) {
+      dessineFeu(ctx, x, y, previewNow, previewStateRadius,
+        fire.col1, fire.col2, fire.pulsed, previewRadius);
+    }
+    if (img) {
+      const ratio = img.naturalWidth / img.naturalHeight || 1;
+      const h = Math.max(8, previewCell * 0.88);
+      const w = h * ratio;
+      ctx.drawImage(img, x - w / 2, y - h / 2 - Math.max(0.5, previewCell * 0.03), w, h);
+    } else {
+      ctx.fillStyle = piece.owner === 1 ? C.wineDark : C.text;
+      ctx.font = `${Math.max(9, Math.min(19, previewCell * 0.82))}px Georgia, serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(previewGlyphs[piece.type] || '♟', x, y);
+    }
+    if (piece.shield) {
+      ctx.strokeStyle = C.primary;
+      ctx.lineWidth = Math.max(1, previewCell * 0.06);
+      ctx.beginPath(); ctx.arc(x, y, Math.max(4, previewCell * 0.4), 0, Math.PI * 2); ctx.stroke();
+    }
+  };
+  for (let r = 0; r < previewRows; r++) {
+    for (let c = 0; c < previewCols; c++) {
+      if (previewCurrent && ((r === previewCurrent.from.r && c === previewCurrent.from.c)
+        || (r === previewCurrent.to.r && c === previewCurrent.to.c))) continue;
+      drawPreviewPiece(previewPieceAt(r, c), r, c);
+    }
+  }
+  if (previewCurrent) {
+    const movingPiece = previewPieceAt(previewCurrent.from.r, previewCurrent.from.c);
+    if (movingPiece) {
+      const eased = previewProgress < 0.5
+        ? 2 * previewProgress * previewProgress
+        : 1 - Math.pow(-2 * previewProgress + 2, 2) / 2;
+      const movingX = previewBoardX + (previewCurrent.from.c + 0.5
+        + (previewCurrent.to.c - previewCurrent.from.c) * eased) * previewCell;
+      const movingY = previewBoardY + (previewCurrent.from.r + 0.52
+        + (previewCurrent.to.r - previewCurrent.from.r) * eased) * previewCell;
+      drawPreviewPiece(movingPiece, previewCurrent.to.r, previewCurrent.to.c, movingX, movingY);
+    }
+  }
+  const previewLabel = previewState.playing ? 'Ⅱ PAUSE'
+    : previewState.finished ? '↻ REJOUER' : '▶ LANCER';
+  const indicatorW = previewState.playing || previewState.finished ? 82 : 72;
+  const indicatorX = previewX + columnW - indicatorW - 8;
+  const indicatorY = previewY + 28;
+  enregistrerBouton(state, indicatorX, indicatorY, indicatorW, 22,
+    { kind: 'togglePreview', taille: selectedSize }, true, true, 999);
+  ctx.fillStyle = previewState.playing ? C.primary : previewState.finished ? C.amber : C.wine;
+  roundRect(ctx, indicatorX, indicatorY, indicatorW, 22, 999); ctx.fill();
+  mobileText(ctx, previewLabel, indicatorX + indicatorW / 2, indicatorY + 11,
+    `700 8px ${F_DISPLAY}`, C.text, 'center');
+
+  // Historique mobile : même source que le dashboard desktop, dans la seconde
+  // carte de la ligne côte à côte avec l’aperçu.
+  mobileCard(ctx, historyX, historyY, columnW, historyH, C.panel, 18);
+  mobileText(ctx, traduire('HISTORIQUE', state.language), historyX + 12, historyY + 24,
+    `700 10px ${F_DISPLAY}`, C.text);
+  const replays = (Array.isArray(state._replayList) ? state._replayList : [])
+    .filter((replay) => replay && typeof replay.key === 'string' && replay.key.length > 0);
+  const modeLabel = (mode) => mode === 'spectator' ? 'Spectateur'
+    : mode === 'pvai' ? 'Ordinateur'
+    : mode === 'pvw' ? 'En ligne' : 'Local';
+  const winnerIndex = (winner) => winner === 0 || winner === '0' ? 0
+    : winner === 1 || winner === '1' ? 1 : null;
+  const resultLabel = (winner) => {
+    const index = winnerIndex(winner);
+    return index === null ? 'Partie' : `${NOM_JOUEUR[index]} gagne`;
+  };
+  const shortDate = (timestamp) => {
+    const date = new Date(Number(timestamp));
+    if (!Number.isFinite(date.getTime())) return 'date inconnue';
+    return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+  };
+  if (!replays.length) {
+    mobileText(ctx, traduire('Aucune partie enregistrée', state.language), historyX + columnW / 2, historyY + 112,
+      `9px ${F_TEXTE}`, C.muted, 'center');
+    mobileText(ctx, traduire('Termine une partie pour la retrouver ici.', state.language), historyX + columnW / 2, historyY + 136,
+      `7px ${F_TEXTE}`, C.muted, 'center');
+  } else {
+    // Retour au design précédent : une ligne légère par partie, séparée de la
+    // suivante. On réduit l'écart à 4 px, tout en gardant une vraie cible tactile.
+    const listTop = historyY + 48;
+    const listBottom = historyY + historyH - 54;
+    const rowH = 44;
+    const rowGap = 4;
+    const maxVisible = Math.max(1, Math.floor((listBottom - listTop + rowGap) / (rowH + rowGap)));
+    const visibleReplays = replays.slice(0, maxVisible);
+    visibleReplays.forEach((replay, index) => {
+      const rowY = listTop + index * (rowH + rowGap);
+      enregistrerBouton(state, historyX + 8, rowY, columnW - 16, rowH,
+        { kind: 'startReplay', key: replay.key }, true, false, 7);
+      const mode = traduire(modeLabel(replay.mode), state.language);
+      const result = traduire(resultLabel(replay.winner), state.language);
+      const actions = `${Number(replay.totalActions) || 0} act.`;
+      mobileText(ctx, `${mode} · ${shortDate(replay.startTime)}`, historyX + 12, rowY + 15,
+        `8px ${F_TEXTE}`, C.muted);
+      mobileText(ctx, result, historyX + 12, rowY + 32,
+        `600 8px ${F_TEXTE}`, winnerIndex(replay.winner) === null ? C.muted : C.primary);
+      mobileText(ctx, actions, historyX + columnW - 12, rowY + 32,
+        `8px ${F_TEXTE}`, C.muted, 'right');
+    });
+  }
+  mobileButton(state, ctx, historyX + 8, historyY + historyH - 54, columnW - 16, 44,
+    'Toutes les parties', { kind: 'ouvrirReplays' }, { color: C.card, textColor: C.text });
+  dessineBandeauCompte(ctx, state);
 }
 
 // Dessine le menu d'accueil (SPEC §1.4 / §5.1). 2 boutons principaux +
@@ -2594,7 +3204,7 @@ function dessineMenuDashboard(ctx, state) {
     const deckY = mainY + mainH - deckH;
     const historyH = Math.max(174, deckY - historyY - 8);
     dbCard(x, historyY, w, historyH, C.panel, R_CARD);
-    dbText(traduire('HISTORIQUE DES PARTIES', state.language), x + 16, historyY + 25, `700 12px ${F_DB}`, C.text);
+    dbText(traduire('HISTORIQUE DES PARTIES', state.language), x + 16, historyY + 25, `700 11px ${F_DB}`, C.text);
     // Source réelle : la même liste que l'écran REPLAYS, alimentée par les
     // parties finalisées dans localStorage. Chaque ligne ouvre directement le
     // replay concerné ; aucun nom ou score fictif n'est injecté dans le menu.
@@ -2603,8 +3213,7 @@ function dessineMenuDashboard(ctx, state) {
     // synthèses avec une clé localStorage exploitable deviennent cliquables.
     const visibleReplays = replays
       .filter((replay) => replay && typeof replay === 'object'
-        && typeof replay.key === 'string' && replay.key.length > 0)
-      .slice(0, 7);
+        && typeof replay.key === 'string' && replay.key.length > 0);
     const modeLabel = (mode) => mode === 'spectator' ? traduire('Spectateur', state.language)
       : mode === 'pvai' ? traduire('Ordinateur', state.language)
       : mode === 'pvw' ? traduire('En ligne', state.language) : traduire('Local', state.language);
@@ -2626,25 +3235,33 @@ function dessineMenuDashboard(ctx, state) {
       dbText(traduire('Termine une partie pour la retrouver ici.', state.language), x + w / 2, historyY + 114,
         `10px ${F_DB}`, C.muted, 'center');
     } else {
-      for (let i = 0; i < visibleReplays.length; i++) {
-        const replay = visibleReplays[i];
-        const yy = historyY + 52 + i * 25;
-        // La ligne est une vraie cible de clic, en plus du bouton global.
+      // Retour à l'ancien rendu : lignes compactes séparées, plutôt qu'une
+      // liste remplie en bandes continues. La carte affiche autant de parties
+      // que sa hauteur le permet avant le bouton final.
+      const listTop = historyY + 40;
+      const listBottom = historyY + historyH - 40;
+      const rowH = 24;
+      const rowGap = 1;
+      const maxVisible = Math.max(1, Math.floor((listBottom - listTop + rowGap) / (rowH + rowGap)));
+      const rows = visibleReplays.slice(0, maxVisible);
+      for (let i = 0; i < rows.length; i++) {
+        const replay = rows[i];
+        const rowY = listTop + i * (rowH + rowGap);
         state.ui.buttons.push({
-          x: x + 10, y: yy - 12, w: w - 20, h: 24,
+          x: x + 10, y: rowY, w: w - 20, h: rowH,
           action: { kind: 'startReplay', key: replay.key }, enabled: true, radius: 7,
         });
         const mode = modeLabel(replay.mode);
         const actions = `${Number(replay.totalActions) || 0} act.`;
         const result = resultLabel(replay.winner);
         const date = shortDate(replay.startTime);
-        dbText(`${mode} · ${date}`, x + 16, yy, `10px ${F_DB}`, C.muted);
-        dbText(result, x + w - 52, yy, `600 10px ${F_DB}`,
+        dbText(`${mode} · ${date}`, x + 16, rowY + 12, `10px ${F_DB}`, C.muted);
+        dbText(result, x + w - 52, rowY + 12, `600 10px ${F_DB}`,
           winnerIndex(replay.winner) === null ? C.muted : C.forest, 'right');
-        dbText(actions, x + w - 16, yy + 11, `9px ${F_DB}`, C.muted, 'right');
+        dbText(actions, x + w - 16, rowY + 20, `8px ${F_DB}`, C.muted, 'right');
       }
     }
-    dbControl(x + 12, historyY + historyH - 40, w - 24, 30, 'Voir toutes les parties', { kind: 'ouvrirReplays' }, { fill: C.card, font: `600 10px ${F_DB}` });
+    dbControl(x + 12, historyY + historyH - 40, w - 24, 30, 'Toutes les parties', { kind: 'ouvrirReplays' }, { fill: C.card, font: `600 10px ${F_DB}`, radius: 8 });
     dbControl(x, deckY, w, deckH, 'DECKS  ›', { kind: 'ouvrirDecks' }, { fill: C.panelHi, font: `700 13px ${F_DB}` });
   }
 
@@ -2673,10 +3290,14 @@ function dessineMenuDashboard(ctx, state) {
       dbText('PRÊT À CHERCHER UN ADVERSAIRE', contentX + 30, contentY + 38, `700 13px ${F_DB}`, C.text);
       dbText('Classement estimé · partie en ligne', contentX + 30, contentY + 66, `11px ${F_DB}`, C.muted);
       dbCta(contentX + contentW - 250, contentY + 48, 220, 40, 'Lancer une recherche', { kind: 'startSearch' }, { fill: C.gold, stroke: C.goldBright, shadow: C.wineDark });
+      if (state.resumeAvailable) {
+        dbCta(contentX + contentW - 250, contentY + 94, 220, 36, 'Reprendre la partie',
+          { kind: 'resumeMatch' }, { fill: C.forest, stroke: C.forestDark, shadow: C.wineDark });
+      }
       // Badge CLASSÉ / HORS COMPÉTITION (GDD §7.2) : reflète dès le menu la config
       // choisie (variante + taille) — une partie en ligne n'est classée que si
       // Standard × Standard × 8×8, sinon HORS COMPÉTITION (aucun trophée en jeu).
-      dessineBadgeClasse(ctx, state, contentX + contentW / 2, contentY + 112,
+      dessineBadgeClasse(ctx, state, contentX + contentW / 2, contentY + 129,
         variantIdFromMenu(state),
         (state.menu && state.menu.taille) || 'std');
     } else {
@@ -3746,7 +4367,8 @@ export function render(ctx, state, now) {
 
   // SPEC §1.4 : menu d'accueil — occupe tout le canvas, on ne dessine rien d'autre.
   if (state.phase === 'menu') {
-    dessineMenuDashboard(ctx, state);
+    if (state.ui && state.ui.mobile) dessineMenuMobile(ctx, state);
+    else dessineMenuDashboard(ctx, state);
     finaliserBoutons(ctx, state);
     return;
   }
@@ -3863,7 +4485,7 @@ export function render(ctx, state, now) {
   if (state.mode === 'tutorial') dessineTutorielCibles(ctx, state, now);
   if (state.mode === 'learn') dessineLearnCibles(ctx, state, now);
   dessinePopups(ctx, state, now);
-  dessinePanneau(ctx, state, now);
+  dessinePanneauGameplay(ctx, state, now);
   if (state.mode === 'learn' && state.phase === 'learn-success') dessineLearnSuccess(ctx, state);
   if (state.mode === 'learn' && state.phase === 'puzzle-success') dessinePuzzleSuccess(ctx, state);
 

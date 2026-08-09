@@ -884,10 +884,10 @@ export const PUZZLES = [
     hint: (state) => state.phase === 'ruee-target' ? { cells: [{ r: 5, c: 6 }] } : { cells: [{ r: 4, c: 4 }] },
     failMessage: 'Ne déplace pas le cavalier sur g3 : la tour en g7 contrôle cette case. Utilise Ruée depuis e4.',
     response: { from: { r: 0, c: 7 }, to: { r: 1, c: 7 }, text: 'Le pion adverse avance ; la tour garde g3.', color: '#B86F6B' },
-    power: 'ruee', check: (state) => state.puzzlePurchased && state.puzzleResponseDone
+    power: 'ruee', check: (state) => state.puzzlePurchased
       && !state.board[5][6]
-      && state.board[4][3]?.type === 'N'
-      && state.board[4][3].upgrades.includes('ruee'),
+      && state.board[4][4]?.type === 'N'
+      && state.board[4][4].upgrades.includes('ruee'),
   },
   {
     id: 'puzzle-feinte', title: 'Le saut impossible', upgrade: 'Feinte', upgradeId: 'feinte',

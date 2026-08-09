@@ -36,6 +36,7 @@ const SUPABASE_KEY = 'sb_publishable_3wwsNqBwmetZWsKk6KjKWQ_Rr2G7Qv0';
 //            'connected'  = compte prêt (pseudo affiché au menu)
 const account = {
   status: 'guest',
+  id: null,
   pseudo: null,
   trophies: 0, // non utilisé au cycle A (persistance des trophées = cycle B)
   email: null,
@@ -847,6 +848,7 @@ async function confirmerPseudo() {
 //  - table profiles ABSENTE (schema.sql pas encore exécuté) → écran pseudo + message clair
 //    à l'INSERT. Le code ne doit jamais bloquer sur l'absence de la table.
 async function chargerProfil(user) {
+  account.id = user && user.id ? user.id : null;
   account.email = user && user.email ? user.email : null;
   try {
     const { data, error } = await supabase
@@ -872,6 +874,7 @@ async function chargerProfil(user) {
 
 function setGuest() {
   account.status = 'guest';
+  account.id = null;
   account.pseudo = null;
   account.trophies = 0;
   account.email = null;

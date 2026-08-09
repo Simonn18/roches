@@ -336,10 +336,14 @@ function demarrerHandshake(isPrivate = false) {
     online.channel.on('broadcast', { event: 'action' }, (payload) => {
       const msg = payload.payload;
       if (msg.kind === 'hello') {
-        // L'adversaire dit bonjour — répondre ready (que le timer existe ou non).
+        // En reprise, l'adversaire peut rejoindre un canal où je suis déjà en partie.
+        // Je réponds au handshake, mais je NE repasse jamais de `playing` à `ready` :
+        // sinon la partie survivante ne répondrait plus correctement au resync.
+        const alreadyPlaying = online.status === 'playing';
         envoyerMessage({ kind: 'hello', side: online.side });
         clearHandshake();
         envoyerMessage({ kind: 'ready', side: online.side });
+        if (alreadyPlaying) return;
         if (!online._readyFired) {
           online._readyFired = true;
           online.status = 'ready';
@@ -510,6 +514,69 @@ function oppPresent() {
 // ---------------------------------------------------------------------------
 // CYCLE W2 — synchro des coups en lockstep (design/spec-pvp-online.md §5)
 // ---------------------------------------------------------------------------
+
+/** Reconnecte directement un match encore en cours après un rechargement.
+ * La ligne est relue côté serveur : le stockage local ne sert jamais d'autorisation.
+ * RLS garantit en plus que seul p1/p2 peut lire le match. */
+export async function resumeMatch(matchId, side, meta = {}) {
+  if (!online.supabase || !matchId) {
+    online.error = 'Reprise indisponible hors connexion.';
+    online.status = 'error';
+    return false;
+  }
+  try {
+    // `taille` a été ajoutée par une migration ultérieure. On tente la lecture
+    // complète, puis une forme compatible avec les anciens schémas pour qu'une
+    // partie standard reste reprenable avant le déploiement de cette migration.
+    const selects = [
+      'id,status,cadence,variant,taille,p1_trophies,p2_trophies',
+      'id,status,cadence,variant,p1_trophies,p2_trophies',
+      'id,status,cadence,variant',
+      'id,status',
+    ];
+    let data = null;
+    let error = null;
+    for (const columns of selects) {
+      const result = await online.supabase
+        .from('matches')
+        .select(columns)
+        .eq('id', matchId)
+        .maybeSingle();
+      data = result.data;
+      error = result.error;
+      if (!error) break;
+      const detail = String(error.message || error.code || '').toLowerCase();
+      if (!/column|schema cache|does not exist|could not find/i.test(detail)) break;
+    }
+    if (error) throw error;
+    if (!data || data.status !== 'playing') {
+      const terminal = data && ['ended', 'disputed', 'voided'].includes(data.status);
+      online.error = terminal
+        ? 'Cette partie est terminée ou annulée.'
+        : data
+          ? 'Cette partie n’est pas encore disponible pour une reprise.'
+          : 'Impossible de vérifier cette partie.';
+      online.status = 'error';
+      return false;
+    }
+    online.matchId = data.id;
+    online.side = side === 1 ? 1 : 0;
+    online.oppPseudo = meta.oppPseudo || null;
+    online.oppTrophies = meta.oppTrophies ?? null;
+    online.cadence = data.cadence | 0 || meta.cadence | 0 || 300;
+    online.variant = data.variant || meta.variant || 'pvp_standard';
+    online.taille = data.taille || meta.taille || 'std';
+    online.status = 'matched';
+    online.error = null;
+    // Handshake privé : le match existe déjà, il n'y a pas de timeout de recherche.
+    return demarrerHandshake(true);
+  } catch (e) {
+    console.warn('[online] resumeMatch', e && (e.message || e));
+    online.error = 'Impossible de vérifier cette partie.';
+    online.status = 'error';
+    return false;
+  }
+}
 
 /** Marque le passage en partie jouable (au 'ready' du handshake). Remet le compteur
  *  d'actions et la file à zéro (le side 0 émettra seq=1 en premier). */
