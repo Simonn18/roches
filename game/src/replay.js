@@ -2,7 +2,7 @@
 // Hooké dans main.js (jouerCoup, acheter, pouvoirs, finPartie).
 // Sortie : markdown téléchargeable + localStorage (max 20 parties).
 import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP, UPGRADES } from './constants.js?v=110';
-import { traduire } from './i18n.js?v=6';
+import { traduire } from './i18n.js?v=8';
 import { VARIANT_PRESETS, ECONOMIES, COMBATS, DEFAULT_VARIANT } from './variants.js?v=108';
 // Phase A.5 v2 : toAlgebraic doit connaître la hauteur du plateau pour encoder
 // correctement les rangées sous forme algébrique (8 - r sur plateau 8×N).

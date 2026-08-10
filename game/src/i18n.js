@@ -63,7 +63,7 @@ const TEXT = {
     'REPLAYS': 'REPLAYS',
     'Menu principal': 'Main menu',
     '← Menu principal': '← Main menu',
-    '← Menu APPRENDRE': '← Learn menu',
+    '← Menu Apprendre': '← Learn menu',
     '← Menu puzzles': '← Puzzle menu',
     '← Parcours classique': '← Classic path',
     '✦ Puzzles tactiques': '✦ Tactical puzzles',
@@ -385,7 +385,7 @@ const TEXT = {
     'Le bouclier royal': 'The royal shield',
     'Le mariage stratégique': 'The strategic marriage',
     'La tour en embuscade': 'The ambush rook',
-    'Ta tour est menacée par le cavalier et par la tour adverse. Trouve une manière de mettre la pression sur la cavalier sans rester dans le champ d’action de la tour.': 'Your rook is threatened by the knight and the opposing rook. Find a way to pressure the knight without staying in the rook’s line of fire.',
+    'Ta tour est menacée par le cavalier et la tour adverse. Mets la pression sur le cavalier sans rester dans le champ de la tour.': 'Your rook is threatened by the knight and the enemy rook. Pressure the knight without staying in the rook\'s line of fire.',
     'Les améliorations': 'Upgrades',
     'case après case': 'one level at a time',
     'Dame': 'Queen',
@@ -659,10 +659,10 @@ const TEXT = {
 
     // Descriptions des puzzles tactiques : titre, résumé, détail, objectif,
     // erreurs et réponses adverses sont aussi affichés dans le canvas.
-    'Ta tour est menacée par le cavalier et par la tour adverse. Trouve une manière de mettre la pression sur la cavalier sans rester dans le champ d’action de la tour.': 'Your rook is threatened by the knight and the opposing rook. Find a way to pressure the knight without staying in the rook’s line of fire.',
+    'Ta tour est menacée par le cavalier et la tour adverse. Mets la pression sur le cavalier sans rester dans le champ de la tour.': 'Your rook is threatened by the knight and the enemy rook. Pressure the knight without staying in the rook\'s line of fire.',
     "La tour doit franchir l'obstacle maintenant : chaque autre coup laisse la ligne se fermer.": 'The rook must jump over the obstacle now: any other move lets the line close.',
     'Les renforts avancent.': 'The reinforcements advance.',
-    "Ta tour est menacée par le cavalier et par la tour adverse. Trouve une manière de mettre la pression sur la cavalier sans rester dans le champ d'action de la tour.": 'Your rook is threatened by the knight and the opposing rook. Find a way to pressure the knight without staying in the rook\'s line of fire.',
+    "Ta tour est menacée par le cavalier et la tour adverse. Mets la pression sur le cavalier sans rester dans le champ de la tour.": 'Your rook is threatened by the knight and the enemy rook. Pressure the knight without staying in the rook\'s line of fire.',
     "Achète Enjambeur, franchis l'obstacle, puis observe la réponse adverse. Une autre pièce ennemie garde la case de sortie.": 'Buy Vault, jump over the obstacle, then watch the opponent respond. Another enemy piece guards the landing square.',
     "Atteindre la case derrière l'obstacle": 'Reach the square behind the obstacle',
     'La ligne bloquée': 'The blocked line',
@@ -707,7 +707,7 @@ const TEXT = {
     '✓ ${puzzle.upgrade} acheté — résous la position': '✓ ${puzzle.upgrade} bought — solve the position',
 
     // Descriptions complètes des puzzles tactiques.
-    'Ta tour est menacée par le cavalier et par la tour adverse. Trouve une manière de mettre la pression sur la cavalier sans rester dans le champ d\'action de la tour.': 'Your rook is threatened by the knight and the opposing rook. Find a way to pressure the knight without staying in the rook\'s line of fire.',
+    'Ta tour est menacée par le cavalier et la tour adverse. Mets la pression sur le cavalier sans rester dans le champ de la tour.': 'Your rook is threatened by the knight and the enemy rook. Pressure the knight without staying in the rook\'s line of fire.',
     "Achète Enjambeur, franchis l'obstacle, puis observe la réponse adverse. Une autre pièce ennemie garde la case de sortie.": 'Buy Vault, jump over the obstacle, then watch the opponent respond. Another enemy piece guards the landing square.',
     "Atteindre la case derrière l'obstacle": 'Reach the square behind the obstacle',
     "La tour doit franchir l'obstacle maintenant : chaque autre coup laisse la ligne se fermer.": 'The rook must jump over the obstacle now: any other move lets the line close.',

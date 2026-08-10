@@ -9,7 +9,7 @@ import {
   demarrerPuzzle,
   learnPermet,
   puzzleReponse,
-} from '../game/src/learn.js?v=19';
+} from '../game/src/learn.js?v=23';
 import { UPGRADES } from '../game/src/constants.js?v=110';
 import { coupsLegaux, roiEnEchec } from '../game/src/rules.js?v=116';
 

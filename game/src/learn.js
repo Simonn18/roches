@@ -852,7 +852,7 @@ export const PUZZLES = [
   {
     id: 'puzzle-enjambeur', title: 'La ligne bloquée', upgrade: 'Enjambeur', upgradeId: 'enjambeur',
     category: 'PUZZLE · DÉPLACEMENT', cost: 6, color: '#8FB8E0',
-    text: "Ta tour est menacée par le cavalier et par la tour adverse. Trouve une manière de mettre la pression sur la cavalier sans rester dans le champ d'action de la tour.",
+    text: "Ta tour est menacée par le cavalier et la tour adverse. Mets la pression sur le cavalier sans rester dans le champ de la tour.",
     detail: "Achète Enjambeur, franchis l'obstacle, puis observe la réponse adverse. Une autre pièce ennemie garde la case de sortie.",
     objective: "Atteindre la case derrière l'obstacle", setup: scenarioPuzzleEnjambeur,
     hint: (state) => ({ cells: state.puzzlePurchased ? [{ r: 4, c: 6 }] : [{ r: 4, c: 4 }] }),

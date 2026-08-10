@@ -14,7 +14,7 @@
 // l'inscription (envoie un email de confirmation Supabase). Le magic link reste
 // disponible via un toggle dans l'overlay.
 //
-import { appliquerTraductions, lireLangue, onLangueChange, traduire } from './i18n.js?v=6';
+import { appliquerTraductions, lireLangue, onLangueChange, traduire } from './i18n.js?v=8';
 
 // ISOLATION (garde-fou CLAUDE.md §7.3) : c'est le SEUL module du projet qui connaît
 // Supabase. Le reste du jeu ne voit qu'un objet d'état plat (getAccount()) et trois

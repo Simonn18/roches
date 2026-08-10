@@ -4,7 +4,7 @@
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=208';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=211';
 import { iaDecideTour } from './ai.js?v=111';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
@@ -14,7 +14,7 @@ import { demarrerApprendre, demarrerPuzzles, demarrerMiniJeu, demarrerPuzzle,
   reinitialiserMiniJeu, reinitialiserPuzzle, verifierMiniJeu, verifierPuzzle,
   marquerMiniJeuReussi, marquerPuzzleReussi, marquerPuzzleReponse, puzzleReponse,
   TOTAL_LEARN_GAMES, TOTAL_PUZZLES,
-  apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
+  apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=23';
 import { initAccount, startAuth, logout, ouvrirActivationMfa, getAccount, getSupabaseClient } from './account.js?v=110';
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, resumeMatch, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue, requestResync, sendResync,
@@ -33,7 +33,7 @@ import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBAT
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
 import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
-import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=6';
+import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=8';
 // La langue pilote à la fois le Canvas et les overlays DOM (auth + renommage de deck).
 // Un seul listener global évite qu'un modal oublié reste en français après le toggle.
 

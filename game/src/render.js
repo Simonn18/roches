@@ -29,8 +29,8 @@ import { STEPS, TOTAL_STEPS, progressionTutoriel, tutorielEtapeDebloquee, tutori
 // pour l'affichage). Aucune dépendance inverse.
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
-  apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
-import { traduire } from './i18n.js?v=6';
+  apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=23';
+import { traduire } from './i18n.js?v=8';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -551,7 +551,7 @@ function carte(ctx, x, y, w, h, r, fill, { shadow = true, stroke = UI_THEME.bord
   }
 }
 
-function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '', color = UI_THEME.card, textColor = UI_THEME.text, subColor = UI_THEME.subtext, outlineColor = UI_THEME.border, disabledColor = UI_THEME.disabled, disabledTextColor = UI_THEME.disabledText, disabledOutlineColor = UI_THEME.disabledBorder } = {}) {
+function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '', fontSize = 13, color = UI_THEME.card, textColor = UI_THEME.text, subColor = UI_THEME.subtext, outlineColor = UI_THEME.border, disabledColor = UI_THEME.disabled, disabledTextColor = UI_THEME.disabledText, disabledOutlineColor = UI_THEME.disabledBorder } = {}) {
   label = traduire(label, state && state.language);
   sub = traduire(sub, state && state.language);
   const button = enregistrerBouton(state, x, y, w, h, action, enabled, true);
@@ -581,7 +581,7 @@ function bouton(state, ctx, x, y, w, h, label, action, { enabled = true, sub = '
   roundRect(ctx, x, visualY, w, h, r); ctx.stroke();
   // Même police, taille et alignement que sur ordinateur.
   ctx.fillStyle = enabled ? textColor : disabledTextColor;
-  ctx.font = `13px ${F_DISPLAY}`;
+  ctx.font = `${fontSize}px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const textX = x + w / 2;
   ctx.fillText(label.toUpperCase(), textX, visualY + h / 2 - (sub ? 7 : 0));
@@ -3041,7 +3041,9 @@ function dessineMenuMobile(ctx, state) {
     : previewState.finished ? '↻ REJOUER' : '▶ LANCER';
   const indicatorW = previewState.playing || previewState.finished ? 82 : 72;
   const indicatorX = previewX + columnW - indicatorW - 8;
-  const indicatorY = previewY + 28;
+  // Bouton aligné verticalement sur le titre « APERÇU » (centré à previewY + 22,
+  // hauteur 22 → top à previewY + 11) pour une ligne de titre équilibrée.
+  const indicatorY = previewY + 11;
   enregistrerBouton(state, indicatorX, indicatorY, indicatorW, 22,
     { kind: 'togglePreview', taille: selectedSize }, true, true, 999);
   ctx.fillStyle = previewState.playing ? C.primary : previewState.finished ? C.amber : C.wine;
@@ -4703,44 +4705,50 @@ function dessineLearnPanel(ctx, state, now) {
     ctx.fillStyle = game.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
     ctx.fillText(`${traduire(game.title, state.language).toUpperCase()} · ${traduire(game.upgrade, state.language).toUpperCase()}`, x, OY + 30);
     dessineCatalogue(ctx, state, x, OY + 48, w, now);
-    bouton(state, ctx, x, CANVAS_H - 92, w, 34, '↻ Recommencer', { kind: 'learnRestart' },
-      { color: UI_THEME.card, textColor: UI_THEME.text });
-    bouton(state, ctx, x, CANVAS_H - 50, w, 34, '← Menu APPRENDRE', { kind: 'learnHub' },
-      { color: UI_THEME.primary, textColor: UI_THEME.text });
+    // Pied de page compact : deux boutons côte à côte en petit, pour laisser
+    // toute la place au catalogue au-dessus.
+    const footGap = 8, footW = (w - footGap) / 2, footY = CANVAS_H - 48;
+    bouton(state, ctx, x, footY, footW, 34, '↻ Recommencer', { kind: 'learnRestart' },
+      { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 10 });
+    bouton(state, ctx, x + footW + footGap, footY, footW, 34, '← Menu Apprendre', { kind: 'learnHub' },
+      { color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10 });
     return;
   }
   ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';    ctx.fillText(traduire('APPRENDRE', state.language), x, OY + 8);
 
-  carte(ctx, x, OY + 22, w, 178, 10, UI_THEME.panel, { shadow: true });
+  carte(ctx, x, OY + 22, w, 150, 10, UI_THEME.panel, { shadow: true });
   ctx.fillStyle = game.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
-  ctx.fillText(traduire(game.category, state.language), x + 14, OY + 42);
-  ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`;
-  learnWrap(ctx, traduire(game.title, state.language), x + 14, OY + 66, w - 28, 21, 2);
-  ctx.fillStyle = UI_THEME.muted; ctx.font = `12px ${F_TEXTE}`;
-  learnWrap(ctx, traduire(game.text, state.language), x + 14, OY + 104, w - 28, 17, 3);
+  ctx.fillText(traduire(game.category, state.language), x + 14, OY + 34);
+  ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
+  learnWrap(ctx, traduire(game.title, state.language), x + 14, OY + 52, w - 28, 20, 2);
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
+  learnWrap(ctx, traduire(game.text, state.language), x + 14, OY + 92, w - 28, 15, 3);
   ctx.fillStyle = UI_THEME.gold || UI_THEME.amber; ctx.font = `700 11px ${F_TEXTE}`;
-  learnWrap(ctx, traduire(`Objectif : ${game.objective}`, state.language), x + 14, OY + 158, w - 28, 15, 2);
+  learnWrap(ctx, traduire(`Objectif : ${game.objective}`, state.language), x + 14, OY + 128, w - 28, 14, 2);
 
   const hint = apprendreHint(state);
   if (state.selected && !state.learnPurchased && game.upgradeId) {
-    bouton(state, ctx, x, OY + 214, w, 38, 'Acheter l’amélioration', { kind: 'ameliorer' },
+    bouton(state, ctx, x, OY + 184, w, 38, 'Acheter l’amélioration', { kind: 'ameliorer' },
       { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: `${traduire(game.upgrade, state.language)} · ${game.cost} ${traduire('écus', state.language)}` });
   }
   if (hint && state.selected && game.power && state.learnPurchased) {
     const actionByPower = { ruee: 'ruee', rayon: 'rayon', vet: 'vet', hypnose: 'hypnose', decret: 'decret', cavalerie: 'cavalerie', echange: 'echange', epine: 'epine', rempart: 'rempart' };
     const kind = actionByPower[game.power];
-    if (kind) bouton(state, ctx, x, OY + 214, w, 38, game.power.toUpperCase(), { kind },
+    if (kind) bouton(state, ctx, x, OY + 184, w, 38, game.power.toUpperCase(), { kind },
       { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'activer maintenant' });
   }
   if (state.selected) {
     ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
-    ctx.fillText(traduire(state.learnPurchased ? 'Amélioration achetée · joue sur le plateau' : 'Pièce sélectionnée · achète d’abord l’amélioration', state.language), x, OY + 278);
+    ctx.fillText(traduire(state.learnPurchased ? 'Amélioration achetée · joue sur le plateau' : 'Pièce sélectionnée · achète d’abord l’amélioration', state.language), x, OY + 234);
   }
-  bouton(state, ctx, x, CANVAS_H - 92, w, 34, '↻ Recommencer', { kind: 'learnRestart' },
-    { color: UI_THEME.card, textColor: UI_THEME.text });
-  bouton(state, ctx, x, CANVAS_H - 50, w, 34, '← Menu APPRENDRE', { kind: 'learnHub' },
-    { color: UI_THEME.primary, textColor: UI_THEME.text });
+  // Pied de page compact : « Recommencer » et « Menu Apprendre » côte à côte,
+  // pour laisser tout l'espace au bouton d'amélioration au-dessus.
+  const footGap = 8, footW = (w - footGap) / 2, footY = CANVAS_H - 48;
+  bouton(state, ctx, x, footY, footW, 34, '↻ Recommencer', { kind: 'learnRestart' },
+    { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 10 });
+  bouton(state, ctx, x + footW + footGap, footY, footW, 34, '← Menu Apprendre', { kind: 'learnHub' },
+    { color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10 });
 }
 
 function dessinePuzzlePanel(ctx, state, now) {
@@ -4762,41 +4770,49 @@ function dessinePuzzlePanel(ctx, state, now) {
   } else {
     ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillText(traduire('PUZZLE', state.language), x, OY + 8);
-    carte(ctx, x, OY + 22, w, 210, 10, UI_THEME.panel, { shadow: true });
+    carte(ctx, x, OY + 22, w, 166, 10, UI_THEME.panel, { shadow: true });
     ctx.fillStyle = puzzle.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
-    ctx.fillText(traduire(puzzle.category, state.language), x + 14, OY + 42);
-    ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`;
-    learnWrap(ctx, traduire(puzzle.title, state.language), x + 14, OY + 66, w - 28, 21, 2);
-    ctx.fillStyle = UI_THEME.muted; ctx.font = `12px ${F_TEXTE}`;
-    learnWrap(ctx, traduire(puzzle.text, state.language), x + 14, OY + 104, w - 28, 17, 4);
+    ctx.fillText(traduire(puzzle.category, state.language), x + 14, OY + 34);
+    ctx.fillStyle = UI_THEME.text; ctx.font = `16px ${F_DISPLAY}`;
+    learnWrap(ctx, traduire(puzzle.title, state.language), x + 14, OY + 52, w - 28, 20, 2);
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
+    learnWrap(ctx, traduire(puzzle.text, state.language), x + 14, OY + 92, w - 28, 15, 4);
     ctx.fillStyle = UI_THEME.amber; ctx.font = `700 11px ${F_TEXTE}`;
-    learnWrap(ctx, traduire(`Objectif : ${puzzle.objective}`, state.language), x + 14, OY + 176, w - 28, 15, 2);
+    learnWrap(ctx, traduire(`Objectif : ${puzzle.objective}`, state.language), x + 14, OY + 154, w - 28, 14, 2);
+
+    // Statut de résolution : le feedback s'affiche sous la fiche (il débordait
+    // de l'ancienne carte). Le bouton d'action descend seulement quand le
+    // feedback occupe l'espace, pour rester au plus près du plateau sinon.
+    const actionY = state.puzzleFeedback ? OY + 244 : OY + 204;
     if (state.puzzleFeedback) {
       ctx.fillStyle = UI_THEME.dangerText || '#F4EDEA';
       ctx.font = `700 11px ${F_TEXTE}`;
-      learnWrap(ctx, traduire(state.puzzleFeedback, state.language), x + 14, OY + 210, w - 28, 15, 3);
+      learnWrap(ctx, traduire(state.puzzleFeedback, state.language), x + 2, OY + 196, w - 4, 14, 3);
     }
 
     if (state.selected && !state.puzzlePurchased) {
-      bouton(state, ctx, x, OY + 246, w, 38, 'Acheter la solution', { kind: 'ameliorer' },
+      bouton(state, ctx, x, actionY, w, 38, 'Acheter la solution', { kind: 'ameliorer' },
         { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: `${traduire(puzzle.upgrade, state.language)} · ${puzzle.cost} ${traduire('écus', state.language)}` });
     }
     if (state.puzzlePurchased) {
       ctx.fillStyle = UI_THEME.primaryDark; ctx.font = `700 12px ${F_TEXTE}`;
-      ctx.fillText(traduire(`✓ ${puzzle.upgrade} acheté — résous la position`, state.language), x, OY + 246);
+      ctx.fillText(traduire(`✓ ${puzzle.upgrade} acheté — résous la position`, state.language), x, actionY);
       if (state.selected && puzzle.power && state.phase === 'play') {
         const actionByPower = { ruee: 'ruee', sacrifice: 'sacrifice', echange: 'echange' };
         const kind = actionByPower[puzzle.power];
-        if (kind) bouton(state, ctx, x, OY + 266, w, 38, puzzle.power.toUpperCase(), { kind },
+        if (kind) bouton(state, ctx, x, actionY + 22, w, 38, puzzle.power.toUpperCase(), { kind },
           { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'activer maintenant' });
       }
     }
   }
 
-  bouton(state, ctx, x, CANVAS_H - 92, w, 34, '↻ Recommencer', { kind: 'puzzleRestart' },
-    { color: UI_THEME.card, textColor: UI_THEME.text });
-  bouton(state, ctx, x, CANVAS_H - 50, w, 34, '← Menu puzzles',
-    { kind: 'puzzleHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
+  // Pied de page compact : « Recommencer » et « Menu puzzles » côte à côte,
+  // pour laisser tout l'espace au bouton d'action au-dessus.
+  const footGap = 8, footW = (w - footGap) / 2, footY = CANVAS_H - 48;
+  bouton(state, ctx, x, footY, footW, 34, '↻ Recommencer', { kind: 'puzzleRestart' },
+    { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 10 });
+  bouton(state, ctx, x + footW + footGap, footY, footW, 34, '← Menu puzzles',
+    { kind: 'puzzleHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10 });
 }
 
 function dessinePuzzleSuccess(ctx, state) {
