@@ -5,7 +5,7 @@
 // main.js et render.js consultent tutorielPermet() avant d'agir, si bien
 // qu'aucun clic ne peut sortir l'étape de son scénario ni casser le jeu.
 import { creerPiece } from './board.js?v=109';
-import { UPGRADES, CELL, OX, OY } from './constants.js?v=109';
+import { UPGRADES, CELL, OX, OY } from './constants.js?v=110';
 // Variantes locales (GDD §7.2 v3, delivré 12/07) : basePlateau doit poser
 // state.variant pour que crediterCoup() (rewiré dans le lot variantes) lise
 // v.revenueBase / v.plafond / v.captureMul sans crasher. capturesDep pour

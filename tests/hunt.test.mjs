@@ -8,7 +8,7 @@ import {
   UPGRADES,
   UPGRADES_PAR_TYPE,
   MAX_UPGRADES_PAR_PIECE,
-} from '../game/src/constants.js?v=109';
+} from '../game/src/constants.js?v=110';
 import { initialiserChasse, recolterChasse } from '../game/src/hunt.js?v=3';
 
 const TYPES = ['P', 'N', 'B', 'R', 'Q', 'K'];

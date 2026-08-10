@@ -4,7 +4,7 @@
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=204';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=208';
 import { iaDecideTour } from './ai.js?v=111';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
@@ -26,14 +26,14 @@ import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck
 import {
   UPGRADES, UPGRADES_PAR_TYPE, VALEUR_PIECE, REVENU_PAR_COUP,
   MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT, UI_THEME, UI_THEMES,
-} from './constants.js?v=109';
+} from './constants.js?v=110';
 import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js?v=108';
 // Phase A.5 v2 Phase 3 : import des TAILLES_DE_PLATEAU depuis la maison canonique
 // (zero-dep, cf. tailles.js + commit ba30d273). `TAILLES` n'est pas directement utilisé
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
 import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
-import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=5';
+import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=6';
 // La langue pilote à la fois le Canvas et les overlays DOM (auth + renommage de deck).
 // Un seul listener global évite qu'un modal oublié reste en français après le toggle.
 

@@ -10,7 +10,7 @@ import {
   learnPermet,
   puzzleReponse,
 } from '../game/src/learn.js?v=19';
-import { UPGRADES } from '../game/src/constants.js?v=109';
+import { UPGRADES } from '../game/src/constants.js?v=110';
 import { coupsLegaux, roiEnEchec } from '../game/src/rules.js?v=116';
 
 const SOLUTIONS = [

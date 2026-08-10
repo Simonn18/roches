@@ -10,7 +10,7 @@
 //           Note : états du moteur qui bouclent sur 8 hardcodé (coupsLegaux/
 //           evalBoard dans rules.js et ai.js) généraliseront en Phase A.5 v3.
 
-import { SOLDE_DEPART } from './constants.js?v=109';
+import { SOLDE_DEPART } from './constants.js?v=110';
 import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=108';
 // Note Phase A.5 v2 polish : `TAILLES` n'est PAS importé ici — les call sites
 // qui en ont besoin (render.js pour le bouton TAILLE DE PLATEAU, plus tard

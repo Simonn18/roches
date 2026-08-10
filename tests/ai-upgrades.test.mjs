@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { creerPiece } from '../game/src/board.js?v=109';
-import { UPGRADES_PAR_TYPE } from '../game/src/constants.js?v=109';
+import { UPGRADES_PAR_TYPE } from '../game/src/constants.js?v=110';
 import { choisirPouvoirIA, iaDecideTour } from '../game/src/ai.js?v=111';
 
 function plateauVide() {

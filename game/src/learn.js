@@ -4,7 +4,7 @@
 import { creerPiece } from './board.js?v=109';
 import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=108';
 import { coupsLegaux, roiEnEchec } from './rules.js?v=116';
-import { CELL, OX, OY } from './constants.js?v=109';
+import { CELL, OX, OY } from './constants.js?v=110';
 
 const STORAGE_KEY = 'roychec-learn-progress';
 

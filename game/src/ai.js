@@ -9,7 +9,7 @@
 // Pouvoirs actifs (ex-règles D-E) : hors-scope v1/v2 (le bot achète, ne déclenche pas).
 // Invariant préservé : la recherche travaille sur des CLONES, l'état réel n'est jamais muté.
 import { coupsLegaux, DIRS8 } from './rules.js?v=116';
-import { VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=109';
+import { VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=110';
 import { upgradesForPiece } from './decks.js?v=107';
 import { getBookBonus } from './opening.js?v=107';
 

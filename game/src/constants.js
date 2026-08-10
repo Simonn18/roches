@@ -25,7 +25,7 @@ export const UPGRADES = {
   },
   'vet':{
     id: 'vet', nom: 'Vétéran',cat:'A',cout:5,piece: 'P', cooldown: 4,
-    desc: "Actif : capture le pion ennemi se trouvant directement en face du pion, sans bouger (consomme le tour)."
+    desc: "Capture le pion ennemi se trouvant directement en face du pion, sans bouger (consomme le tour)."
   },
   
   'second': {
@@ -34,7 +34,7 @@ export const UPGRADES = {
   },
   'ruee': {
     id: 'ruee', nom: 'Ruée', cat: 'A', cout: 9, piece: 'N', cooldown: 4,
-    desc: 'Actif : capture un ennemi à distance de cavalier sans bouger.',
+    desc: 'Capture un ennemi à distance de cavalier sans bouger.',
   },
   'monture': {
     id: 'monture', nom: 'Monture blindée', cat: 'S', cout: 7, piece: 'N', cooldown: 4,
@@ -47,7 +47,7 @@ export const UPGRADES = {
   },
   'Rayon': {
     id: 'Rayon', nom: 'Rayon sacré', cat: 'A', cout: 10, piece: 'B', cooldown: 4,
-    desc: "Actif, capture à distance la 1re pièce adverse sur une diagonale, sans bouger.",
+    desc: "Capture à distance la 1re pièce adverse sur une diagonale, sans bouger.",
   },
   'Zone': {
     id: 'Zone', nom: 'Parade', cat: 'S', cout: 6, piece: 'B',
@@ -73,7 +73,7 @@ export const UPGRADES = {
   },
   'double-coup': {
     id: 'double-coup', nom: 'Double coup', cat: 'A', cout: 15, piece: 'Q', once: true,
-    desc: 'Usage unique : rejoue un 2e coup (ne consomme pas le tour).',
+    desc: 'Rejoue un 2e coup (ne consomme pas le tour).',
   },
   'couronne': {
     id: 'couronne', nom: 'Couronne', cat: 'S', cout: 9, piece: 'Q',
@@ -87,11 +87,11 @@ export const UPGRADES = {
   // Roi — 1re actif : si la reine adverse est à 2 cases ou moins, elle ne peut plus bouger pendant 2 tours
   'sacrifice': {
     id: 'sacrifice', nom: 'Mariage stratégique', cat: 'A', cout: 12, piece: 'K', cooldown: 6,
-    desc: "Actif : si la reine adverse est à 2 cases ou moins du roi, elle ne peut plus bouger pendant les 2 prochains tours.",
+    desc: "Si la reine adverse est à 2 cases ou moins du roi, elle ne peut plus bouger pendant les 2 prochains tours.",
   },
   'decret': {
     id: 'decret', nom: 'Décret', cat: 'A', cout: 12, piece: 'K', once: true,
-    desc: "Usage unique : échange la position du roi avec une de ses pièces alliées adjacentes (mini-roque libre).",
+    desc: "Échange la position du roi avec une de ses pièces alliées adjacentes (mini-roque libre).",
   },
 
   // --- Catalogue étendu [21:30] — 2 D + 2 A + 1 S par pièce (5 cartes × 6 types = 30) ---
@@ -103,7 +103,7 @@ export const UPGRADES = {
   // Pion — 2e actif : geler la case
   'epine': {
     id: 'epine', nom: 'Épine', cat: 'A', cout: 7, piece: 'P', cooldown: 5,
-    desc: "Actif : la case du pion est gelée 2 tours — aucune pièce adverse ne peut y entrer.",
+    desc: "La case du pion est gelée 2 tours — aucune pièce adverse ne peut y entrer.",
   },
   // Cavalier — 2e déplacement : bond long (3,1) ou (3,2)
   'grand-saut': {
@@ -113,18 +113,18 @@ export const UPGRADES = {
   // Cavalier — 2e actif : repousse une pièce adverse sur une case d'attaque
   'cavalerie': {
     id: 'cavalerie', nom: 'Cavalerie', cat: 'A', cout: 9, piece: 'N', cooldown: 4,
-    desc: "Actif : choisit une pièce adverse à distance de cavalier et la repousse d'une case en arrière sur une case d'attaque.",
+    desc: "Choisit une pièce adverse à distance de cavalier et la repousse d'une case en arrière sur une case d'attaque.",
   },
   // Fou — 2e déplacement : pour la prochaine attaque, le fou se déplace comme une dame
   'reprise': {
     id: 'reprise', nom: 'Folie', cat: 'D', cout: 5, piece: 'B',
-    desc: "Usage unique : pour la prochaine attaque, le fou se déplace comme une dame.",
+    desc: "Pour la prochaine attaque, le fou se déplace comme une dame.",
   },
   // Fou — 2e actif : les pièces ennemies (hors roi/reine) ne peuvent plus bouger
   // dans les cases adjacentes au fou pendant 2 tours.
   'hypnose': {
     id: 'hypnose', nom: 'Hypnose', cat: 'A', cout: 10, piece: 'B', cooldown: 4,
-    desc: "Actif : les pièces ennemies (hors roi et reine) ne peuvent pas se déplacer dans une case adjacente au fou pendant 2 tours.",
+    desc: "Les pièces ennemies (hors roi et reine) ne peuvent pas se déplacer dans une case adjacente au fou pendant 2 tours.",
   },
   // Tour — 2e déplacement : saut de la 1re pièce
   'enjambeur': {
@@ -134,17 +134,17 @@ export const UPGRADES = {
   // Tour — 2e actif : échange de place avec un pion allié dans le champ d'action de la tour
   'echange': {
     id: 'echange', nom: 'Échange', cat: 'A', cout: 9, piece: 'R', cooldown: 5,
-    desc: "Actif : la tour échange sa position avec un pion allié situé sur une ligne, colonne ou diagonale de la tour.",
+    desc: "La tour échange sa position avec un pion allié situé sur une ligne, colonne ou diagonale de la tour.",
   },
   // Dame — 2e déplacement : pour la prochaine attaque, la dame se déplace comme n'importe quelle pièce
   'feinte': {
     id: 'feinte', nom: 'Feinte', cat: 'D', cout: 12, piece: 'Q', cooldown: 5,
-    desc: "Usage unique : pour la prochaine attaque, la dame peut se déplacer comme n'importe quelle pièce (cavalier, fou ou tour).",
+    desc: "Pour la prochaine attaque, la dame peut se déplacer comme n'importe quelle pièce (cavalier, fou ou tour).",
   },
   // Dame — 2e actif : empêche le roi adverse d'utiliser ses améliorations pendant 2 tours
   'sht': {
     id: 'sht', nom: 'S.H.T.', cat: 'A', cout: 15, piece: 'Q', once: true,
-    desc: "Usage unique : le roi adverse ne peut utiliser aucune de ses améliorations pendant les 2 prochains tours.",
+    desc: "Le roi adverse ne peut utiliser aucune de ses améliorations pendant les 2 prochains tours.",
   },
   // Roi — 2e déplacement : fuite de 3 cases
   'haute-fuite': {

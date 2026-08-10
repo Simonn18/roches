@@ -16,13 +16,13 @@ import {
   C_AMBRE, C_AMBRE_FONCE, C_TERRACOTTA, C_SAUGE_FONCE, C_AMBRE_CLAIR, DECK_ACCENT,
   UI_THEME, REMPLI_PIECE,C_ENCRE_sub,
   PVW_CADENCES, cadenceLabel,
-} from './constants.js?v=109';
+} from './constants.js?v=110';
 import { VARIANT_PRESETS, ECONOMIES, COMBATS, variantLabel, variantIdFromMenu } from './variants.js?v=108';
 import { creerPlateau } from './board.js?v=109';
 // Phase A.5 v2 Phase 3 : TAILLE DE PLATEAU chips itèrent sur TAILLES (maison canonique
 // zero-dep de tailles.js). Pas de cycle : tailles.js n'importe aucun autre module.
 import { TAILLES } from './tailles.js?v=108';
-import { DIRS8, coupsLegaux, roiEnEchec, ciblesVet } from './rules.js?v=116';
+import { coupsLegaux, roiEnEchec, ciblesVet } from './rules.js?v=117';
 import { STEPS, TOTAL_STEPS, progressionTutoriel, tutorielEtapeDebloquee, tutorielPermet, tutorielHint, tutorielPanneauNormal } from './tutorial.js?v=109';
 // Deck editor UI (recovery 29/07 [23:30]) : couche DONNÉES pure — loadDecks/getActiveDeck/
 // setSlot sont utilisés par main.js (handlers) et render.js (lecture seule du deck actif
@@ -30,7 +30,7 @@ import { STEPS, TOTAL_STEPS, progressionTutoriel, tutorielEtapeDebloquee, tutori
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
   apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=22';
-import { traduire } from './i18n.js?v=5';
+import { traduire } from './i18n.js?v=6';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -93,7 +93,9 @@ function computeGeometry(state) {
   OX = mobileGameplay
     ? (mobilePanelOpen ? Math.max(44, Math.round(CANVAS_W * 0.14)) : 12)
     : OX_DESKTOP;
-  OY = mobileGameplay ? (mobilePanelOpen ? 40 : 72) : OY_DESKTOP;
+  // Le bandeau de tour est retiré sur téléphone : le plateau peut remonter
+  // (OY compacté à 40) et récupérer ~32 px de hauteur utile.
+  OY = mobileGameplay ? 40 : OY_DESKTOP;
 
   // Pour le desktop, les plateaux larges gardent la réserve du panneau latéral.
   // Pour le téléphone, le plateau est pleine largeur (ou légèrement compacté
@@ -1094,16 +1096,9 @@ function dessineEchiquier(ctx, state, now) {
   // est aussi la pièce sélectionnée.
   dessineAlertesEchec(ctx, state, now);
 
-  // Aura de Zone de contrôle : teinte les 8 tuiles autour du fou équipé sélectionné.
-  if (state.selected && state.selected.type === 'B' && state.selected.upgrades.includes('Zone')) {
-    const s = state.selected;
-    ctx.fillStyle = 'rgba(155, 203, 140, 0.30)'; // sauge translucide (catégorie stat)
-    for (const [dr, dc] of DIRS8) {
-      const r = s.r + dr, c = s.c + dc;
-      // Phase A.5 v2 Phase 4 : bounds __ROWS/__COLS dynamic (futur-proof l11+).
-      if (r >= 0 && r < __ROWS && c >= 0 && c < __COLS) { tilePathVue(ctx, state, r, c); ctx.fill(); }
-    }
-  }
+  // NB : l'aura de contrôle du fou (interdiction des cases adjacentes pour les
+  // pièces faibles) est portée par Hypnose (rules.js zonesInterdites) ; Parade,
+  // elle, est une défense passive sans effet de zone, donc aucun rendu ici.
 
   // Coups potentiels. En mode Apprendre, tous les coups du moteur sont affichés
   // avec exactement les mêmes marqueurs et couleurs que sur un plateau normal.
@@ -1337,10 +1332,13 @@ function dessinePanneau(ctx, state, now) {
     return;
   }
 
-  // Titre — wordmark Archivo Black en capitales (DA §3).
-  ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('♞ ROYCHEC', x, OY + 8);
+  // Titre — wordmark Archivo Black en capitales (DA §3). Sur téléphone, le
+  // wordmark est retiré pour gagner de la place (même règle que le panneau mobile).
+  if (!(state.ui && state.ui.mobileGameplay)) {
+    ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('♞ ROYCHEC', x, OY + 8);
+  }
 
   // HUD écus des deux joueurs (joueur actif encadré, liseré latéral coloré).
   let y = OY + 34;
@@ -1649,12 +1647,8 @@ function dessineCatalogueMobile(ctx, state, x, y, w, now) {
 function dessineSuiviJoueursMobile(ctx, state, x, y, w, now) {
   // Même lecture que sur ordinateur : deux cartes persistantes, le joueur actif
   // signalé par son liseré de camp et le solde visible à droite. Sur téléphone,
-  // on conserve la structure mais avec une hauteur plus compacte.
-  ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('♞ ROYCHEC', x, y + 14);
-  y += 24;
-
+  // le wordmark « ♞ ROYCHEC » est volontairement retiré pour gagner de la place
+  // (demande utilisateur) : le suivi des joueurs commence directement.
   if (state.mode === 'pvw' && state.pvw) y = dessineHorlogesPvw(ctx, state, x, w, y, now);
 
   const cardH = 42;
@@ -1787,7 +1781,7 @@ function dessinePanneauMobile(ctx, state, now) {
       });
       y += 50;
     }
-  } else {      ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `10px ${F_TEXTE}`;
+  } else {      ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     ctx.fillText(traduire('Sélectionnez une pièce pour voir ses actions', state.language), x, y + 4);
     y += 26;
@@ -2757,12 +2751,12 @@ function dessineBandeauCompte(ctx, state) {
         }
         if (current) { ctx.fillText(current, dx + pad, y); y += 28; }
       }
-      ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `11px ${F_TEXTE}`;
+      ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
       ctx.fillText(traduire('Fermer avec Échap', language), dx + pad, y + 12);
     }
 
     // Pied du drawer : mention de version discrète.
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';      ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `10px ${F_TEXTE}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';      ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
     ctx.fillText(traduire('Roychec · bêta', language), dx + pw / 2, py + ph - 16);
   } else {
     if (state.ui) state.ui.hamburgerPanel = null;
@@ -4299,11 +4293,8 @@ function dessineDeckPicker(ctx, state) {
     ctx.fillStyle = isCurrent ? C_ENCRE : DECK_UI.amber; ctx.font = `700 16px ${F_DISPLAY}`;
     ctx.textAlign = 'right'; ctx.textBaseline = 'top';
     ctx.fillText(`★ ${u.cout}`, cx + cardW - 16, cy + 10);
-    // Badge cd/once sous le coût, légèrement agrandi lui aussi.
-    if (u.cooldown || u.once) {
-      ctx.fillStyle = isCurrent ? C_ENCRE : DECK_UI.muted; ctx.font = `600 11px ${F_TEXTE}`;
-      ctx.fillText(u.once ? traduire('usage unique', state.language) : `cd ${u.cooldown}`, cx + cardW - 16, cy + 32);
-    }
+    // NB : le badge « cd X » / « usage unique » a été retiré du picker : le
+    // cooldown et le caractère unique restent décrits dans la description.
     // Description plus présente, avec un interligne adapté aux caractères agrandis.
     ctx.fillStyle = isCurrent ? C_ENCRE : DECK_UI.muted; ctx.font = `13px ${F_TEXTE}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
@@ -4367,16 +4358,50 @@ const PARCOURS_DA = {
   locked: '#415641',
 };
 
-function dessineFondParcours(ctx) {
-  ctx.fillStyle = PARCOURS_DA.forestDeep;
+// Palette « couleurs du jeu » : Tutoriel et Apprendre reprennent les tons du
+// thème (graphite, ardoise, sauge, laiton) au lieu de la forêt de la référence.
+const PARCOURS_JEU = {
+  checker: true,
+  forest: UI_THEME.background,
+  forestDeep: UI_THEME.background,
+  leafDark: UI_THEME.wineDark,
+  leaf: UI_THEME.card,
+  olive: UI_THEME.amberDark,
+  oliveLight: UI_THEME.amberLight,
+  earth: UI_THEME.amberDark,
+  earthDark: UI_THEME.amberDark,
+  gold: UI_THEME.amber,
+  goldDark: UI_THEME.amberDark,
+  cream: UI_THEME.text,
+  creamMuted: UI_THEME.muted,
+  card: UI_THEME.card,
+  cardLight: UI_THEME.panelAlt,
+  ink: UI_THEME.shadow,
+  locked: UI_THEME.disabled,
+};
+
+function dessineFondParcours(ctx, pal = PARCOURS_DA) {
+  ctx.fillStyle = pal.forestDeep;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  if (pal.checker) {
+    // Damier discret rappelant le plateau : le fond reste aux couleurs du jeu.
+    ctx.save(); ctx.globalAlpha = 0.14;
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < 16; col++) {
+        ctx.fillStyle = (row + col) % 2 ? pal.leafDark : pal.leaf;
+        ctx.fillRect(col * 67, 104 + row * 67, 67, 67);
+      }
+    }
+    ctx.restore();
+    return;
+  }
   // Texture plate de feuillage : motifs déterministes, sans image ni animation.
   ctx.save();
   ctx.globalAlpha = 0.42;
   for (let i = 0; i < 18; i++) {
     const x = (i * 83 + 31) % (CANVAS_W + 90) - 45;
     const y = 104 + ((i * 137) % Math.max(120, CANVAS_H - 104));
-    ctx.fillStyle = i % 3 === 0 ? PARCOURS_DA.leaf : PARCOURS_DA.leafDark;
+    ctx.fillStyle = i % 3 === 0 ? pal.leaf : pal.leafDark;
     ctx.beginPath();
     ctx.arc(x, y, 24 + (i % 4) * 9, 0, Math.PI * 2);
     ctx.arc(x + 22, y + 13, 18 + (i % 3) * 7, 0, Math.PI * 2);
@@ -4386,20 +4411,20 @@ function dessineFondParcours(ctx) {
   ctx.globalAlpha = 0.18;
   for (let i = 0; i < 11; i++) {
     const x = (i * 127 + 12) % (CANVAS_W + 80) - 40;
-    ctx.fillStyle = PARCOURS_DA.olive;
+    ctx.fillStyle = pal.olive;
     ctx.fillRect(x, 104, 7 + (i % 3) * 3, CANVAS_H - 104);
   }
   ctx.restore();
   // Voile central discret : les nœuds restent lisibles devant la forêt.
   ctx.save();
   ctx.globalAlpha = 0.22;
-  ctx.fillStyle = PARCOURS_DA.forest;
+  ctx.fillStyle = pal.forest;
   roundRect(ctx, 12, 104, CANVAS_W - 24, Math.max(80, CANVAS_H - 116), 24);
   ctx.fill();
   ctx.restore();
 }
 
-function dessineCheminParcours(ctx, positions) {
+function dessineCheminParcours(ctx, positions, pal = PARCOURS_DA) {
   if (positions.length < 2) return;
   ctx.save();
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -4433,24 +4458,27 @@ function dessineCheminParcours(ctx, positions) {
     ctx.stroke();
     ctx.restore();
   };
-  trace(26, PARCOURS_DA.earthDark);
-  trace(13, PARCOURS_DA.olive);
-  trace(3, PARCOURS_DA.oliveLight, [4, 14]);
+  trace(26, pal.earthDark);
+  trace(13, pal.olive);
+  trace(3, pal.oliveLight, [4, 14]);
   ctx.restore();
 }
 
 // Niveau en forme de tuile carrée arrondie, comme les cases du plateau :
-// ombre, halo actif, fond plat, contour épais crème et numéro centré.
-function dessineTuileNiveau(ctx, cxNode, cyNode, size, radius, done, active, text, fill, stroke, numero) {
+// ombre, halo actif, fond plat, contour épais et numéro centré. `pal` choisit
+// la palette (forêt pour les Puzzles, couleurs du jeu pour Tutoriel/Apprendre)
+// sans changer la forme ni les états.
+function dessineTuileNiveau(ctx, cxNode, cyNode, size, radius, done, active, text, fill, stroke, numero, pal = PARCOURS_DA) {
   ctx.save();
   const half = size / 2;
   const x = cxNode - half, y = cyNode - half;
+  const jeu = pal.checker;
   // Ombre plate sous la tuile (relief pierre posée sur le sentier).
-  ctx.fillStyle = PARCOURS_DA.ink;
+  ctx.fillStyle = pal.ink;
   roundRect(ctx, x + 2, y + 4, size, size, radius); ctx.fill();
   if (active) {
-    ctx.globalAlpha = 0.30;
-    ctx.fillStyle = PARCOURS_DA.gold;
+    ctx.globalAlpha = jeu ? 0.22 : 0.30;
+    ctx.fillStyle = jeu ? UI_THEME.amberLight : pal.gold;
     roundRect(ctx, x - 7, y - 7, size + 14, size + 14, radius + 6); ctx.fill();
     ctx.globalAlpha = 1;
   }
@@ -4461,7 +4489,7 @@ function dessineTuileNiveau(ctx, cxNode, cyNode, size, radius, done, active, tex
   roundRect(ctx, x, y, size, size, radius); ctx.stroke();
   // Liseré intérieur discret façon pierre taillée.
   ctx.globalAlpha = 0.25;
-  ctx.strokeStyle = PARCOURS_DA.cream;
+  ctx.strokeStyle = jeu ? UI_THEME.secondaryLight : pal.cream;
   ctx.lineWidth = 1.5;
   roundRect(ctx, x + 5, y + 5, size - 10, size - 10, radius - 3); ctx.stroke();
   ctx.globalAlpha = 1;
@@ -4472,7 +4500,13 @@ function dessineTuileNiveau(ctx, cxNode, cyNode, size, radius, done, active, tex
   ctx.restore();
 }
 
-function couleursNoeudParcours(done, active) {
+function couleursNoeudParcours(done, active, pal = PARCOURS_DA) {
+  if (pal.checker) {
+    // Palette du jeu : sauge pour les niveaux terminés, laiton pour l'actif.
+    if (done) return { fill: UI_THEME.primary, stroke: UI_THEME.primaryDark, text: UI_THEME.buttonText };
+    if (active) return { fill: UI_THEME.amber, stroke: UI_THEME.amberLight, text: UI_THEME.buttonText };
+    return { fill: UI_THEME.disabled, stroke: UI_THEME.disabledBorder, text: UI_THEME.disabledText };
+  }
   if (done) return { fill: PARCOURS_DA.oliveLight, stroke: PARCOURS_DA.cream, text: PARCOURS_DA.ink };
   if (active) return { fill: PARCOURS_DA.gold, stroke: PARCOURS_DA.cream, text: PARCOURS_DA.ink };
   return { fill: PARCOURS_DA.locked, stroke: PARCOURS_DA.leaf, text: PARCOURS_DA.creamMuted };
@@ -4489,33 +4523,35 @@ function dessineTutorielHub(ctx, state) {
     : { x: 270 + (index % 3) * 220, y: 180 + Math.floor(index / 3) * 150 });
   const footerY = mobile ? 150 + STEPS.length * 108 + 64 : 680;
 
-  dessineFondParcours(ctx);
+  // Le Tutoriel reprend les couleurs du jeu : tuiles et chemin serpent
+  // conservés, mais avec la palette graphite/sauge/laiton du thème.
+  dessineFondParcours(ctx, PARCOURS_JEU);
 
-  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `34px ${F_DISPLAY}`;
+  ctx.fillStyle = PARCOURS_JEU.cream; ctx.font = `34px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillText(traduire('TUTORIEL', state.language), cx, 55);
-  ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `13px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_JEU.creamMuted; ctx.font = `13px ${F_TEXTE}`;
   ctx.fillText(traduire('Maîtrise les règles étape par étape.', state.language), cx, 80);
 
-  dessineCheminParcours(ctx, positions);
+  dessineCheminParcours(ctx, positions, PARCOURS_JEU);
 
   STEPS.forEach((step, index) => {
     const { x: cxNode, y: cyNode } = positions[index];
     const unlocked = tutorielEtapeDebloquee(state, index);
     const done = completed.has(index);
     const active = unlocked && !done;
-    const nodeColors = couleursNoeudParcours(done, active);
+    const nodeColors = couleursNoeudParcours(done, active, PARCOURS_JEU);
     const fill = nodeColors.fill;
     const stroke = nodeColors.stroke;
     const text = nodeColors.text;
     ctx.save();
-    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1);
+    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1, PARCOURS_JEU);
     if (mobile) {
       const labelX = cxNode + 46;
-      ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `13px ${F_DISPLAY}`; ctx.textAlign = 'left';
+      ctx.fillStyle = PARCOURS_JEU.cream; ctx.font = `13px ${F_DISPLAY}`; ctx.textAlign = 'left';
       const title = traduire(step.title, state.language).toUpperCase();
       const titleLines = wrapTextLines(ctx, title, labelX, cyNode - 10, Math.max(110, CANVAS_W - labelX - 24), 14);
-      ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `11px ${F_TEXTE}`;
+      ctx.fillStyle = PARCOURS_JEU.creamMuted; ctx.font = `11px ${F_TEXTE}`;
       ctx.fillText(traduire(done ? '✓ terminé' : active ? 'à faire' : 'verrouillé', state.language), labelX, cyNode + (titleLines > 1 ? 18 : 14));
     }
     ctx.restore();
@@ -4523,11 +4559,11 @@ function dessineTutorielHub(ctx, state) {
       { kind: 'tutorialStart', index }, unlocked, 12, 'rect');
   });
 
-  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `700 12px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_JEU.cream; ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(traduire(`${completed.size}/${TOTAL_STEPS} étapes maîtrisées`, state.language), cx, footerY);
   bouton(state, ctx, mobile ? cx - 110 : 32, footerY + 32, 220, 38, '← Menu principal',
-    { kind: 'retourMenu' }, { color: PARCOURS_DA.card, textColor: PARCOURS_DA.cream, outlineColor: PARCOURS_DA.oliveLight });
+    { kind: 'retourMenu' }, { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
 }
 
 function dessineLearnHub(ctx, state) {
@@ -4550,18 +4586,18 @@ function dessineLearnHub(ctx, state) {
   const nodeW = 60, nodeH = 60;
   const nodeRadius = 14;
 
-  // Fond forêt commun aux trois parcours : la référence reste une ambiance,
-  // jamais une texture qui pixellise sur les grands écrans.
-  dessineFondParcours(ctx);
+  // Apprendre reprend les couleurs du jeu : damier discret rappelant le
+  // plateau, chemin laiton et tuiles sauge/dorées de la palette du thème.
+  dessineFondParcours(ctx, PARCOURS_JEU);
 
-  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `34px ${F_DISPLAY}`;
+  ctx.fillStyle = PARCOURS_JEU.cream; ctx.font = `34px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillText(traduire('APPRENDRE', state.language), cx, 55);
-  ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `13px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_JEU.creamMuted; ctx.font = `13px ${F_TEXTE}`;
   ctx.fillText(traduire('Avance case après case pour maîtriser les améliorations.', state.language), cx, 80);
 
-  // Chemin organique forêt : même langage que le Tutoriel et les Puzzles.
-  dessineCheminParcours(ctx, positions);
+  // Chemin serpent : même langage que le Tutoriel et les Puzzles.
+  dessineCheminParcours(ctx, positions, PARCOURS_JEU);
 
   LEARN_GAMES.forEach((game, index) => {
     const { x: cxNode, y: cyNode } = positions[index];
@@ -4572,12 +4608,12 @@ function dessineLearnHub(ctx, state) {
 
     // Les nœuds sont volontairement réduits à un rond numéroté : la couleur
     // décrit l'état du parcours, sans répéter le titre de la situation.
-    const nodeColors = couleursNoeudParcours(done, active);
+    const nodeColors = couleursNoeudParcours(done, active, PARCOURS_JEU);
     const fill = nodeColors.fill;
     const stroke = nodeColors.stroke;
     const text = nodeColors.text;
     // Même tuile arrondie que sur desktop : la forme des niveaux est commune.
-    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1);
+    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1, PARCOURS_JEU);
 
     // La hitbox recouvre toute la tuile visible.
     motionMenuBouton(state, x, y, nodeW, nodeH,
@@ -4585,14 +4621,14 @@ function dessineLearnHub(ctx, state) {
   });
 
   const doneCount = completed.size;
-  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `700 12px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_JEU.cream; ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const footerY = mobile ? 150 + LEARN_GAMES.length * mobileNodeStep + 64 : 590;
   ctx.fillText(traduire(`${doneCount}/${TOTAL_LEARN_GAMES} cases maîtrisées`, state.language), cx, footerY);
   bouton(state, ctx, mobile ? cx - 110 : 32, mobile ? footerY + 32 : 635, 220, mobile ? 38 : 34, '✦ Puzzles tactiques', { kind: 'openPuzzles' },
-    { color: PARCOURS_DA.gold, textColor: PARCOURS_DA.ink, outlineColor: PARCOURS_DA.cream });
+    { color: UI_THEME.amber, textColor: UI_THEME.buttonText, outlineColor: UI_THEME.amberLight });
   bouton(state, ctx, cx - 110, mobile ? footerY + 78 : 635, 220, mobile ? 38 : 34, '← Menu principal', { kind: 'retourMenu' },
-    { color: PARCOURS_DA.card, textColor: PARCOURS_DA.cream, outlineColor: PARCOURS_DA.oliveLight });
+    { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
 }
 
 function dessinePuzzleHub(ctx, state) {
@@ -4867,6 +4903,11 @@ export function render(ctx, state, now) {
 
   // Bandeau de tour (DA §11.3.c) — pilule flat plus affirmée : ombre plate,
   // fond de camp ~55 %, contour Encre, onglet 8 px, chevron directionnel.
+  // Sur téléphone, le bandeau est retiré pour gagner de la place : le plateau
+  // remonte (OY compacté) et les infos de tour restent visibles via les cartes
+  // du suivi mobile + les alertes d'échec sur le plateau.
+  const mobileGameplayRender = !!(state.ui && state.ui.mobileGameplay);
+  if (!mobileGameplayRender) {
   const bY = 10, bH = 26, bR = 13;
   // Ombre plate décalée +2 px (avant la pilule).
   ctx.fillStyle = 'rgba(26,26,26,0.12)';
@@ -4922,6 +4963,7 @@ export function render(ctx, state, now) {
     }
   }
   ctx.fillText(traduire(banniere, state.language).toUpperCase(), OX + 32, chY);
+  }
 
   // PvP en ligne : bannière de désync (hash discordant, §3.4) — détection W2, annulation W3.
   if (state.mode === 'pvw' && state.pvw && state.pvw.desync) {
@@ -5041,10 +5083,12 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
   const step = STEPS[state.tutorialStep];
   if (!step) return;
 
-  // Titre — wordmark.
-  ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('♞ ROYCHEC', x, OY + 8);
+  // Titre — wordmark. Retiré sur téléphone pour gagner de la place.
+  if (!(state.ui && state.ui.mobileGameplay)) {
+    ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('♞ ROYCHEC', x, OY + 8);
+  }
 
   let y = OY + 40;
   if (state.ui && state.ui.mobileGameplay) {

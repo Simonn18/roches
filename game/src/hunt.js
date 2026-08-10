@@ -3,7 +3,7 @@
 // reçoit gratuitement une amélioration compatible, sans doublon, puis une nouvelle
 // case est tirée pour le même camp. Le tirage est déterministe : le mode peut donc
 // fonctionner dans le lockstep PvP privé sans désynchroniser les clients.
-import { UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=109';
+import { UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=110';
 
 function casesLibres(state, interdites = []) {
   const interditesSet = new Set(interdites.filter(Boolean).map((cell) => `${cell.r},${cell.c}`));
