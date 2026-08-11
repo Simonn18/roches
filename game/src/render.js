@@ -69,9 +69,20 @@ function mobileInstructionsAuDessus(state) {
   return !!(state && state.ui && state.ui.mobileGameplay
     && (state.mode === 'tutorial' || state.mode === 'learn'));
 }
+// Les écrans de fin utilisent la même largeur logique que le gameplay mobile.
+// Cela évite qu'un panneau ou sa rangée de boutons dépasse du Canvas sur téléphone.
+function finEcranMobile(state) {
+  return !!(state && state.ui && state.ui.mobileGameplay);
+}
+function largeurPanneauFin(state, largeurDesktop) {
+  if (!finEcranMobile(state)) return largeurDesktop;
+  return Math.min(largeurDesktop, Math.max(280, CANVAS_W - 24));
+}
 function mobileInstructionHeight(state) {
   if (!mobileInstructionsAuDessus(state)) return 0;
-  if (state.mode === 'learn') return 204;
+  // La fiche Apprendre n'affiche plus le solde d'écus dans sa description :
+  // elle peut donc être plus compacte sans couper l'objectif.
+  if (state.mode === 'learn' && state.learnKind !== 'puzzle') return 174;
   const step = STEPS[state.tutorialStep];
   const detailLength = step && step.detail ? String(step.detail).length : 0;
   // Les longues consignes gagnent quelques pixels, sans laisser la fiche
@@ -133,28 +144,6 @@ function computeGeometry(state) {
 export function getCellSize() { return __CELL_SIZE; }
 export function getBoardFrame() { return { w: __BOARD_W, h: __BOARD_H, rows: __ROWS, cols: __COLS }; }
 export function getPanelXRuntime() { return __PANEL_X_RUNTIME; }
-
-// Confettis statiques de l'écran de victoire (DA §11.5) : positions/rotations fixes
-// relatives au centre du panneau, dispersées hors de son emprise (~±190 / ±115 px).
-// Motif figé (pas d'animation) — c'est un flourish d'ambiance, calculé une seule fois.
-const CONFETTIS = [
-  { dx: -235, dy: -150, s: 9, rot: 0.4, ci: 0, tri: false },
-  { dx: 235, dy: -130, s: 7, rot: 1.1, ci: 1, tri: true },
-  { dx: -260, dy: 30, s: 8, rot: 0.8, ci: 2, tri: false },
-  { dx: 250, dy: 60, s: 10, rot: 0.2, ci: 3, tri: true },
-  { dx: -200, dy: 150, s: 7, rot: 1.4, ci: 0, tri: false },
-  { dx: 210, dy: 160, s: 9, rot: 0.6, ci: 1, tri: false },
-  { dx: -140, dy: -175, s: 8, rot: 0.9, ci: 2, tri: true },
-  { dx: 130, dy: -180, s: 6, rot: 0.3, ci: 3, tri: false },
-  { dx: 0, dy: -195, s: 9, rot: 1.2, ci: 0, tri: true },
-  { dx: -280, dy: -60, s: 6, rot: 0.5, ci: 1, tri: false },
-  { dx: 275, dy: -20, s: 8, rot: 1.0, ci: 2, tri: false },
-  { dx: -90, dy: 175, s: 7, rot: 0.7, ci: 3, tri: true },
-  { dx: 90, dy: 180, s: 9, rot: 0.1, ci: 0, tri: false },
-  { dx: 300, dy: 120, s: 6, rot: 1.3, ci: 1, tri: true },
-  { dx: -300, dy: 110, s: 8, rot: 0.6, ci: 2, tri: false },
-  { dx: 40, dy: 205, s: 7, rot: 0.9, ci: 3, tri: true },
-];
 
 // Chemin d'une tuile de plateau (case rétrécie, coins arrondis).
 // Phase A.5 v2 Phase 4 : cellSize + TILE_R dérivées du module-scope runtime
@@ -1570,7 +1559,8 @@ function dessinePanneau(ctx, state, now) {
       bouton(state, ctx, __PANEL_X_RUNTIME + w - 140, btnY, 130, 32, '◀  Retour',
         { kind: 'retourMenu' },
         { color: UI_THEME.primary, textColor: UI_THEME.text });
-    } else if (state.mode === 'pvp' || state.mode === 'pvai' || state.mode === 'pvw' || state.mode === 'hunt') {
+    } else if (state.mode !== 'tutorial'
+        && (state.mode === 'pvp' || state.mode === 'pvai' || state.mode === 'pvw' || state.mode === 'hunt')) {
       bouton(state, ctx, __PANEL_X_RUNTIME + w - 140, btnY, 130, 32, 'Abandonner',
         { kind: 'abandonner' },
         { color: UI_THEME.danger, textColor: UI_THEME.text });
@@ -1825,7 +1815,8 @@ function dessinePanneauMobile(ctx, state, now) {
 
   if (state.panelPiece && state.phase !== 'gameover') y = dessineCatalogueMobile(ctx, state, x, y, w, now) + 8;
 
-  if (state.phase !== 'gameover' && state.phase !== 'menu' && state.phase !== 'replay') {
+  if (state.phase !== 'gameover' && state.phase !== 'menu' && state.phase !== 'replay'
+      && state.mode !== 'tutorial') {
     bouton(state, ctx, x + w - 118, y, 118, 44, state.mode === 'spectator' ? '◀ Retour' : 'Abandonner', {
       kind: state.mode === 'spectator' ? 'retourMenu' : 'abandonner',
     }, { color: state.mode === 'spectator' ? UI_THEME.primary : UI_THEME.danger, textColor: UI_THEME.text });
@@ -1880,7 +1871,10 @@ function dessineInstructionsMobile(ctx, state, now) {
   const objectiveY = y + 54 + textLines * 17 + 6;
   ctx.fillStyle = UI_THEME.amber; ctx.font = `700 11px ${F_TEXTE}`;
   wrapTextLimite(ctx, traduire(`Objectif : ${item.objective}`, state.language), x + 10, objectiveY, w - 20, 15, 2);
-  ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`; ctx.fillText(`${state.ecus[0]} ${traduire('ÉCUS', state.language)}`, x + 10, y + h - 12);
+  if (state.learnKind === 'puzzle') {
+    ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
+    ctx.fillText(`${state.ecus[0]} ${traduire('ÉCUS', state.language)}`, x + 10, y + h - 12);
+  }
 }
 
 // Actions mobiles sous le plateau. Le bouton d'amélioration est volontairement
@@ -2169,45 +2163,6 @@ function dessineGameOver(ctx, state, now) {
   ctx.fillStyle = UI_THEME.overlay;
   ctx.fillRect(OX, OY, __BOARD_W, __BOARD_H);
 
-  // Burst de 16 rayons plats alternant Doré / Doré Clair, derrière le panneau (DA §11.5).
-  ctx.save();
-  ctx.beginPath(); ctx.rect(OX, OY, __BOARD_W, __BOARD_H); ctx.clip(); // rester dans la zone voilée
-  ctx.globalAlpha = 0.38;
-  const R = 250, N = 16;
-  for (let i = 0; i < N; i++) {
-    const a0 = (i / N) * Math.PI * 2 - Math.PI / 2;
-    const a1 = ((i + 1) / N) * Math.PI * 2 - Math.PI / 2;
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + Math.cos(a0) * R, cy + Math.sin(a0) * R);
-    ctx.lineTo(cx + Math.cos(a1) * R, cy + Math.sin(a1) * R);
-    ctx.closePath();
-    ctx.fillStyle = i % 2 === 0 ? C_AMBRE : C_AMBRE_CLAIR;
-    ctx.fill();
-  }
-  ctx.restore();
-
-  // Confettis statiques autour du panneau (DA §11.5, flourish figé).
-  const confColors = [C_AMBRE, C_SAUGE, ACCENT[0], ACCENT[1]];
-  ctx.save();
-  ctx.beginPath(); ctx.rect(OX, OY, __BOARD_W, __BOARD_H); ctx.clip();
-  for (const cf of CONFETTIS) {
-    ctx.save();
-    ctx.translate(cx + cf.dx, cy + cf.dy); ctx.rotate(cf.rot);
-    ctx.fillStyle = confColors[cf.ci];
-    ctx.lineWidth = 1.5; ctx.strokeStyle = C_ENCRE;
-    if (cf.tri) {
-      ctx.beginPath();
-      ctx.moveTo(0, -cf.s / 2); ctx.lineTo(cf.s / 2, cf.s / 2); ctx.lineTo(-cf.s / 2, cf.s / 2);
-      ctx.closePath();
-    } else {
-      roundRect(ctx, -cf.s / 2, -cf.s / 2, cf.s, cf.s, 2);
-    }
-    ctx.fill(); ctx.stroke();
-    ctx.restore();
-  }
-  ctx.restore();
-
   // Bloc trophées : depuis W3, EXCLUSIVEMENT en PvP en ligne (le PvAI n'écrit rien —
   // QA-PVW-18). state.trophy est posé par reporterResultatPvP (pending → résolu).
   const tr = state.trophy;
@@ -2219,7 +2174,8 @@ function dessineGameOver(ctx, state, now) {
 
   // Panneau centré, cadre Doré 3 px (DA §11.5). Hauteur adaptée au contenu.
   const hasReplay = !!state.replay;
-  const pw = 380;
+  const mobile = finEcranMobile(state);
+  const pw = largeurPanneauFin(state, 380);
   let ph = 210;
   if (showTrophy || pendingTrophy || voided) ph += 60;
   /* replay button moved to bottom-right of canvas — no extra panel height needed */
@@ -2281,18 +2237,31 @@ function dessineGameOver(ctx, state, now) {
   }
 
   // --- Boutons empilés depuis le bas ---
+  // Sur téléphone, les dimensions suivent la largeur utile du panneau et gardent
+  // une cible tactile confortable. Le desktop conserve exactement ses valeurs.
+  const endButtonH = mobile ? 44 : 46;
+  const endButtonStep = mobile ? 52 : 54;
+  const endButtonMaxW = Math.max(0, pw - 32);
+  const endButtonW = (desktopW) => mobile ? Math.min(desktopW, endButtonMaxW) : desktopW;
+  const endButtonX = (width) => cx - width / 2;
+  const splitButtonGap = mobile ? 8 : 12;
+  const splitButtonW = mobile ? Math.floor((endButtonMaxW - splitButtonGap) / 2) : 124;
+  const splitButtonX = (side) => cx - (splitButtonW * 2 + splitButtonGap) / 2
+    + (side === 1 ? splitButtonW + splitButtonGap : 0);
   let btnY = py + ph - 58;
   // Bouton principal : retour au menu (tous modes).
-  bouton(state, ctx, cx - 100, btnY, 200, 46, pvw ? 'Menu' : 'Nouvelle partie',
+  const mainButtonW = endButtonW(200);
+  bouton(state, ctx, endButtonX(mainButtonW), btnY, mainButtonW, endButtonH, pvw ? 'Menu' : 'Nouvelle partie',
     { kind: 'restart' }, { color: pvw ? UI_THEME.card : UI_THEME.amber, textColor: pvw ? UI_THEME.text : UI_THEME.buttonText });
 
   // Bouton « Nouvelle partie » (PvP uniquement) : enchaîner une recherche publique sans
   // repasser par le menu/lobby. Présent aussi si le match est annulé (voided) — même besoin.
   // Désactivé si une revanche est en cours de lancement (évite un double départ).
   if (pvw) {
-    btnY -= 54;
+    btnY -= endButtonStep;
     const rmLaunching = !!(state.pvw.rematch && state.pvw.rematch.launching);
-    bouton(state, ctx, cx - 130, btnY, 260, 46, '🔍 Nouvelle partie', { kind: 'newSearchOnline' },
+    const wideButtonW = endButtonW(260);
+    bouton(state, ctx, endButtonX(wideButtonW), btnY, wideButtonW, endButtonH, '🔍 Nouvelle partie', { kind: 'newSearchOnline' },
       { color: UI_THEME.primary, textColor: UI_THEME.text, sub: 'chercher un autre adversaire', enabled: !rmLaunching });
   }
 
@@ -2301,28 +2270,29 @@ function dessineGameOver(ctx, state, now) {
   if (pvw && !voided) {
     const rm = state.pvw.rematch || {};
     if (rm.incomingOffer) {
-      btnY -= 54;
+      btnY -= endButtonStep;
       ctx.fillStyle = UI_THEME.amber;
       ctx.font = `700 14px ${F_TEXTE}`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(`${state.pvw.oppPseudo || traduire('Adversaire', state.language)} ${traduire('propose une revanche', state.language)}`, cx, btnY - 20);
-      bouton(state, ctx, cx - 130, btnY, 124, 46, '✓ Accepter', { kind: 'acceptRematch' },
+      bouton(state, ctx, splitButtonX(0), btnY, splitButtonW, endButtonH, '✓ Accepter', { kind: 'acceptRematch' },
         { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'couleurs inversées' });
-      bouton(state, ctx, cx + 6, btnY, 124, 46, '✕ Refuser', { kind: 'declineRematch' },
+      bouton(state, ctx, splitButtonX(1), btnY, splitButtonW, endButtonH, '✕ Refuser', { kind: 'declineRematch' },
         { color: UI_THEME.card, textColor: UI_THEME.text, sub: 'rester au menu' });
     } else {
-      btnY -= 54;
+      btnY -= endButtonStep;
+      const rematchButtonW = endButtonW(260);
       if (rm.expired || rm.declined) {
-        bouton(state, ctx, cx - 130, btnY, 260, 46, rm.declined ? 'Revanche refusée' : 'Adversaire parti', { kind: 'noop' },
+        bouton(state, ctx, endButtonX(rematchButtonW), btnY, rematchButtonW, endButtonH, rm.declined ? 'Revanche refusée' : 'Adversaire parti', { kind: 'noop' },
           { enabled: false });
       } else if (rm.launching) {
-        bouton(state, ctx, cx - 130, btnY, 260, 46, 'Revanche en cours…', { kind: 'noop' },
+        bouton(state, ctx, endButtonX(rematchButtonW), btnY, rematchButtonW, endButtonH, 'Revanche en cours…', { kind: 'noop' },
           { enabled: false });
       } else if (rm.offeredByMe) {
-        bouton(state, ctx, cx - 130, btnY, 260, 46, 'En attente de l\'adversaire…', { kind: 'noop' },
+        bouton(state, ctx, endButtonX(rematchButtonW), btnY, rematchButtonW, endButtonH, 'En attente de l\'adversaire…', { kind: 'noop' },
           { enabled: false });
       } else {
-        bouton(state, ctx, cx - 130, btnY, 260, 46, '🔁 Revanche', { kind: 'rematch' },
+        bouton(state, ctx, endButtonX(rematchButtonW), btnY, rematchButtonW, endButtonH, '🔁 Revanche', { kind: 'rematch' },
           { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'couleurs inversées' });
       }
     }
@@ -2330,8 +2300,11 @@ function dessineGameOver(ctx, state, now) {
 
   // Bouton replay : ancré en bas à droite du canvas (indépendant de la taille du plateau).
   if (hasReplay) {
-    const rpx = CANVAS_W - 210, rpy = CANVAS_H - 48;
-    bouton(state, ctx, rpx, rpy, 195, 34, '📥 Replay (.md)',
+    const replayW = mobile ? Math.min(195, Math.max(0, CANVAS_W - 32)) : 195;
+    const replayH = mobile ? 44 : 34;
+    const rpx = mobile ? CANVAS_W - replayW - 16 : CANVAS_W - 210;
+    const rpy = mobile ? CANVAS_H - replayH - 12 : CANVAS_H - 48;
+    bouton(state, ctx, rpx, rpy, replayW, replayH, '📥 Replay (.md)',
       { kind: 'downloadReplay' },
       { color: UI_THEME.card, textColor: UI_THEME.text });
   }
@@ -4963,18 +4936,24 @@ function dessinePuzzleSuccess(ctx, state) {
   const puzzle = PUZZLES[state.puzzleIndex];
   if (!puzzle) return;
   const cx = OX + __BOARD_W / 2, cy = OY + __BOARD_H / 2;
+  const mobile = finEcranMobile(state);
   ctx.save(); ctx.fillStyle = UI_THEME.overlay; ctx.fillRect(OX, OY, __BOARD_W, __BOARD_H); ctx.restore();
-  const pw = 430, ph = 260, px = cx - pw / 2, py = cy - ph / 2;
+  const pw = largeurPanneauFin(state, 430), ph = 260, px = cx - pw / 2, py = cy - ph / 2;
   carte(ctx, px, py, pw, ph, 16, UI_THEME.panel, { shadow: true });
   ctx.lineWidth = 3; ctx.strokeStyle = UI_THEME.primary; roundRect(ctx, px, py, pw, ph, 16); ctx.stroke();
   ctx.fillStyle = UI_THEME.primaryDark; ctx.font = `30px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(traduire('PUZZLE RÉSOLU !', state.language), cx, py + 44);
   ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`; ctx.fillText(traduire(puzzle.title, state.language), cx, py + 82);
   ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;   learnWrap(ctx, traduire(puzzle.detail, state.language), cx, py + 116, pw - 44, 18, 4);
-  bouton(state, ctx, px + 20, py + ph - 56, 118, 36, 'Rejouer', { kind: 'puzzleRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text });
-  bouton(state, ctx, px + 156, py + ph - 56, 118, 36, 'Menu', { kind: 'puzzleHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
+  const levelButtonH = mobile ? 44 : 36;
+  const levelButtonGap = mobile ? 8 : 18;
+  const levelButtonPad = 20;
+  const levelButtonW = (pw - levelButtonPad * 2 - levelButtonGap * 2) / 3;
+  const levelButtonY = mobile ? py + ph - levelButtonH - 12 : py + ph - 56;
+  bouton(state, ctx, px + levelButtonPad, levelButtonY, levelButtonW, levelButtonH, 'Rejouer', { kind: 'puzzleRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text });
+  bouton(state, ctx, px + levelButtonPad + levelButtonW + levelButtonGap, levelButtonY, levelButtonW, levelButtonH, 'Menu', { kind: 'puzzleHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
   const next = state.puzzleIndex + 1 < TOTAL_PUZZLES;
-  bouton(state, ctx, px + 292, py + ph - 56, 118, 36, next ? 'Suivant' : 'Terminé',
+  bouton(state, ctx, px + levelButtonPad + (levelButtonW + levelButtonGap) * 2, levelButtonY, levelButtonW, levelButtonH, next ? 'Suivant' : 'Terminé',
     next ? { kind: 'puzzleNext' } : { kind: 'puzzleHub' },
     { color: UI_THEME.amber, textColor: UI_THEME.buttonText });
 }
@@ -4983,18 +4962,32 @@ function dessineLearnSuccess(ctx, state) {
   const game = LEARN_GAMES[state.learnIndex];
   if (!game) return;
   const cx = OX + __BOARD_W / 2, cy = OY + __BOARD_H / 2;
+  const mobile = finEcranMobile(state);
   ctx.save(); ctx.fillStyle = UI_THEME.overlay; ctx.fillRect(OX, OY, __BOARD_W, __BOARD_H); ctx.restore();
-  const pw = 410, ph = 250, px = cx - pw / 2, py = cy - ph / 2;
+  const pw = largeurPanneauFin(state, 410), ph = 250, px = cx - pw / 2, py = cy - ph / 2;
   carte(ctx, px, py, pw, ph, 16, UI_THEME.panel, { shadow: true });
   ctx.lineWidth = 3; ctx.strokeStyle = UI_THEME.primary; roundRect(ctx, px, py, pw, ph, 16); ctx.stroke();
   ctx.fillStyle = UI_THEME.primaryDark; ctx.font = `30px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(traduire('BIEN JOUÉ !', state.language), cx, py + 44);
   ctx.fillStyle = UI_THEME.text; ctx.font = `17px ${F_DISPLAY}`; ctx.fillText(traduire(game.title, state.language), cx, py + 82);
   ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;   learnWrap(ctx, traduire(game.detail, state.language), cx, py + 116, pw - 44, 18, 4);
-  bouton(state, ctx, px + 20, py + ph - 56, 112, 36, 'Rejouer', { kind: 'learnRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text });
-  bouton(state, ctx, px + 148, py + ph - 56, 112, 36, 'Menu', { kind: 'learnHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
+  const levelButtonH = mobile ? 44 : 36;
+  const levelButtonGap = mobile ? 8 : 16;
+  const levelButtonPad = 20;
+  const mobileLevelButtonW = (pw - levelButtonPad * 2 - levelButtonGap * 2) / 3;
+  const levelButtonWidths = mobile ? [mobileLevelButtonW, mobileLevelButtonW, mobileLevelButtonW] : [112, 112, 114];
+  const levelButtonXs = mobile
+    ? [
+      levelButtonPad,
+      levelButtonPad + mobileLevelButtonW + levelButtonGap,
+      levelButtonPad + (mobileLevelButtonW + levelButtonGap) * 2,
+    ]
+    : [20, 148, 276];
+  const levelButtonY = mobile ? py + ph - levelButtonH - 12 : py + ph - 56;
+  bouton(state, ctx, px + levelButtonXs[0], levelButtonY, levelButtonWidths[0], levelButtonH, 'Rejouer', { kind: 'learnRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text });
+  bouton(state, ctx, px + levelButtonXs[1], levelButtonY, levelButtonWidths[1], levelButtonH, 'Menu', { kind: 'learnHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text });
   const next = state.learnIndex + 1 < LEARN_GAMES.length;
-  bouton(state, ctx, px + 276, py + ph - 56, 114, 36, next ? 'Suivant' : 'Menu',
+  bouton(state, ctx, px + levelButtonXs[2], levelButtonY, levelButtonWidths[2], levelButtonH, next ? 'Suivant' : 'Menu',
     next ? { kind: 'learnNext' } : { kind: 'retourMenu' },
     { color: UI_THEME.amber, textColor: UI_THEME.buttonText });
 }
@@ -5340,13 +5333,14 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
 // Écran de fin du tutoriel.
 function dessineTutorielFin(ctx, state) {
   const cx = OX + __BOARD_W / 2, cy = OY + __BOARD_H / 2;
+  const mobile = finEcranMobile(state);
 
   // Voile de fond.
   ctx.fillStyle = UI_THEME.overlay;
   ctx.fillRect(OX, OY, __BOARD_W, __BOARD_H);
 
   // Panneau centré.
-  const pw = 380, ph = 220;
+  const pw = largeurPanneauFin(state, 380), ph = 220;
   const px = cx - pw / 2, py = cy - ph / 2;
   carte(ctx, px, py, pw, ph, 14, UI_THEME.panel, { shadow: true, stroke: null });
   ctx.lineWidth = 3; ctx.strokeStyle = C_SAUGE;
@@ -5366,8 +5360,12 @@ function dessineTutorielFin(ctx, state) {
   ctx.fillText(traduire('Tu maîtrises les bases de Roychec.', state.language), cx, py + 90);
   ctx.fillText(traduire('Lance une vraie partie !', state.language), cx, py + 112);
 
-  // Bouton Menu.
-  bouton(state, ctx, cx - 100, py + ph - 62, 200, 48, 'Menu',
+  // Bouton Menu : il suit la largeur du panneau sur téléphone tout en gardant
+  // une hauteur tactile confortable.
+  const finishButtonW = mobile ? pw - 40 : 200;
+  const finishButtonH = mobile ? 44 : 48;
+  const finishButtonY = mobile ? py + ph - finishButtonH - 12 : py + ph - 62;
+  bouton(state, ctx, cx - finishButtonW / 2, finishButtonY, finishButtonW, finishButtonH, 'Menu',
     { kind: 'tutorialHub' },
     { color: UI_THEME.primary, textColor: UI_THEME.text });
 }
