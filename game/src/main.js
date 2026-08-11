@@ -4,12 +4,12 @@
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=211';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=212';
 import { iaDecideTour } from './ai.js?v=111';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
 import { demarrerTutorielHub, demarrerEtapeTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
-  rejouerEtape, tutorielPermet } from './tutorial.js?v=109';
+  rejouerEtape, tutorielPermet, TOTAL_STEPS } from './tutorial.js?v=109';
 import { demarrerApprendre, demarrerPuzzles, demarrerMiniJeu, demarrerPuzzle,
   reinitialiserMiniJeu, reinitialiserPuzzle, verifierMiniJeu, verifierPuzzle,
   marquerMiniJeuReussi, marquerPuzzleReussi, marquerPuzzleReponse, puzzleReponse,
@@ -38,9 +38,15 @@ import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } f
 // Un seul listener global évite qu'un modal oublié reste en français après le toggle.
 
 const canvas = document.getElementById('jeu');
-canvas.width = CANVAS_W;
-canvas.height = CANVAS_H;
+// Résolution logique séparée de la résolution physique : sur téléphone Retina,
+// le texte Canvas est dessiné sur un buffer haute densité puis affiché à la même
+// taille CSS. Le DPR est plafonné à 3 pour éviter une consommation excessive.
+const canvasDprInitial = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+canvas.width = Math.round(CANVAS_W * canvasDprInitial);
+canvas.height = Math.round(CANVAS_H * canvasDprInitial);
 const ctx = canvas.getContext('2d');
+ctx.setTransform(canvasDprInitial, 0, 0, canvasDprInitial, 0, 0);
+ctx.imageSmoothingEnabled = true;
 
 // Pont unique Canvas → DOM : les overlays HTML consomment les mêmes tokens que
 // les écrans Canvas. Modifier UI_THEME dans constants.js suffit donc à recolorer
@@ -243,12 +249,25 @@ function synchroniserAffichage() {
   const targetWidth = (menuMobile || gameplayMobile)
     ? Math.max(320, Math.min(MOBILE_BREAKPOINT, Math.floor(window.innerWidth || 390)))
     : CANVAS_W;
-  // Le gameplay mobile est compacté pour afficher le plateau et les contrôles
-  // principaux dans la même vue ; le défilement reste disponible pour un catalogue
-  // exceptionnellement long ou un écran très court.
+  // La fiche supérieure et le plateau sont dessinés dans le même canvas logique.
+  // La hauteur doit donc être calculée avec la vraie taille des cases : un écran
+  // large (tablette / téléphone paysage) peut avoir un plateau de 700 px ou plus.
+  // Sinon le canvas coupe le bas du plateau et le document ne peut rien défiler.
+  const guidedMobile = gameplayMobile && (state.mode === 'tutorial' || state.mode === 'learn');
+  const mobileRows = state.board?.length || 8;
+  const mobileCols = state.board?.[0]?.length || 8;
+  const mobileCell = Math.max(10, Math.floor((targetWidth - 24) / mobileCols));
+  const guidedBoardTop = 40 + 250;
+  const guidedBoardBottom = guidedBoardTop + mobileRows * mobileCell;
+  const guidedContentHeight = guidedBoardBottom + 16 + 52 + 42 + 48;
+  // Le gameplay mobile est compacté pour afficher la fiche, le plateau et le
+  // premier contrôle dans la même vue ; le défilement reste disponible pour un
+  // catalogue exceptionnellement long ou un écran très court.
   const targetHeight = menuMobile
     ? (state.phase === 'matchmaking' ? 720
-      : state.phase === 'tutorial-hub' ? 1400
+      : state.phase === 'tutorial-hub'
+        // Hub tutoriel compact : niveaux espacés de 84 px avec chemin décoratif.
+        ? 150 + TOTAL_STEPS * 84 + 64 + 32 + 38 + 24
         : state.phase === 'learn-hub'
           // Apprendre reprend tout le catalogue desktop (23 niveaux) : la
           // hauteur suit le nombre réel d'entrées pour que la dernière carte
@@ -260,20 +279,34 @@ function synchroniserAffichage() {
               : state.phase === 'deck-picker' ? 1400
                 : 1020)
     : gameplayMobile
-      ? state.mode === 'tutorial'
-        ? 1900
+      ? guidedMobile
+        ? state.panelPiece
+          // Le catalogue vertical garde sa surface scrollable dédiée.
+          ? 1680
+          // Au minimum, le canvas contient la fiche, le plateau complet et les
+          // premiers contrôles ; sur les écrans étroits il reste dans la hauteur
+          // visible, sur les écrans larges il devient naturellement défilable.
+          : Math.max(guidedContentHeight, Math.floor(window.innerHeight || 844))
         : state.panelPiece
-          // Le catalogue mobile est désormais vertical : on réserve une surface
+          // Le catalogue mobile est vertical : on réserve une surface
           // scrollable suffisante pour afficher toutes les cartes et leurs actions.
           ? 1680
           : Math.max(700, Math.min(980, Math.floor(window.innerHeight || 844)))
       : CANVAS_H;
   state.ui.renderWidth = targetWidth;
   state.ui.renderHeight = targetHeight;
-  if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
+  const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+  state.ui.canvasDpr = dpr;
+  const pixelWidth = Math.round(targetWidth * dpr);
+  const pixelHeight = Math.round(targetHeight * dpr);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
   }
+  // Redimensionner le buffer réinitialise la transformation Canvas : on la
+  // repose à chaque frame pour conserver toutes les coordonnées en pixels logiques.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
 }
 
 window.addEventListener('resize', synchroniserAffichage, { passive: true });
@@ -2926,9 +2959,12 @@ function libererBoutonPresse() {
 
 function souris(e) {
   const rect = canvas.getBoundingClientRect();
+  const dpr = state.ui?.canvasDpr || canvasDprInitial;
   return {
-    x: (e.clientX - rect.left) * (canvas.width / rect.width),
-    y: (e.clientY - rect.top) * (canvas.height / rect.height),
+    // Le buffer est en pixels physiques, mais les hitboxes sont en coordonnées
+    // logiques : on annule donc le facteur DPR après le calcul écran → canvas.
+    x: (e.clientX - rect.left) * (canvas.width / rect.width) / dpr,
+    y: (e.clientY - rect.top) * (canvas.height / rect.height) / dpr,
   };
 }
 

@@ -219,9 +219,30 @@ export const STEPS = [
     },
     allow: {
       select: (state, p) => estJoueur(p) && p.type === 'R',
-      move: (state, p, mv) => !!mv.capture,
+      // Seule la capture du fou en a8 est autorisée, jamais une autre capture.
+      move: (state, p, mv) => !!mv.capture && mv.r === 0 && mv.c === 0,
     },
-    hint() { return { cells: [{ r: 0, c: 0 }] }; },
+    hint(state) {
+      if (!state.selected) return { cells: [{ r: 0, c: 0 }], markersOnly: true };
+
+      // Affiche uniquement les rayons d'une tour de base depuis a1 : chaque
+      // rayon s'arrête au premier obstacle, comme le déplacement réel.
+      const source = { r: 7, c: 0 };
+      const paths = [];
+      for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        const ray = [source];
+        let r = source.r + dr;
+        let c = source.c + dc;
+        while (state.board[r]?.[c] !== undefined) {
+          ray.push({ r, c });
+          if (state.board[r][c] !== null) break;
+          r += dr;
+          c += dc;
+        }
+        if (ray.length > 1) paths.push(ray);
+      }
+      return { cells: [{ r: 0, c: 0 }], paths, markersOnly: true };
+    },
     check(state) {
       const p = state.board[0][0];
       return !!(p && p.owner === 0);

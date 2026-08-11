@@ -65,6 +65,19 @@ let __COLS = 8;
 let __BOARD_W = 560;        // frame width  = COLS * cellSize (std 8×70 = 560)
 let __BOARD_H = 560;        // frame height = ROWS * cellSize (std 8×70 = 560)
 let __PANEL_X_RUNTIME = 610; // PANEL_X historique d'origine (ré-évalué par compute)
+function mobileInstructionsAuDessus(state) {
+  return !!(state && state.ui && state.ui.mobileGameplay
+    && (state.mode === 'tutorial' || state.mode === 'learn'));
+}
+function mobileInstructionHeight(state) {
+  if (!mobileInstructionsAuDessus(state)) return 0;
+  if (state.mode === 'learn') return 204;
+  const step = STEPS[state.tutorialStep];
+  const detailLength = step && step.detail ? String(step.detail).length : 0;
+  // Les longues consignes gagnent quelques pixels, sans laisser la fiche
+  // monopoliser l'écran : le texte est aussi borné dans le rendu ci-dessous.
+  return Math.max(220, Math.min(250, 205 + Math.ceil(detailLength / 180) * 15));
+}
 function computeGeometry(state) {
   const mobileGameplay = !!(state && state.ui && state.ui.mobileGameplay);
   const mobileLayout = !!(state && state.ui && state.ui.mobileLayout);
@@ -93,9 +106,13 @@ function computeGeometry(state) {
   OX = mobileGameplay
     ? (mobilePanelOpen ? Math.max(44, Math.round(CANVAS_W * 0.14)) : 12)
     : OX_DESKTOP;
-  // Le bandeau de tour est retiré sur téléphone : le plateau peut remonter
-  // (OY compacté à 40) et récupérer ~32 px de hauteur utile.
-  OY = mobileGameplay ? 40 : OY_DESKTOP;
+  // Sur téléphone, Tutoriel et Apprendre réservent une vraie carte de consignes
+  // au-dessus du plateau. Le plateau reste ensuite la zone centrale, puis les
+  // actions (dont AMÉLIORER) sont dessinées immédiatement sous son cadre.
+  const instructionH = mobileInstructionHeight(state);
+  // Hors Tutoriel/Apprendre, le bandeau de tour est retiré pour garder le layout
+  // compact historique. Pour ces deux modes, OY intègre la carte supérieure.
+  OY = mobileGameplay ? 40 + instructionH : OY_DESKTOP;
 
   // Pour le desktop, les plateaux larges gardent la réserve du panneau latéral.
   // Pour le téléphone, le plateau est pleine largeur (ou légèrement compacté
@@ -1695,18 +1712,18 @@ function dessinePanneauMobile(ctx, state, now) {
   // de la marge réservée au plateau quand le catalogue est ouvert.
   const w = CANVAS_W - 32;
   const x = (CANVAS_W - w) / 2;
-  // Le tutoriel conserve ses consignes et sa progression avant les contrôles de
-  // pièce. Les étapes avec une pièce attendue réutilisent ensuite le panneau
-  // normal via tutorielPanneauNormal(), comme sur ordinateur.
+  const instructionsAuDessus = mobileInstructionsAuDessus(state);
+  // En Tutoriel mobile, la carte de consignes est déjà au-dessus du plateau :
+  // on ne la redessine pas sous le plateau et on commence directement par les
+  // actions de la pièce (notamment AMÉLIORER).
   if (state.mode === 'tutorial' && state.tutorialStep != null
-      && !state.panelPiece && !tutorielPanneauNormal(state)) {
+      && !state.panelPiece && !tutorielPanneauNormal(state) && !instructionsAuDessus) {
     dessineTutorielHUD(ctx, state, x, w, now);
     return;
   }
-  let y = dessineSuiviJoueursMobile(ctx, state, x, OY, w, now);
-  if (state.mode === 'tutorial' && state.tutorialStep != null) {
-    y = dessineProgressionTutorielMobile(ctx, state, x, y + 8, w) + 12;
-  }
+  // Le suivi joueur reste disponible hors Tutoriel/Apprendre. Dans ces deux
+  // modes guidés, l'espace sous le plateau commence par l'action attendue.
+  let y = instructionsAuDessus ? OY : dessineSuiviJoueursMobile(ctx, state, x, OY, w, now);
   const sel = state.selected;
   const selectedUsable = sel && sel.owner === state.turn && state.phase !== 'gameover';
   if (selectedUsable) {
@@ -1787,6 +1804,25 @@ function dessinePanneauMobile(ctx, state, now) {
     y += 26;
   }
 
+  // Les étapes de lecture conservent leurs actions dédiées sous le plateau,
+  // même si la fiche d'instructions a été déplacée au-dessus.
+  if (instructionsAuDessus && state.mode === 'tutorial') {
+    const step = STEPS[state.tutorialStep];
+    if (step?.continuer) {
+      bouton(state, ctx, x, y, w, 44, 'Continuer', { kind: 'tutorialContinue' }, {
+        color: UI_THEME.primary, textColor: UI_THEME.text,
+      });
+      y += 52;
+    }
+    bouton(state, ctx, x, y, (w - 8) / 2, 34, '↻ Recommencer', { kind: 'tutorialRestart' }, {
+      color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 10,
+    });
+    bouton(state, ctx, x + (w + 8) / 2, y, (w - 8) / 2, 34, '← Menu', { kind: 'tutorialHub' }, {
+      color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10,
+    });
+    y += 42;
+  }
+
   if (state.panelPiece && state.phase !== 'gameover') y = dessineCatalogueMobile(ctx, state, x, y, w, now) + 8;
 
   if (state.phase !== 'gameover' && state.phase !== 'menu' && state.phase !== 'replay') {
@@ -1794,6 +1830,91 @@ function dessinePanneauMobile(ctx, state, now) {
       kind: state.mode === 'spectator' ? 'retourMenu' : 'abandonner',
     }, { color: state.mode === 'spectator' ? UI_THEME.primary : UI_THEME.danger, textColor: UI_THEME.text });
   }
+}
+
+function dessineInstructionsMobile(ctx, state, now) {
+  if (!mobileInstructionsAuDessus(state)) return;
+  const x = 16;
+  const w = CANVAS_W - 32;
+  const y = 12;
+  const h = mobileInstructionHeight(state) - 22;
+  carte(ctx, x, y, w, h, 12, UI_THEME.panel, { shadow: true });
+  ctx.lineWidth = 2; ctx.strokeStyle = state.mode === 'tutorial' ? UI_THEME.secondary : UI_THEME.primary;
+  roundRect(ctx, x, y, w, h, 12); ctx.stroke();
+
+  if (state.mode === 'tutorial') {
+    const step = STEPS[state.tutorialStep];
+    if (!step) return;
+    const badgeW = 116, badgeH = 26;
+    ctx.fillStyle = UI_THEME.secondary; roundRect(ctx, x + 10, y + 10, badgeW, badgeH, 7); ctx.fill();
+    ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(`${traduire('ÉTAPE', state.language)} ${state.tutorialStep + 1}/${TOTAL_STEPS}`, x + 10 + badgeW / 2, y + 23);
+    const barY = y + 44, barW = w - 20;
+    ctx.fillStyle = UI_THEME.border; roundRect(ctx, x + 10, barY, barW, 5, 3); ctx.fill();
+    ctx.fillStyle = UI_THEME.secondary; roundRect(ctx, x + 10, barY, barW * ((state.tutorialStep + 1) / TOTAL_STEPS), 5, 3); ctx.fill();
+    ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(traduire(step.title, state.language).toUpperCase(), x + 10, y + 60);
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `600 13px ${F_TEXTE}`;
+      const lines = Math.min(2, wrapTextLimite(ctx, traduire(step.text, state.language), x + 10, y + 86, w - 20, 18, 2) || 0);
+    let cursorY = y + 86 + lines * 18 + 5;
+    if (step.detail) {
+      ctx.fillStyle = UI_THEME.disabledText; ctx.font = `11px ${F_TEXTE}`;
+      const detailLines = Math.min(4, wrapTextLimite(ctx, traduire(step.detail, state.language), x + 10, cursorY, w - 20, 15, 4) || 0);
+      cursorY += detailLines * 15 + 5;
+    }
+    ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
+    ctx.fillText(`${state.ecus[0]} ${traduire('ÉCUS', state.language)}`, x + 10, Math.min(y + h - 12, cursorY));
+    return;
+  }
+
+  const item = state.learnKind === 'puzzle' ? PUZZLES[state.puzzleIndex] : LEARN_GAMES[state.learnIndex];
+  if (!item) return;
+  ctx.fillStyle = item.color || UI_THEME.primary; ctx.font = `10px ${F_TEXTE}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  ctx.fillText(traduire(item.category, state.language).toUpperCase(), x + 10, y + 10);
+  ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
+  ctx.fillText(traduire(item.title, state.language).toUpperCase(), x + 10, y + 28);
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `600 12px ${F_TEXTE}`;
+  const textLines = Math.min(3, wrapTextLimite(ctx, traduire(item.text, state.language), x + 10, y + 54, w - 20, 17, 3) || 0);
+  const objectiveY = y + 54 + textLines * 17 + 6;
+  ctx.fillStyle = UI_THEME.amber; ctx.font = `700 11px ${F_TEXTE}`;
+  wrapTextLimite(ctx, traduire(`Objectif : ${item.objective}`, state.language), x + 10, objectiveY, w - 20, 15, 2);
+  ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`; ctx.fillText(`${state.ecus[0]} ${traduire('ÉCUS', state.language)}`, x + 10, y + h - 12);
+}
+
+// Actions mobiles sous le plateau. Le bouton d'amélioration est volontairement
+// la première action : il reste immédiatement sous le cadre, avant le catalogue.
+function dessineLearnActionsMobile(ctx, state, now) {
+  const x = 16, w = CANVAS_W - 32;
+  let y = OY;
+  const item = state.learnKind === 'puzzle' ? PUZZLES[state.puzzleIndex] : LEARN_GAMES[state.learnIndex];
+  if (!item) return;
+  const purchased = state.learnKind === 'puzzle' ? state.puzzlePurchased : state.learnPurchased;
+  const selected = state.selected && state.selected.owner === state.turn && state.phase !== 'gameover';
+  if (selected && !purchased) {
+    bouton(state, ctx, x, y, w, 44, state.learnKind === 'puzzle' ? 'Acheter la solution' : 'Acheter l’amélioration', { kind: 'ameliorer' }, {
+      color: UI_THEME.amber, textColor: UI_THEME.buttonText,
+      sub: `${traduire(item.upgrade, state.language)} · ${item.cost} ${traduire('écus', state.language)}`,
+    });
+    y += 52;
+  } else if (selected && purchased && item.power && state.phase === 'play') {
+    const actionByPower = { ruee: 'ruee', rayon: 'rayon', vet: 'vet', hypnose: 'hypnose', decret: 'decret', cavalerie: 'cavalerie', echange: 'echange', epine: 'epine', rempart: 'rempart' };
+    const kind = actionByPower[item.power];
+    if (kind) {
+      bouton(state, ctx, x, y, w, 44, item.power.toUpperCase(), { kind }, { color: UI_THEME.amber, textColor: UI_THEME.buttonText, sub: 'activer maintenant' });
+      y += 52;
+    }
+  } else if (!selected) {
+    ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(traduire('Sélectionne la pièce signalée pour continuer.', state.language), x, y + 4);
+    y += 28;
+  }
+  if (state.panelPiece && state.phase !== 'gameover') y = dessineCatalogueMobile(ctx, state, x, y, w, now) + 8;
+  const footY = CANVAS_H - 48;
+  const footGap = 8, footW = (w - footGap) / 2;
+  bouton(state, ctx, x, footY, footW, 34, '↻ Recommencer', { kind: state.learnKind === 'puzzle' ? 'puzzleRestart' : 'learnRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 10 });
+  bouton(state, ctx, x + footW + footGap, footY, footW, 34, state.learnKind === 'puzzle' ? '← Menu puzzles' : '← Menu Apprendre', { kind: state.learnKind === 'puzzle' ? 'puzzleHub' : 'learnHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10 });
 }
 
 // En mobile, le panneau conserve toutes ses cartes et actions mais est rendu sous
@@ -1807,8 +1928,8 @@ function dessinePanneauGameplay(ctx, state, now) {
   const originePlateau = OY;
   OY = originePlateau + __BOARD_H + 16;
   try {
-    if (state.mode !== 'learn') dessinePanneauMobile(ctx, state, now);
-    else dessinePanneau(ctx, state, now);
+    if (state.mode === 'learn') dessineLearnActionsMobile(ctx, state, now);
+    else dessinePanneauMobile(ctx, state, now);
   } finally {
     OY = originePlateau;
   }
@@ -2358,6 +2479,7 @@ function wrapTextLimite(ctx, text, x, y, maxW, lh, maxLines = 2) {
     visibles[visibles.length - 1] = `${derniere}…`;
   }
   visibles.forEach((ligneVisible, i) => ctx.fillText(ligneVisible, x, y + i * lh));
+  return visibles.length;
 }
 
 // Menu hamburger (coin haut droit) : regroupe Compte / Apparence / Langues pour
@@ -2413,8 +2535,9 @@ function mobileButton(state, ctx, x, y, w, h, label, action, options = {}) {
 }
 
 function dessineBandeauCompteMobile(ctx, state) {
-  const W = ctx.canvas.width;
-  const H = ctx.canvas.height;
+  // Le buffer physique peut être multiplié par le DPR ; le layout reste logique.
+  const W = CANVAS_W;
+  const H = CANVAS_H;
   const acc = state.account || { status: 'guest' };
   const language = state.language === 'en' ? 'en' : 'fr';
   const opened = !!(state.ui && state.ui.hamburgerOpen);
@@ -2795,7 +2918,8 @@ function dessineBandeauCompte(ctx, state) {
 }
 
 function dessineMenuMobile(ctx, state) {
-  const W = ctx.canvas.width, H = ctx.canvas.height;
+  // Toujours utiliser les dimensions logiques, jamais le buffer Retina du canvas.
+  const W = CANVAS_W, H = CANVAS_H;
   const pad = 16, inner = W - pad * 2;
   const activeMode = state.menu?.activeMode || 'pvw';
   const selectedDiff = state.menu?.difficulty || null;
@@ -4382,6 +4506,22 @@ const PARCOURS_JEU = {
   locked: UI_THEME.disabled,
 };
 
+// Les puzzles gardent la texture forêt (feuillage, voile, tracé), mais leur
+// fond principal suit le thème actif au lieu du vert de référence. La fonction
+// relit UI_THEME à chaque rendu pour que le changement clair/sombre soit immédiat.
+function paletteFondPuzzles() {
+  return {
+    ...PARCOURS_DA,
+    forest: UI_THEME.background,
+    forestDeep: UI_THEME.background,
+    leafDark: UI_THEME.wineDark,
+    leaf: UI_THEME.card,
+    olive: UI_THEME.amberDark,
+    cream: UI_THEME.text,
+    creamMuted: UI_THEME.muted,
+  };
+}
+
 function dessineFondParcours(ctx, pal = PARCOURS_DA) {
   ctx.fillStyle = pal.forestDeep;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -4520,13 +4660,16 @@ function dessineTutorielHub(ctx, state) {
   const progress = progressionTutoriel(state);
   const completed = new Set(progress.completed || []);
   const nodeW = 60, nodeH = 60, nodeRadius = 14;
+  // Les niveaux restent une liste compacte : le chemin décoratif du parcours
+  // est volontairement masqué pour ne pas gaspiller l'espace vertical sur mobile.
+  const mobileNodeStep = 84;
   const positions = STEPS.map((_, index) => mobile
-    ? { x: cx, y: 150 + index * 108 }
+    ? { x: cx, y: 150 + index * mobileNodeStep }
     : { x: 270 + (index % 3) * 220, y: 180 + Math.floor(index / 3) * 150 });
-  const footerY = mobile ? 150 + STEPS.length * 108 + 64 : 680;
+  const footerY = mobile ? 150 + STEPS.length * mobileNodeStep + 64 : 680;
 
   // Le Tutoriel reprend les couleurs du jeu : tuiles et chemin serpent
-  // conservés, mais avec la palette graphite/sauge/laiton du thème.
+  // conservés, avec la palette graphite/sauge/laiton du thème.
   dessineFondParcours(ctx, PARCOURS_JEU);
 
   ctx.fillStyle = PARCOURS_JEU.cream; ctx.font = `34px ${F_DISPLAY}`;
@@ -4651,15 +4794,16 @@ function dessinePuzzleHub(ctx, state) {
     ];
   const nodeW = 60, nodeH = 60, nodeRadius = 14;
 
-  dessineFondParcours(ctx);
+  const palettePuzzle = paletteFondPuzzles();
+  dessineFondParcours(ctx, palettePuzzle);
 
-  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `34px ${F_DISPLAY}`;
+  ctx.fillStyle = palettePuzzle.cream; ctx.font = `34px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillText(traduire('PUZZLES TACTIQUES', state.language), cx, 55);
-  ctx.fillStyle = PARCOURS_DA.creamMuted; ctx.font = `13px ${F_TEXTE}`;
+  ctx.fillStyle = palettePuzzle.creamMuted; ctx.font = `13px ${F_TEXTE}`;
   ctx.fillText(traduire('Trouve l’amélioration nécessaire pour résoudre chaque situation.', state.language), cx, 80);
 
-  dessineCheminParcours(ctx, positions);
+  dessineCheminParcours(ctx, positions, palettePuzzle);
 
   PUZZLES.forEach((puzzle, index) => {
     const { x: cxNode, y: cyNode } = positions[index];
@@ -4981,6 +5125,10 @@ export function render(ctx, state, now) {
   ctx.fillText(traduire(banniere, state.language).toUpperCase(), OX + 32, chY);
   }
 
+  // Tutoriel/Apprendre mobile : les consignes sont dans la carte supérieure,
+  // avant le plateau. Les hitboxes restent dans le même canvas logique.
+  dessineInstructionsMobile(ctx, state, now);
+
   // PvP en ligne : bannière de désync (hash discordant, §3.4) — détection W2, annulation W3.
   if (state.mode === 'pvw' && state.pvw && state.pvw.desync) {
     ctx.fillStyle = C_TERRACOTTA;
@@ -5045,9 +5193,38 @@ function dessineTutorielCibles(ctx, state, now) {
   const hint = tutorielHint(state);
   if (!hint || !hint.cells) return;
   const pulse = 0.5 + 0.5 * Math.sin(now / 300);
+
+  // Contre-attaque : reprendre exactement les marqueurs du gameplay normal.
+  // Les cases vides reçoivent un point ; la première pièce adverse rencontrée
+  // reçoit un anneau de capture. Aucun trait, flèche ou pointillé n'est dessiné.
+  if (hint.paths && hint.paths.length) {
+    for (const path of hint.paths) {
+      for (const cell of path.slice(1)) {
+        const { x, y } = cellCenterVue(state, cell.r, cell.c);
+        const occupant = state.board?.[cell.r]?.[cell.c];
+        if (occupant) {
+          if (occupant.owner !== state.selected?.owner) {
+            ctx.beginPath();
+            ctx.arc(x, y, __CELL_SIZE / 2 - 4, 0, Math.PI * 2);
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = C_CAP;
+            ctx.stroke();
+          }
+          continue;
+        }
+        ctx.beginPath();
+        ctx.arc(x, y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = C_MOVE;
+        ctx.fill();
+      }
+    }
+    return;
+  }
+
   for (const cell of hint.cells) {
     // Vue identité en tutoriel (jamais pvw) ; passe par le helper par cohérence.
     const { x, y } = cellCenterVue(state, cell.r, cell.c);
+    if (hint.markersOnly) continue;
     ctx.save();
     ctx.beginPath(); ctx.arc(x, y, CELL / 2 - 5 + pulse * 3, 0, Math.PI * 2);
     ctx.lineWidth = 4;
@@ -5068,32 +5245,6 @@ function dessineTutorielCibles(ctx, state, now) {
 }
 
 // --- HUD du tutoriel (instructions dans le panneau latéral) ---
-function dessineProgressionTutorielMobile(ctx, state, x, y, w) {
-  const completed = new Set(progressionTutoriel(state).completed || []);
-  const rowH = 30;
-  const railX = x + 8;
-  ctx.fillStyle = UI_THEME.text; ctx.font = `12px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText(traduire('PARCOURS', state.language), x, y);
-  y += 22;
-  ctx.strokeStyle = UI_THEME.border; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(railX, y + 7); ctx.lineTo(railX, y + rowH * (TOTAL_STEPS - 1) + 7); ctx.stroke();
-  STEPS.forEach((item, index) => {
-    const cy = y + index * rowH + 7;
-    const done = completed.has(index);
-    const current = index === state.tutorialStep;
-    const unlocked = tutorielEtapeDebloquee(state, index);
-    ctx.fillStyle = done ? UI_THEME.primary : current ? UI_THEME.amber : UI_THEME.disabled;
-    ctx.beginPath(); ctx.arc(railX, cy, current ? 7 : 5, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = current ? UI_THEME.amberLight : UI_THEME.border;
-    ctx.lineWidth = current ? 2 : 1;
-    ctx.stroke();
-    ctx.fillStyle = unlocked ? UI_THEME.text : UI_THEME.disabledText;
-    ctx.font = `${current ? 12 : 11}px ${F_DISPLAY}`;
-    ctx.fillText(`${index + 1}. ${traduire(item.title, state.language)}`, x + 22, cy - 7);
-  });
-  return y + TOTAL_STEPS * rowH + 10;
-}
 
 function dessineTutorielHUD(ctx, state, x, w, now) {
   const step = STEPS[state.tutorialStep];
@@ -5106,12 +5257,9 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
     ctx.fillText('♞ ROYCHEC', x, OY + 8);
   }
 
+  // Le suivi détaillé des étapes n'est pas répété sous le plateau : le niveau
+  // conserve uniquement son badge et sa barre de progression, plus compacts.
   let y = OY + 40;
-  if (state.ui && state.ui.mobileGameplay) {
-    // Sous le plateau, le parcours devient une vraie colonne lisible avant les
-    // consignes : chaque étape garde sa couleur d'état et son numéro.
-    y = dessineProgressionTutorielMobile(ctx, state, x, OY + 38, w) + 18;
-  }
 
   // Badge étape + flash « BIEN JOUÉ ! » à l'arrivée sur l'étape.
   const badgeW = 110, badgeH = 28;
