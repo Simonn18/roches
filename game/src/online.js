@@ -481,8 +481,23 @@ function demarrerHandshake(isPrivate = false) {
 
 function envoyerMessage(payload) {
   if (!online.channel) return;
+  const message = { type: 'broadcast', event: 'action', payload };
   try {
-    online.channel.send({ type: 'broadcast', event: 'action', payload });
+    // `send()` bascule implicitement vers REST si le WebSocket n'est pas encore
+    // joignable, ce qui déclenche un avertissement de dépréciation dans Supabase.
+    // Choisir explicitement le transport évite ce fallback implicite tout en
+    // conservant le WebSocket pour les messages d'une partie connectée.
+    const adapter = online.channel.channelAdapter;
+    const socketReady = !!(adapter && typeof adapter.canPush === 'function' && adapter.canPush());
+    if (!socketReady && typeof online.channel.httpSend === 'function') {
+      Promise.resolve(online.channel.httpSend('action', payload)).catch((e) => {
+        console.warn('[online] httpSend', e && (e.message || e));
+      });
+      return;
+    }
+    Promise.resolve(online.channel.send(message)).catch((e) => {
+      console.warn('[online] send', e && (e.message || e));
+    });
   } catch (e) {
     console.warn('[online] send', e);
   }
@@ -549,7 +564,11 @@ export async function resumeMatch(matchId, side, meta = {}) {
       if (!/column|schema cache|does not exist|could not find/i.test(detail)) break;
     }
     if (error) throw error;
-    if (!data || data.status !== 'playing') {
+    // Selon la migration Supabase utilisée, un match déjà rejoint peut rester
+    // `ready` côté serveur : le passage à `playing` est local, au moment où le
+    // handshake Realtime est confirmé. Les deux états sont donc reprenables.
+    const resumable = data && ['ready', 'playing'].includes(data.status);
+    if (!resumable) {
       const terminal = data && ['ended', 'disputed', 'voided'].includes(data.status);
       online.error = terminal
         ? 'Cette partie est terminée ou annulée.'
@@ -569,6 +588,8 @@ export async function resumeMatch(matchId, side, meta = {}) {
     online.status = 'matched';
     online.error = null;
     // Handshake privé : le match existe déjà, il n'y a pas de timeout de recherche.
+    // Le statut serveur peut être `ready` ou `playing` selon la migration active.
+
     return demarrerHandshake(true);
   } catch (e) {
     console.warn('[online] resumeMatch', e && (e.message || e));
@@ -631,6 +652,27 @@ export function __debugEnqueue(msg) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Une partie peut avoir été supprimée côté serveur entre la fin locale et le rapport
+// (match ancien, nettoyage de file ou reset Supabase). Dans ce cas, re-tenter la RPC
+// ne peut jamais réussir et transforme un état terminal bénin en rafale de 400.
+function erreurMatchIntrouvable(error) {
+  const detail = [error && error.code, error && error.message, error && error.details, error && error.hint]
+    .filter(Boolean).join(' ');
+  return /match_not_found|match not found/i.test(detail);
+}
+
+// Les erreurs métier (not_a_player, match_not_playing, RPC absente, droits…) sont
+// définitives pour ce rapport. On ne retente que les erreurs réseau et les statuts
+// explicitement transitoires, afin d'éviter une rafale de 400 dans la console.
+function erreurRapportTransitoire(error) {
+  const status = Number(error && (error.status ?? error.statusCode));
+  if (status === 408 || status === 429 || (status >= 500 && status <= 599)) return true;
+  // Une erreur Fetch/réseau n'a généralement ni code PostgREST ni statut HTTP.
+  const code = String(error && error.code || '');
+  if (!code) return !status;
+  return /^(408|429|5\\d{2})$/.test(code) || /network|fetch|timeout|aborted|offline/i.test(code);
+}
+
 /** Rapporte le résultat de la partie au serveur (RPC pvp_report_result, §3.5/§8).
  *  - result : 'win' | 'loss' | 'draw' du point de vue local.
  *  Renvoie { applied, delta, total, status, error }. Les trophées ne sont écrits que si
@@ -641,11 +683,15 @@ export async function report(result) {
   if (!online.supabase || !online.matchId) {
     return { applied: false, delta: 0, total: null, status: 'offline', error: 'offline' };
   }
+  // Figer l'identifiant : un clic « nouvelle partie » peut appeler leave() pendant
+  // l'attente du rapport et remettre online.matchId à null. La RPC reste la source
+  // d'autorité : une lecture préalable pourrait masquer la ligne à cause de RLS.
+  const matchId = online.matchId;
   const maxTries = 8; // 8 × 1,5 s ≈ 12 s d'attente d'un rapport concordant
   for (let i = 0; i < maxTries; i++) {
     try {
       const { data, error } = await online.supabase.rpc('pvp_report_result', {
-        p_match_id: online.matchId,
+        p_match_id: matchId,
         p_result: result,
       });
       if (error) throw error;
@@ -659,7 +705,17 @@ export async function report(result) {
       }
       // 'playing' = mon rapport est enregistré, on attend celui de l'adversaire.
     } catch (e) {
-      console.warn('[online] pvp_report_result', e && (e.message || e));
+      // Match supprimé/expiré : aucun retry ne peut le recréer. On renvoie un état
+      // terminal explicite pour que l'écran de fin reste gracieux et silencieux.
+      if (erreurMatchIntrouvable(e)) {
+        console.info('[online] résultat ignoré : match introuvable', matchId);
+        return { applied: false, delta: 0, total: null, status: 'missing', error: 'match_not_found' };
+      }
+      if (!erreurRapportTransitoire(e)) {
+        console.warn('[online] pvp_report_result terminal', e && (e.message || e));
+        return { applied: false, delta: 0, total: null, status: 'error', error: 'server' };
+      }
+      console.warn('[online] pvp_report_result transient', e && (e.message || e));
       if (i === maxTries - 1) {
         return { applied: false, delta: 0, total: null, status: 'error', error: 'network' };
       }

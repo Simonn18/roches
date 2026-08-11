@@ -19,7 +19,7 @@ import { initAccount, startAuth, logout, ouvrirActivationMfa, getAccount, getSup
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, resumeMatch, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue, requestResync, sendResync,
   setSeq as onlineSetSeq, clearInbox as onlineClearInbox,
-  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=111';
+  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=114';
 // Deck editor (recovery 29/07 [23:30]) : API complète de decks.js (couche DONNÉES).
 // loadDecks/saveDecks étaient déjà importés ; on ajoute les helpers d'id/active/clone.
 import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
@@ -489,8 +489,15 @@ const REPLAY_SPEEDS = [0, 1200, 600, 200]; // index 0 inutilisé, 1=lent, 2=norm
 // boardOrRows permet d'adapter la rangée à la hauteur réelle du plateau.
 function fromAlgebraic(s, boardOrRows) {
   if (typeof s !== 'string' || !s.length) return null;
-  const rows = (boardOrRows && boardOrRows.rows) || boardOrRows || 8;
-  return { r: rows - parseInt(s.slice(1)), c: s.charCodeAt(0) - 97 };
+  const rows = boardOrRows && (boardOrRows.rows || boardOrRows.length)
+    || (typeof boardOrRows === 'number' ? boardOrRows : 8);
+  const rank = Number.parseInt(s.slice(1), 10);
+  const c = s.charCodeAt(0) - 97;
+  const cols = boardOrRows && (boardOrRows.cols
+    || (Array.isArray(boardOrRows) && boardOrRows[0] && boardOrRows[0].length));
+  if (!Number.isInteger(rows) || !Number.isInteger(rank) || rank < 1 || rank > rows
+      || c < 0 || (Number.isInteger(cols) && c >= cols)) return null;
+  return { r: rows - rank, c };
 }
 
 function commencerReplay(replayData) {
@@ -708,12 +715,16 @@ function finPartie(winner) {
 // réutiliser dessineBlocTrophee. Le serveur exige désormais deux rapports concordants
 // pour attribuer des trophées ; un abandon local peut donc rester non classé.
 function reporterResultatPvP() {
-  const p = state.pvw;
-  const won = state.winner === p.side;
-  const result = state.winner === null ? 'draw' : (won ? 'win' : 'loss');
+  // Conserver la référence de l'écran de fin : une réponse réseau tardive ne doit
+  // jamais écrire dans le state d'une nouvelle partie ou du menu.
+  const gameState = state;
+  const p = gameState.pvw;
+  const won = gameState.winner === p.side;
+  const result = gameState.winner === null ? 'draw' : (won ? 'win' : 'loss');
   const prev = getAccount().trophies || 0;
-  state.trophy = { pending: true, won, prev, delta: 0, total: prev, t0: performance.now() };
+  gameState.trophy = { pending: true, won, prev, delta: 0, total: prev, t0: performance.now() };
   onlineReport(result).then((res) => {
+    if (state !== gameState || state.mode !== 'pvw' || state.phase !== 'gameover') return;
     // total serveur si appliqué ; sinon on garde prev (aucun trophée écrit) + note.
     const total = (res.applied && res.total != null) ? res.total : prev;
     state.trophy = {
@@ -1724,7 +1735,7 @@ function deckUpgrades(type) {
   return upgradesForPiece(state.activeDeck, type, UPGRADES_PAR_TYPE[type]);
 }
 
-function acheter(id) {
+function acheter(id, { remote = false } = {}) {
   const p = state.panelPiece;
   if (!p) { console.warn('[acheter] no panelPiece'); return; }
   if (state.mode === 'learn' && !learnPermet(state, { type: 'buy', id })) {
@@ -1736,8 +1747,12 @@ function acheter(id) {
   if (!u || u.piece !== p.type) { console.warn('[acheter] unknown/invalid upgrade', id, p.type); return; }
   // Le deck actif est la source de vérité : on ne peut acheter que les upgrades
   // sélectionnées pour ce type de pièce (GDD §5.3.c / demande utilisateur).
+  // En PvP, le deck est propre à chaque joueur : lors de l'application d'une
+  // action distante, le deck local ne peut pas servir de catalogue adverse.
+  // Les contrôles intrinsèques (type, coût, doublon et plafond) restent actifs
+  // juste après ce bloc.
   const allowed = deckUpgrades(p.type);
-  if (!allowed.includes(id)) {
+  if (!remote && !allowed.includes(id)) {
     console.warn('[acheter] upgrade not in active deck', id, 'type', p.type, 'allowed', allowed, 'activeDeck', state.activeDeck);
     state.buzz = performance.now(); state.buzzId = id;
     return;
@@ -2002,7 +2017,7 @@ function applyRemoteAction(msg) {
     if (msg.kind === 'move') {
       const from = fromAlgebraic(msg.from, state.board), to = fromAlgebraic(msg.to, state.board);
       if (!from || !to) { console.warn('[online] malformed move coords', msg); p.applyingRemote = false; return; }
-      const piece = state.board[from.r][from.c];
+      const piece = state.board[from.r] && state.board[from.r][from.c];
       if (!piece || piece.owner !== opp) { console.warn('[online] illegal — pièce introuvable', msg); p.applyingRemote = false; return; }
       // Contrôle de légalité (§3.2 étape 3) via le propre rules.js du récepteur.
       const cands = state.chain ? state.legalMoves : coupsLegaux(state.board, piece);
@@ -2016,11 +2031,11 @@ function applyRemoteAction(msg) {
     } else if (msg.kind === 'purchase') {
       const pos = fromAlgebraic(msg.pos, state.board);
       if (!pos) { console.warn('[online] malformed purchase coords', msg); p.applyingRemote = false; return; }
-      const piece = state.board[pos.r][pos.c];
+      const piece = state.board[pos.r] && state.board[pos.r][pos.c];
       if (!piece || piece.owner !== opp) { console.warn('[online] illegal — achat pièce introuvable', msg); p.applyingRemote = false; return; }
       const before = piece.upgrades.length;
       state.panelPiece = piece;
-      acheter(msg.upgrade); // acheter() re-valide solde recalculé + catalogue + plafond
+      acheter(msg.upgrade, { remote: true }); // le deck adverse est indépendant du deck local
       state.panelPiece = null;
       if (piece.upgrades.length === before) console.warn('[online] achat refusé par le moteur (illégal)', msg);
     } else if (msg.kind === 'power') {
@@ -2112,18 +2127,23 @@ function pvwEndByTime(broadcast) {
 // Fabrique une pièce complète depuis des données sérialisées (le module board.js
 // n'exporte pas creerPiece ; on reconstruit un objet aux MÊMES champs, id synthétique —
 // piece.id n'entre jamais dans le hash ni la logique, seulement l'identité locale).
-let _resyncId = 100000;
-function makePiece(d) {
+let _resyncId = 100000;function makePiece(d) {
   return {
-    id: _resyncId++, type: d.type, owner: d.owner, r: d.r, c: d.c,
+    id: d.id || _resyncId++, type: d.type, owner: d.owner, r: d.r, c: d.c,
     upgrades: Array.isArray(d.upgrades) ? [...d.upgrades] : [],
     shield: !!d.shield,
     cooldowns: d.cooldowns ? { ...d.cooldowns } : {},
+    debuffs: d.debuffs ? { ...d.debuffs } : {},
     doubleCoupUsed: !!d.doubleCoupUsed,
-    decretUsed: !!d.decretUsed,      sacrificeArmed: !!d.sacrificeArmed,
-      rempartGranted: !!d.rempartGranted,
-      epineZone: d.epineZone ? { ...d.epineZone } : null,
-    };
+    decretUsed: !!d.decretUsed,
+    sacrificeArmed: !!d.sacrificeArmed,
+    rempartGranted: !!d.rempartGranted,
+    folieUsed: !!d.folieUsed,
+    feinteUsed: !!d.feinteUsed,
+    shtUsed: !!d.shtUsed,
+    aBouge: !!d.aBouge,
+    epineZone: d.epineZone ? { ...d.epineZone } : null,
+  };
 }
 
 // Snapshot d'état complet et sérialisable (§7.3). Le survivant l'émet au retour de
@@ -2137,9 +2157,12 @@ function pvwBuildSnapshot() {
       const q = state.board[r][c];
       if (!q) continue;
       pieces.push({
-        r, c, owner: q.owner, type: q.type, upgrades: q.upgrades,
-        shield: q.shield, cooldowns: q.cooldowns, doubleCoupUsed: q.doubleCoupUsed,
-        decretUsed: q.decretUsed, sacrificeArmed: q.sacrificeArmed, rempartGranted: q.rempartGranted,
+        id: q.id, r, c, owner: q.owner, type: q.type, upgrades: q.upgrades,
+        shield: q.shield, cooldowns: q.cooldowns, debuffs: q.debuffs,
+        doubleCoupUsed: q.doubleCoupUsed, decretUsed: q.decretUsed,
+        sacrificeArmed: q.sacrificeArmed, rempartGranted: q.rempartGranted,
+        folieUsed: q.folieUsed, feinteUsed: q.feinteUsed, shtUsed: q.shtUsed,
+        aBouge: q.aBouge,
         epineZone: q.epineZone ? { ...q.epineZone } : null,
       });
     }
@@ -2174,7 +2197,8 @@ function pvwApplySnapshot(snap) {
     console.warn('[online] snapshot bonus incompatible, resync rejeté');
     return;
   }
-  const board = Array.from({ length: state.board.length }, () => Array(state.board[0].length).fill(null));
+  const board = creerPlateau(state.taille);
+  for (const row of board) row.fill(null);
   for (const d of snap.pieces) {
     if (d.r < 0 || d.r >= board.length || d.c < 0 || d.c >= board[0].length) continue;
     board[d.r][d.c] = makePiece(d);
