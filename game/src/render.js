@@ -683,7 +683,13 @@ function dessinePiece(ctx, state, p, x, y, now, rayon = Math.round(__CELL_SIZE *
   // procédural cat (commit 9f48b832) → feu VIDÉO mp4 tinté (pivot user).
   const feuOpts = optionsFeuPour(p);
   if (feuOpts) {
-    dessineFeu(ctx, x, y, now, rEtat, feuOpts.col1, feuOpts.col2, feuOpts.pulsed);
+    // Sur téléphone, la cellule est plus étroite : le halo vidéo reste contenu
+    // autour de la pièce au lieu de déborder sur les cases voisines. Le desktop
+    // conserve le rayon historique de 40 px.
+    const feuRadius = state.ui && state.ui.mobileGameplay
+      ? Math.max(14, Math.min(28, __CELL_SIZE * 0.52))
+      : 40;
+    dessineFeu(ctx, x, y, now, rEtat, feuOpts.col1, feuOpts.col2, feuOpts.pulsed, feuRadius);
   }
 
   // 2. Sprite de la pièce OU fallback jeton flat — DESSUS le feu (le feu est DERRIÈRE).
@@ -926,13 +932,13 @@ function dessineFeu(ctx, x, y, now, r, col1, col2, pulsed, radiusOverride = 40) 
 
 // Dessine une flèche directionnelle de (x1,y1) à (x2,y2) avec une tête triangulaire.
 // Utilisée pour indiquer la direction de poussée de la Cavalerie (Phase 2).
-function dessineFleche(ctx, x1, y1, x2, y2, color) {
+function dessineFleche(ctx, x1, y1, x2, y2, color, scale = 1) {
   const dx = x2 - x1, dy = y2 - y1;
   const angle = Math.atan2(dy, dx);
-  const headLen = 10; // longueur de la pointe de la flèche
+  const headLen = 10 * scale; // longueur de la pointe de la flèche
   // Tige
   ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 3 * scale;
   ctx.beginPath();
   ctx.moveTo(x1, y1);
   ctx.lineTo(x2, y2);
@@ -1110,23 +1116,28 @@ function dessineEchiquier(ctx, state, now) {
   // avec exactement les mêmes marqueurs et couleurs que sur un plateau normal.
   // Le verrouillage reste uniquement logique : un clic sur une mauvaise cible est
   // refusé par main.js et affiche le feedback ACTION GUIDÉE.
+  const mobileGameplay = !!(state.ui && state.ui.mobileGameplay);
+  const moveDotRadius = mobileGameplay ? Math.max(5, __CELL_SIZE * 0.14) : 10;
+  const teleRadius = mobileGameplay ? Math.max(7, __CELL_SIZE * 0.18) : 13;
+  const specialRadius = mobileGameplay ? Math.max(6, __CELL_SIZE * 0.14) : Math.max(10, __CELL_SIZE * 0.18);
+  const markerLineWidth = mobileGameplay ? 2 : 3;
   for (const mv of state.legalMoves) {
     const { x, y } = cellCenterVue(state, mv.r, mv.c);
     if (mv.capture) {
-      ctx.beginPath(); ctx.arc(x, y, __CELL_SIZE / 2 - 4, 0, Math.PI * 2);
-      ctx.lineWidth = 5; ctx.strokeStyle = C_CAP; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, __CELL_SIZE / 2 - (mobileGameplay ? 6 : 4), 0, Math.PI * 2);
+      ctx.lineWidth = mobileGameplay ? 3 : 5; ctx.strokeStyle = C_CAP; ctx.stroke();
     } else if (mv.tele) {
       ctx.save();
-      ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2);
-      ctx.setLineDash([4, 3]); ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, teleRadius, 0, Math.PI * 2);
+      ctx.setLineDash([4, 3]); ctx.lineWidth = markerLineWidth; ctx.strokeStyle = C_AMBRE; ctx.stroke();
       ctx.restore();
     } else if (mv.pasDiag || mv.grandSaut || mv.hauteFuite) {
       ctx.save();
-      ctx.beginPath(); ctx.arc(x, y, Math.max(10, __CELL_SIZE * 0.18), 0, Math.PI * 2);
-      ctx.setLineDash([5, 3]); ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, specialRadius, 0, Math.PI * 2);
+      ctx.setLineDash([5, 3]); ctx.lineWidth = markerLineWidth; ctx.strokeStyle = C_AMBRE; ctx.stroke();
       ctx.restore();
     } else {
-      ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(x, y, moveDotRadius, 0, Math.PI * 2);
       ctx.fillStyle = C_MOVE; ctx.fill();
     }
   }
@@ -1142,10 +1153,12 @@ function dessineEchiquier(ctx, state, now) {
       : state.phase === 'echange-target' ? '#7FB069'
       : state.phase === 'cavalerie-push' ? '#5BC0EB' // cyan vif pour les destinations
       : C_RUEE;
+    const targetRadius = mobileGameplay ? __CELL_SIZE / 2 - 6 : __CELL_SIZE / 2 - 3;
+    const targetLineWidth = mobileGameplay ? 3 : 4;
     for (const t of state.ruTargets) {
       const { x, y } = cellCenterVue(state, t.r, t.c);
-      ctx.beginPath(); ctx.arc(x, y, __CELL_SIZE / 2 - 3, 0, Math.PI * 2);
-      ctx.lineWidth = 4; ctx.strokeStyle = couleur; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, targetRadius, 0, Math.PI * 2);
+      ctx.lineWidth = targetLineWidth; ctx.strokeStyle = couleur; ctx.stroke();
     }
   }
 
@@ -1156,7 +1169,7 @@ function dessineEchiquier(ctx, state, now) {
     ctx.globalAlpha = 0.55;
     for (const t of state.ruTargets) {
       const to = cellCenterVue(state, t.r, t.c);
-      dessineFleche(ctx, from.x, from.y, to.x, to.y, '#5BC0EB');
+      dessineFleche(ctx, from.x, from.y, to.x, to.y, '#5BC0EB', mobileGameplay ? 0.72 : 1);
     }
     ctx.globalAlpha = 1;
   }
@@ -1634,7 +1647,7 @@ function dessineCatalogueMobile(ctx, state, x, y, w, now) {
     ctx.restore();
 
     const badgeX = cardX + cardW - 17;
-    const badgeY = cardY + 2;
+    const badgeY = cardY + 14;
     ctx.beginPath(); ctx.arc(badgeX, badgeY, 12, 0, Math.PI * 2);
     ctx.fillStyle = deja ? UI_THEME.primary : (u.cout >= 12 ? UI_THEME.amber : COULEUR_CAT[u.cat]);
     ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = UI_THEME.border; ctx.stroke();
@@ -1652,11 +1665,11 @@ function dessineCatalogueMobile(ctx, state, x, y, w, now) {
 }
 
 function dessineSuiviJoueursMobile(ctx, state, x, y, w, now) {
-  // Même lecture que sur ordinateur : deux cartes persistantes, le joueur actif
-  // signalé par son liseré de camp et le solde visible à droite. Sur téléphone,
-  // le wordmark « ♞ ROYCHEC » est volontairement retiré pour gagner de la place
-  // (demande utilisateur) : le suivi des joueurs commence directement.
-  if (state.mode === 'pvw' && state.pvw) y = dessineHorlogesPvw(ctx, state, x, w, y, now);
+  // Sur téléphone, le suivi reste lisible en une seule ligne par joueur :
+  // pseudo à gauche, temps au centre-droit, écus à droite. Les horloges ne
+  // prennent donc plus deux lignes séparées au-dessus des soldes.
+  const enLigne = state.mode === 'pvw' && state.pvw;
+  const disp = enLigne ? (state.pvw.clockDisplay || state.pvw.clocks) : null;
 
   const cardH = 42;
   const gap = 8;
@@ -1672,16 +1685,40 @@ function dessineSuiviJoueursMobile(ctx, state, x, y, w, now) {
     ctx.beginPath(); ctx.arc(x + 20, y + cardH / 2, 9, 0, Math.PI * 2); ctx.fill();
 
     let nomJ = NOM_JOUEUR[j];
-    if (state.mode === 'pvw' && state.pvw) {
+    if (enLigne) {
       nomJ = j === state.pvw.side ? 'Toi' : (state.pvw.oppPseudo || 'Adversaire');
     }
     const statut = actif ? `  ·  ${traduire('à jouer', state.language)}` : '';
-    ctx.fillStyle = UI_THEME.text; ctx.font = `11px ${F_DISPLAY}`;
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText((traduire(nomJ, state.language) + statut).toUpperCase(), x + 36, y + cardH / 2);
+    const nomAffiche = (traduire(nomJ, state.language) + statut).toUpperCase();
 
     const eW = 66, eH = 24;
     const eX = x + w - eW - 8, eY = y + (cardH - eH) / 2;
+    const clockRight = eX - 10;
+    // Le nom s'adapte à la largeur restante pour ne jamais passer sous le temps
+    // ou la pastille d'écus, notamment sur un téléphone étroit.
+    ctx.fillStyle = UI_THEME.text; ctx.font = `11px ${F_DISPLAY}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const maxNameW = Math.max(52, clockRight - (x + 36) - 8);
+    let nomRendu = nomAffiche;
+    if (ctx.measureText(nomRendu).width > maxNameW) {
+      while (nomRendu.length > 1 && ctx.measureText(`${nomRendu.slice(0, -1)}…`).width > maxNameW) {
+        nomRendu = nomRendu.slice(0, -1);
+      }
+      nomRendu = `${nomRendu.slice(0, -1)}…`;
+    }
+    ctx.fillText(nomRendu, x + 36, y + cardH / 2);
+
+    // En PvP, le temps et les écus partagent la même ligne, avec le temps
+    // traité comme une donnée tabulaire et sa couleur d'alerte conservée.
+    if (enLigne) {
+      const t = disp[j];
+      const bas = t <= 30;
+      ctx.fillStyle = bas ? UI_THEME.danger : UI_THEME.text;
+      ctx.font = `12px ${F_DISPLAY}`;
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.fillText(`⏱ ${fmtClock(t)}`, clockRight, y + cardH / 2);
+    }
+
     ctx.fillStyle = ACCENT[vj];
     roundRect(ctx, eX, eY, eW, eH, eH / 2); ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.border;
@@ -2028,7 +2065,7 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
       ctx.fillText('🔒', cx0 + w - 10, y + 8);
     } else {
       // Pastille de coût / badge médaille, chevauchant le bord supérieur (DA §11.1.c/d).
-      const pcx = cx0 + w - 20, pcy = y, pr = 15;
+      const pcx = cx0 + w - 20, pcy = y + 17, pr = 15;
       let pFill, pTexte, pTexteColor;
       if (deja) {
         pFill = UI_THEME.primary; pTexte = '✓'; pTexteColor = UI_THEME.text; // badge médaille (DA §11.1.d)
@@ -4360,10 +4397,6 @@ function dessineDeckPicker(ctx, state) {
     CANVAS_W / 2, 80);
   ctx.fillStyle = DECK_UI.muted; ctx.font = `12px ${F_TEXTE}`;
   ctx.fillText(traduire('Choisis une amélioration compatible', state.language), CANVAS_W / 2, 102);
-  ctx.font = `10px ${F_DISPLAY}`;
-  ctx.fillStyle = DECK_UI.amber;
-  ctx.fillText(traduire('OU VIDE LE SLOT POUR LE RÉINITIALISER', state.language), CANVAS_W / 2, 119);
-
   // Cartes éligibles : UPGRADES filtrées sur (piece, cat), triées par coût croissant.
   const eligible = Object.values(UPGRADES)
     .filter((u) => u.piece === type && u.cat === cat)
@@ -4405,18 +4438,13 @@ function dessineDeckPicker(ctx, state) {
       action: { kind: 'pickUpgrade', id: u.id }, enabled: true, radius: 8 });
   }
 
-  // Bouton « Vider le slot » + « Retour » sous la dernière carte (dynamic y).
+  // Bouton « Retour » sous la dernière carte (dynamic y).
   const footerY = eligible.length > 0
     ? startY + eligible.length * (cardH + cardGap) + 12
     : startY + 40;
   const footerX = mobilePicker ? (CANVAS_W - 220) / 2 : startX;
-  bouton(state, ctx, footerX, footerY, 220, 38, '🗑️  Vider le slot',
-    { kind: 'pickUpgrade', id: null },
-    { enabled: currentSlot !== null, color: DECK_UI.field, textColor: DECK_UI.ink,
-      outlineColor: DECK_UI.border, disabledColor: DECK_UI.panel,
-      disabledTextColor: DECK_UI.muted, disabledOutlineColor: DECK_UI.border });
   bouton(state, ctx, mobilePicker ? footerX : startX + cardW - 200,
-    mobilePicker ? footerY + 48 : footerY, 200, 38, '← Retour',
+    footerY, 200, 38, '← Retour',
     { kind: 'cancelPick' },
     { color: DECK_UI.green, textColor: DECK_UI.ink, outlineColor: DECK_UI.greenD });
 }

@@ -785,14 +785,25 @@ function coupsAutorises(piece) {
   return ms;
 }
 
+function panneauMobileJeuOuvert() {
+  const modeJeu = state.mode === 'pvp' || state.mode === 'pvai' || state.mode === 'pvw';
+  return !!(modeJeu && state.ui && state.ui.mobileGameplay && state.panelPiece);
+}
+
 function selectionner(piece) {
   if (state.mode === 'learn' && !learnPermet(state, { type: 'select', piece })) {
     refusApprendre(piece);
     return;
   }
+  const garderPanneau = panneauMobileJeuOuvert();
+  // Tant que le catalogue est ouvert, un clic sur une pièce adverse ne doit
+  // jamais remplacer la pièce active ni rendre son catalogue achetable.
+  if (garderPanneau && piece.owner !== state.turn) return;
   state.selected = piece;
   state.legalMoves = coupsAutorises(piece);
-  state.panelPiece = null;
+  // Dans toutes les parties sur mobile, le catalogue reste visible : une
+  // sélection dans le plateau change simplement la pièce affichée au lieu de le fermer.
+  state.panelPiece = garderPanneau ? piece : null;
   if (!PHASES_CIBLAGE.includes(state.phase)) {
     state.phase = state.phase === 'gameover' ? 'gameover' : 'play';
   }
@@ -804,9 +815,11 @@ function recalculerCoups() {
 
 function deselectionner() {
   if (state.chain) return; // enchaînement en cours : la pièce reste sélectionnée
+  const garderPanneau = panneauMobileJeuOuvert();
   state.selected = null;
   state.legalMoves = [];
-  state.panelPiece = null;
+  // Le bouton « × » est la fermeture explicite du catalogue mobile.
+  if (!garderPanneau) state.panelPiece = null;
   if (PHASES_CIBLAGE.includes(state.phase)) state.phase = 'play';
   state.ruTargets = [];
 }
@@ -1763,6 +1776,12 @@ function deckUpgrades(type) {
 function acheter(id, { remote = false } = {}) {
   const p = state.panelPiece;
   if (!p) { console.warn('[acheter] no panelPiece'); return; }
+  // Garde moteur : un catalogue persistant ne doit jamais permettre d'acheter
+  // une amélioration sur une pièce adverse, quel que soit le chemin d'entrée.
+  if (p.owner !== state.turn) {
+    console.warn('[acheter] cannot upgrade an opponent piece');
+    return;
+  }
   if (state.mode === 'learn' && !learnPermet(state, { type: 'buy', id })) {
     refusApprendre(p);
     return;
@@ -2510,8 +2529,18 @@ function actionBouton(action) {
         break;
       }
       const learnPiece = state.mode === 'learn' ? state.panelPiece : null;
+      const panneauMobileOuvert = panneauMobileJeuOuvert();
+      const piecePanneauMobile = panneauMobileOuvert ? state.panelPiece : null;
       const upgradesBefore = learnPiece ? learnPiece.upgrades.length : 0;
       acheter(action.id);
+      // Garde-fou : l'achat ne doit jamais refermer le catalogue mobile.
+      // On restaure aussi la sélection si une évolution du flux réseau l'a
+      // momentanément nettoyée pendant l'émission de l'action.
+      if (panneauMobileOuvert && piecePanneauMobile && state.phase !== 'gameover') {
+        state.panelPiece = piecePanneauMobile;
+        state.selected = piecePanneauMobile;
+        state.legalMoves = coupsAutorises(piecePanneauMobile);
+      }
       // L'achat doit être réel : l'amélioration n'est utilisable qu'après son
       // débit effectif, aussi bien dans les niveaux classiques que les puzzles.
       if (learnPiece && learnPiece.upgrades.length > upgradesBefore) {
