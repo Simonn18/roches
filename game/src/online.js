@@ -32,6 +32,11 @@ const online = {
   _pollFails: 0,         // échecs RPC consécutifs de pvp_find_match (visibilité serveur KO)
   _oppSeen: false,       // l'adversaire a-t-il été VU présent au moins une fois (anti faux positif Presence)
   _dcTimer: null,        // timer de debounce déconnexion (adversaire absent > 3 s continues)
+  _channelStatus: 'idle',// joining | subscribed | reconnecting
+  _presenceReady: false, // true après le track local, jamais sur un sync intermédiaire
+  _presenceGraceUntil: 0,// grâce après reconnexion avant de conclure à une absence adverse
+  _presenceGraceTimer: null,
+  _subscribeGeneration: 0,
   // --- CYCLE W2 : synchro des coups (lockstep) ---
   seq: 0,                // n° d'action monotone partagé du match (§5.6) — avancé à l'envoi ET à l'application
   inbox: [],             // actions entrantes en attente d'application, triées par seq (§5.6 file d'application)
@@ -88,6 +93,11 @@ export function leave() {
   online._readyFired = false;
   online._pollFails = 0;
   online._oppSeen = false;
+  online._channelStatus = 'idle';
+  online._presenceReady = false;
+  online._presenceGraceUntil = 0;
+  clearPresenceGraceTimer();
+  online._subscribeGeneration++;
   online.seq = 0;
   online.inbox = [];
   online.oppGone = false;
@@ -321,20 +331,28 @@ function demarrerHandshake(isPrivate = false) {
   const channelName = `match:${online.matchId}`;
   online._readyFired = false;
   online._oppSeen = false;
+  online._channelStatus = 'joining';
+  online._presenceReady = false;
+  online._presenceGraceUntil = 0;
   clearDcTimer();
+  clearPresenceGraceTimer();
 
   try {
     // Clé Presence FIXÉE à mon side (0 ou 1) : sans clé explicite, realtime-js peut
     // regrouper les deux clients sous une même clé (metas fusionnées) → presenceState
     // n'aurait qu'UNE entrée même à deux connectés → faux « déconnecté ». Avec une clé
     // par side, chaque joueur a sa propre entrée et on compte les SIDES réellement présents.
-    online.channel = online.supabase.channel(channelName, {
+    const channel = online.supabase.channel(channelName, {
       config: { private: true, broadcast: { self: false }, presence: { key: String(online.side) } },
     });
+    online.channel = channel;
 
     // Réception des messages Broadcast.
-    online.channel.on('broadcast', { event: 'action' }, (payload) => {
-      const msg = payload.payload;
+    channel.on('broadcast', { event: 'action' }, (payload) => {
+      // Une reconnexion/retour menu peut laisser un callback de l'ancien canal arriver
+      // tardivement. Il ne doit jamais muter l'état du nouveau match.
+      if (channel !== online.channel) return;
+      const msg = payload.payload || {};
       if (msg.kind === 'hello') {
         // En reprise, l'adversaire peut rejoindre un canal où je suis déjà en partie.
         // Je réponds au handshake, mais je NE repasse jamais de `playing` à `ready` :
@@ -397,64 +415,48 @@ function demarrerHandshake(isPrivate = false) {
     //    l'arrivée de B) : on ne déclare une déconnexion QUE si l'adversaire a d'abord
     //    été VU présent (_oppSeen), PUIS reste absent > 3 s continues (debounce annulé
     //    dès qu'un sync le remontre). Vaut aussi en partie ('playing').
-    online.channel.on('presence', { event: 'sync' }, () => {
-      const st = online.status;
-      // --- EN PARTIE (§7.2/§7.3) : on NE bascule PAS online.status → l'horloge et le
-      // lockstep continuent. On signale oppLeft/oppReturned ; main.js ouvre la fenêtre
-      // de reconnexion 30 s (bannière) puis tranche par abandon si l'adversaire ne
-      // revient pas. Le retour déclenche un resync snapshot côté survivant. ---
-      if (st === 'playing') {
-        if (oppPresent()) {
-          online._oppSeen = true;
-          clearDcTimer();
-          if (online.oppGone) {           // il était parti → il revient
-            online.oppGone = false;
-            if (callbacks.oppReturned) callbacks.oppReturned();
-          }
-        } else if (online._oppSeen && !online.oppGone && !online._dcTimer) {
-          online._dcTimer = setTimeout(() => {
-            online._dcTimer = null;
-            if (!oppPresent() && online.status === 'playing') {
-              online.oppGone = true;
-              if (callbacks.oppLeft) callbacks.oppLeft();
-            }
-          }, 3000);
-        }
-        return;
-      }
-      // --- AVANT LA PARTIE (matched/ready) : une disparition = adversaire fantôme. ---
-      if (!['matched', 'ready'].includes(st)) return;
-      if (oppPresent()) {
-        online._oppSeen = true;
-        clearDcTimer();               // adversaire (re)vu → annule un drop en attente
-      } else if (online._oppSeen && !online._dcTimer) {
-        // Adversaire déjà vu puis disparu → arme le debounce (pas de coupure immédiate).
-        online._dcTimer = setTimeout(() => {
-          online._dcTimer = null;
-          if (!oppPresent() && ['matched', 'ready'].includes(online.status)) {
-            online.status = 'disconnected';
-            online.error = 'Adversaire déconnecté.';
-            if (callbacks.disconnected) callbacks.disconnected();
-          }
-        }, 3000);
-      }
+    channel.on('presence', { event: 'sync' }, () => {
+      handlePresenceSync(channel);
     });
 
     // Abonnement au canal. Le callback est rappelé à CHAQUE (re)connexion du socket
     // (supabase-js re-subscribe automatiquement le canal après une coupure réseau).
-    online.channel.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        // RECONNEXION EN PARTIE (§7.3) : le canal se rouvre alors qu'on jouait déjà.
-        // On re-tracke la présence et on demande un resync complet à l'adversaire
-        // (on a pu manquer un coup pendant la coupure). Pas de hello/handshake.
+    channel.subscribe(async (status) => {
+      if (channel !== online.channel) return;
+      const subscribeGeneration = ++online._subscribeGeneration;
+      online._channelStatus = status === 'SUBSCRIBED' ? 'subscribed' : 'reconnecting';
+      if (status !== 'SUBSCRIBED') {
+        // Une Presence vide pendant une coupure de MON canal ne dit rien sur l'adversaire.
+        // On annule tout verdict en attente ; le resync sera relancé au réabonnement.
+        online._presenceReady = false;
+        clearDcTimer();
         if (online.status === 'playing') {
-          await online.channel.track({ side: online.side, ts: Date.now() });
+          online._presenceGraceUntil = Date.now() + 5000;
+          clearPresenceGraceTimer();
+        }
+        return;
+      }
+
+      const reconnectingInGame = online.status === 'playing';
+      online._presenceReady = false;
+      if (reconnectingInGame) online._presenceGraceUntil = Date.now() + 5000;
+      try {
+        if (reconnectingInGame) {
+          await channel.track({ side: online.side, ts: Date.now() });
+          if (channel !== online.channel || subscribeGeneration !== online._subscribeGeneration
+              || online._channelStatus !== 'subscribed') return;
+          online._presenceReady = true;
+          handlePresenceSync(channel);
           requestResync();
           return;
         }
         // Canal ouvert : envoyer hello et tracker la présence.
         envoyerMessage({ kind: 'hello', side: online.side });
-        await online.channel.track({ side: online.side, ts: Date.now() });
+        await channel.track({ side: online.side, ts: Date.now() });
+        if (channel !== online.channel || subscribeGeneration !== online._subscribeGeneration
+            || online._channelStatus !== 'subscribed') return;
+        online._presenceReady = true;
+        handlePresenceSync(channel);
 
         // Timeout handshake : 10s pour public, pas de timeout pour privé.
         if (!isPrivate) {
@@ -467,6 +469,11 @@ function demarrerHandshake(isPrivate = false) {
             }
           }, 10000);
         }
+      } catch (e) {
+        // Un échec de track est une coupure de mon canal, pas un abandon adverse.
+        online._presenceReady = false;
+        clearDcTimer();
+        console.warn('[online] presence track', e && (e.message || e));
       }
     });
 
@@ -509,6 +516,58 @@ function clearHandshake() {
 
 function clearDcTimer() {
   if (online._dcTimer) { clearTimeout(online._dcTimer); online._dcTimer = null; }
+}
+
+function clearPresenceGraceTimer() {
+  if (online._presenceGraceTimer) {
+    clearTimeout(online._presenceGraceTimer);
+    online._presenceGraceTimer = null;
+  }
+}
+
+// Évalue uniquement un sync provenant du canal courant, après notre propre track.
+// Après une reconnexion, Presence peut temporairement ne contenir que notre side :
+// la grâce évite de transformer cet état intermédiaire en abandon adverse.
+function handlePresenceSync(channel) {
+  if (channel !== online.channel || online._channelStatus !== 'subscribed' || !online._presenceReady) return;
+  const st = online.status;
+  if (!['playing', 'matched', 'ready'].includes(st)) return;
+  const present = oppPresent();
+  if (present) {
+    online._oppSeen = true;
+    clearDcTimer();
+    clearPresenceGraceTimer();
+    if (online.oppGone) {
+      online.oppGone = false;
+      if (callbacks.oppReturned) callbacks.oppReturned();
+    }
+    return;
+  }
+  if (online._presenceGraceUntil > Date.now()) {
+    clearDcTimer();
+    if (!online._presenceGraceTimer) {
+      const delay = online._presenceGraceUntil - Date.now() + 50;
+      online._presenceGraceTimer = setTimeout(() => {
+        online._presenceGraceTimer = null;
+        handlePresenceSync(channel);
+      }, delay);
+    }
+    return;
+  }
+  if (!online._oppSeen || online.oppGone || online._dcTimer) return;
+  const delay = 3000;
+  online._dcTimer = setTimeout(() => {
+    online._dcTimer = null;
+    if (channel !== online.channel || online._channelStatus !== 'subscribed') return;
+    if (!oppPresent() && online.status === 'playing') {
+      online.oppGone = true;
+      if (callbacks.oppLeft) callbacks.oppLeft();
+    } else if (!oppPresent() && ['matched', 'ready'].includes(online.status)) {
+      online.status = 'disconnected';
+      online.error = 'Adversaire déconnecté.';
+      if (callbacks.disconnected) callbacks.disconnected();
+    }
+  }, delay);
 }
 
 /** L'adversaire (side opposé au mien) est-il présent dans le Presence state ? On

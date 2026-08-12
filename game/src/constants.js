@@ -3,7 +3,7 @@
 
 // --- Économie (GDD §7) ---
 export const REVENU_PAR_COUP = 2;   // +2 écus par coup joué
-export const SOLDE_DEPART = 0; // GDD §7 : les deux joueurs commencent à sec.
+export const SOLDE_DEPART = 30; // GDD §7 : les deux joueurs commencent à sec.
 export const PLAFOND_ECUS = 30;
 
 // Valeurs de pièce = bonus de capture (GDD §7). Roi = 0 (fin de partie).
@@ -164,7 +164,7 @@ for (const u of Object.values(UPGRADES)) {
   (UPGRADES_PAR_TYPE[u.piece] ||= []).push(u.id);
 }
 
-export const MAX_UPGRADES_PAR_PIECE = 3; // GDD §5.3 —  amélioration par catégorie (D/A/S)
+export const MAX_UPGRADES_PAR_PIECE = 2; // GDD §5.3 — maximum 2 améliorations par pièce
 
 // --- PvP en ligne : cadences proposées (spec-pvp-online §6) ---
 // Temps initial par joueur, en secondes. SANS incrément (décision utilisateur 12/07,

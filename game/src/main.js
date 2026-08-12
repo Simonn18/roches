@@ -19,21 +19,21 @@ import { initAccount, startAuth, logout, ouvrirActivationMfa, getAccount, getSup
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, resumeMatch, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue, requestResync, sendResync,
   setSeq as onlineSetSeq, clearInbox as onlineClearInbox,
-  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=114';
+  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=115';
 // Deck editor (recovery 29/07 [23:30]) : API complète de decks.js (couche DONNÉES).
 // loadDecks/saveDecks étaient déjà importés ; on ajoute les helpers d'id/active/clone.
 import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import {
   UPGRADES, UPGRADES_PAR_TYPE, VALEUR_PIECE, REVENU_PAR_COUP,
   MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT, UI_THEME, UI_THEMES,
-} from './constants.js?v=110';
+} from './constants.js?v=111';
 import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js?v=108';
 // Phase A.5 v2 Phase 3 : import des TAILLES_DE_PLATEAU depuis la maison canonique
 // (zero-dep, cf. tailles.js + commit ba30d273). `TAILLES` n'est pas directement utilisé
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
 import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
-import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=8';
+import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=9';
 // La langue pilote à la fois le Canvas et les overlays DOM (auth + renommage de deck).
 // Un seul listener global évite qu'un modal oublié reste en français après le toggle.
 
@@ -158,6 +158,13 @@ function lireReprisePvP() {
   }
 }
 
+// Une reprise n'est pertinente que pour un compte connecté qui possède
+// une métadonnée de match récente. Les clés « guest » laissées par un ancien
+// navigateur ou un harness local ne doivent jamais afficher un CTA trompeur.
+function reprisePotentiellementDisponible() {
+  return getAccount().status === 'connected' && !!lireReprisePvP();
+}
+
 function sauverReprisePvP(meta) {
   if (!meta || !meta.matchId || (meta.side !== 0 && meta.side !== 1)) return;
   try {
@@ -180,7 +187,10 @@ function effacerReprisePvP() {
 
 function reprendrePartiePvP() {
   const saved = lireReprisePvP();
-  if (!saved) return;
+  if (!saved) {
+    state.resumeAvailable = false;
+    return;
+  }
   const supabase = getSupabaseClient();
   if (!supabase) {
     entrerMatchmaking();
@@ -198,7 +208,7 @@ function reprendrePartiePvP() {
       state.matchmaking.error = message;
       // Une panne réseau ou une session expirée ne doit pas détruire une reprise
       // potentiellement valide. On la retire uniquement pour un état terminal connu.
-      if (/terminée ou annulée/i.test(message)) {
+      if (/terminée ou annulée|pas encore disponible/i.test(message)) {
         state.resumeAvailable = false;
         effacerReprisePvP();
       }
@@ -357,7 +367,7 @@ function menuState() {
     _dashboardReplay: null,
     _dashboardReplayKey: null,
     _hasReplays: false,
-    resumeAvailable: !!lireReprisePvP(),
+    resumeAvailable: reprisePotentiellementDisponible(),
     menu: { difficulty: null,
              themeMode,
              language,
@@ -418,6 +428,7 @@ function commencerPartie(mode, difficultyOrOptions) {
       // --- CYCLE W3 : robustesse ---
       oppDisconnected: false,         // fenêtre de reconnexion 30 s ouverte (§7.2)
       oppDcT0: 0,                     // instant d'ouverture de la fenêtre (performance.now)
+      _channelWasDown: false,         // suspend le compte de déco pendant une coupure locale
       _gapT0: 0,                      // instant de détection d'un trou de seq (resync si persistant)
       voided: false,                  // match annulé (désync confirmée) — aucun trophée (§3.4)
       rematch: null,                  // { offeredByMe, offeredByOpp, declined } — revanche (§9.4)
@@ -1148,7 +1159,17 @@ function jouerCoup(piece, mv) {
     // Pas de recordMove : l'attaquant reste sur place, or rejouer un event move
     // déplacerait la pièce sur la case du défenseur (executerEvenementReplay).
     crediterCoup(state.turn, REVENU_PAR_COUP, 0, from, false);
-    resoudreApresCoup(piece, false, true);
+    // Même si la pièce ne bouge pas, cette tentative de capture consomme le tour.
+    // En PvP, l'adversaire doit rejouer exactement la même résolution pour
+    // consommer son bouclier et avancer le lockstep ; l'action réseau n'est donc
+    // pas un événement de replay, mais bien un `move` PvP rejoué par jouerCoup().
+    pvwEmitMove(piece, from, { r: mv.r, c: mv.c }, cible.type, 0, mv);
+    // Même cycle de vie qu'un coup normal : on laisse l'animation (ici immobile)
+    // terminer avant de basculer le tour. Sinon l'émetteur changeait `state.turn`
+    // immédiatement tandis que le récepteur pouvait encore traiter l'action.
+    demarrerAnim(piece, from, from, () => {
+      resoudreApresCoup(piece, false, false);
+    });
     return;
   }
 
@@ -1664,7 +1685,11 @@ function executerPousseeCavalerie(cell) {
   state.ruTargets = [];
   state._cavEnemyCell = null;
   recordPower(state, kn, 'Cavalerie', { r: cell.r, c: cell.c });
-  pvwEmitPower(kn, 'Cavalerie', { r: cell.r, c: cell.c });
+  // La destination seule ne permet pas au client distant de retrouver l'ennemi
+  // repoussé si plusieurs cibles sont adjacentes : transmettre aussi sa case d'origine.
+  pvwEmitPower(kn, 'Cavalerie', { r: cell.r, c: cell.c }, {
+    pushFrom: toAlg(enemyPos.r, enemyPos.c),
+  });
   finDeTour();
 }
 
@@ -1973,11 +1998,12 @@ function pvwEmitPurchase(piece, id) {
   if (state.mode !== 'pvw' || !state.pvw) return;
   pvwHook({ kind: 'purchase', owner: piece.owner, upgrade: id, pos: toAlg(piece.r, piece.c) });
 }
-function pvwEmitPower(piece, powerType, cell) {
+function pvwEmitPower(piece, powerType, cell, extra = {}) {
   if (state.mode !== 'pvw' || !state.pvw) return;
   pvwHook({
     kind: 'power', owner: piece.owner, piece: piece.type, power: powerType,
     pos: toAlg(piece.r, piece.c), target: cell ? toAlg(cell.r, cell.c) : null,
+    ...extra,
   });
 }
 // Déclin d'enchaînement (§5.5) : le récepteur obtient le même state.chain mais ne peut pas
@@ -2076,6 +2102,27 @@ function applyRemotePower(msg, opp) {
     case 'Épine': activerEpine(); break;
     case 'Rempart': activerRempart(); break;
     case 'Mariage stratégique': activerSacrifice(); break;
+    case 'S.H.T.': activerSHT(); break;
+    case 'Hypnose': activerHypnose(); break;
+    case 'Échange': executerEchange(target); break;
+    case 'Cavalerie': {
+      const pushFrom = msg.pushFrom ? fromAlgebraic(msg.pushFrom, state.board) : null;
+      const pushed = pushFrom && state.board[pushFrom.r]?.[pushFrom.c];
+      const adjacent = pushFrom
+        && Math.max(Math.abs(pushFrom.r - piece.r), Math.abs(pushFrom.c - piece.c)) === 1;
+      const legalDestinations = pushFrom
+        ? ciblesPousseeCavalerie(state.board, piece, pushFrom)
+        : [];
+      const legalTarget = target
+        && legalDestinations.some((cell) => cell.r === target.r && cell.c === target.c);
+      if (!target || !pushFrom || !pushed || pushed.owner === piece.owner || !adjacent || !legalTarget) {
+        console.warn('[online] illegal — poussée Cavalerie rejetée', msg);
+        break;
+      }
+      state._cavEnemyCell = pushFrom;
+      executerPousseeCavalerie(target);
+      break;
+    }
     default: console.warn('[online] pouvoir inconnu', msg.power);
   }
 }
@@ -2395,8 +2442,19 @@ function pvwTick() {
   }
 
   // Fenêtre de reconnexion 30 s (§7.2) : l'adversaire est parti → décompte, puis abandon.
+  // Si MON canal Realtime est momentanément coupé, l'état Presence local est inexploitable :
+  // suspendre le décompte et repartir à zéro au réabonnement évite une victoire par faux positif.
   if (p.oppDisconnected && !p.ended) {
-    if ((performance.now() - p.oppDcT0) / 1000 >= PVW_RECO_WINDOW) pvwEndByAbandon();
+    const channelReconnecting = getOnline()._channelStatus === 'reconnecting';
+    if (channelReconnecting) {
+      p._channelWasDown = true;
+    } else {
+      if (p._channelWasDown) {
+        p._channelWasDown = false;
+        p.oppDcT0 = performance.now();
+      }
+      if ((performance.now() - p.oppDcT0) / 1000 >= PVW_RECO_WINDOW) pvwEndByAbandon();
+    }
   }
 }
 
@@ -3352,7 +3410,7 @@ function loop(now) {
   if (state.phase === 'menu' || state.phase === 'replays') {
     // L'authentification est asynchrone : le menu peut être créé en invité,
     // puis découvrir la reprise dès que le profil est chargé.
-    state.resumeAvailable = !!lireReprisePvP();
+    state.resumeAvailable = reprisePotentiellementDisponible();
     state._replayList = getReplayList();
     // La feuille de partie du dashboard lit le replay complet le plus récent,
     // tandis que l'historique conserve les synthèses pour rester léger.

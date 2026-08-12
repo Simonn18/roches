@@ -8,7 +8,7 @@ import {
   UPGRADES,
   UPGRADES_PAR_TYPE,
   MAX_UPGRADES_PAR_PIECE,
-} from '../game/src/constants.js?v=110';
+} from '../game/src/constants.js?v=111';
 import { initialiserChasse, recolterChasse } from '../game/src/hunt.js?v=3';
 
 const TYPES = ['P', 'N', 'B', 'R', 'Q', 'K'];
@@ -121,6 +121,10 @@ describe('Chasse — récompense utilisable par la pièce collectrice', () => {
     assert.equal(awardA.upgradeId, awardB.upgradeId);
     assert.deepEqual(awardA.nextCase, awardB.nextCase);
     assert.equal(a.huntRngSeed, b.huntRngSeed);
+  });
+
+  test('limite chaque pièce à deux améliorations', () => {
+    assert.equal(MAX_UPGRADES_PAR_PIECE, 2);
   });
 
   test('ne dépasse pas le plafond d’améliorations de la pièce', () => {

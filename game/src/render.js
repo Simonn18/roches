@@ -16,7 +16,7 @@ import {
   C_AMBRE, C_AMBRE_FONCE, C_TERRACOTTA, C_SAUGE_FONCE, C_AMBRE_CLAIR, DECK_ACCENT,
   UI_THEME, REMPLI_PIECE,C_ENCRE_sub,
   PVW_CADENCES, cadenceLabel,
-} from './constants.js?v=110';
+} from './constants.js?v=111';
 import { VARIANT_PRESETS, ECONOMIES, COMBATS, variantLabel, variantIdFromMenu } from './variants.js?v=108';
 import { creerPlateau } from './board.js?v=109';
 // Phase A.5 v2 Phase 3 : TAILLE DE PLATEAU chips itèrent sur TAILLES (maison canonique
@@ -30,7 +30,7 @@ import { STEPS, TOTAL_STEPS, progressionTutoriel, tutorielEtapeDebloquee, tutori
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
   apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=23';
-import { traduire } from './i18n.js?v=8';
+import { traduire } from './i18n.js?v=9';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -2604,8 +2604,9 @@ function dessineBandeauCompteMobile(ctx, state) {
       let yy = contentY + 26;
       for (const line of [
         'ROYCHEC est un jeu d’échecs augmenté. Capture le roi adverse pour gagner.',
-        'Déplace tes pièces, gagne des écus et achète des améliorations pour créer des ouvertures tactiques.',
-        'Les règles restent lisibles : chaque amélioration ouvre une nouvelle façon de jouer.',
+        'Les améliorations ont trois types : D = déplacement, A = actif, S = statistique. Elles donnent de nouvelles options sans remplacer les règles de base.',
+        'Les écus se gagnent en jouant : chaque coup rapporte des écus et une capture ajoute la valeur de la pièce prise. Les variantes peuvent modifier ces gains.',
+        'Utilise tes écus dans le panneau « Améliorer » pour acheter une carte compatible avec la pièce. Une pièce peut porter au maximum deux améliorations : choisis ta combinaison.',
       ]) yy += mobileWrap(ctx, traduire(line, language), px + pad, yy, pw - 2 * pad, 17, 4) + 9;
       ctx.fillStyle = UI_THEME.muted;
       ctx.fillText(traduire('Fermer avec Échap', language), px + pad, Math.min(py + ph - 30, yy + 4));
@@ -2829,8 +2830,9 @@ function dessineBandeauCompte(ctx, state) {
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
       const aboutLines = [
         'ROYCHEC est un jeu d’échecs augmenté. Capture le roi adverse pour gagner.',
-        'Déplace tes pièces, gagne des écus et achète des améliorations pour créer des ouvertures tactiques.',
-        'Les règles restent lisibles : chaque amélioration ouvre une nouvelle façon de jouer.',
+        'Les améliorations ont trois types : D = déplacement, A = actif, S = statistique. Elles donnent de nouvelles options sans remplacer les règles de base.',
+        'Les écus se gagnent en jouant : chaque coup rapporte des écus et une capture ajoute la valeur de la pièce prise. Les variantes peuvent modifier ces gains.',
+        'Utilise tes écus dans le panneau « Améliorer » pour acheter une carte compatible avec la pièce. Une pièce peut porter au maximum deux améliorations : choisis ta combinaison.',
       ];
       for (const line of aboutLines) {
         const words = traduire(line, language).split(' ');
