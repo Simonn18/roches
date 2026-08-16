@@ -1,11 +1,11 @@
 // roychec — point d'entrée : boucle de jeu, entrées souris/clavier, logique de tour.
 // MVP (GDD §9) : hot-seat 2 joueurs, économie d'écus, 1 amélioration par type de pièce.
 // Cycle 1 IA (design/spec-ia.md) : menu d'accueil, mode PvAI optionnel, hook bot dummy.
-import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=109';
+import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=110';
 import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
-import { initialiserChasse, recolterChasse } from './hunt.js?v=3';
-import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=212';
-import { iaDecideTour } from './ai.js?v=111';
+import { initialiserChasse, recolterChasse } from './hunt.js?v=5';
+import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=218';
+import { iaDecideTour } from './ai.js?v=113';
 import { initReplay, recordMove, recordPurchase, recordPower, recordHuntAward, finalizeReplay, downloadReplayMD, hasReplays, loadLastReplay, loadReplayByKey, getReplayList } from './replay.js?v=109';
 import { updateBook } from './opening.js?v=107';
 import { demarrerTutorielHub, demarrerEtapeTutoriel, etapeSuivante, verifierEtape, forcerAvancement,
@@ -25,15 +25,16 @@ import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, resumeMat
 import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import {
   UPGRADES, UPGRADES_PAR_TYPE, VALEUR_PIECE, REVENU_PAR_COUP,
-  MAX_UPGRADES_PAR_PIECE, CANVAS_W, CANVAS_H, ACCENT, UI_THEME, UI_THEMES,
-} from './constants.js?v=111';
-import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, ECONOMIES, COMBATS, stagnationTick } from './variants.js?v=108';
+  MAX_UPGRADES_PAR_PIECE, MAX_STATS_PAR_PARTIE, estAmeliorationStat,
+  CANVAS_W, CANVAS_H, ACCENT, UI_THEME, UI_THEMES,
+} from './constants.js?v=113';
+import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, stagnationTick } from './variants.js?v=110';
 // Phase A.5 v2 Phase 3 : import des TAILLES_DE_PLATEAU depuis la maison canonique
 // (zero-dep, cf. tailles.js + commit ba30d273). `TAILLES` n'est pas directement utilisé
 // ici — on consomme `state.menu.taille` (string id) et on délègue la résolution H/W
 // au moteur creerPlateau/getBoardH. Importé logistique pour les debugs console.warn.
 import { TAILLES as _TAILLES_LOG, DEFAULT_TAILLE, getBoardH, getBoardW } from './tailles.js?v=108';
-import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=9';
+import { lireLangue, enregistrerLangue, appliquerTraductions, onLangueChange } from './i18n.js?v=10';
 // La langue pilote à la fois le Canvas et les overlays DOM (auth + renommage de deck).
 // Un seul listener global évite qu'un modal oublié reste en français après le toggle.
 
@@ -121,7 +122,7 @@ onLangueChange((nextLanguage) => {
   appliquerTraductions(document.body, nextLanguage);
 });
 
-// PvP en ligne (spec-pvp-online §6) : cadence au choix (1 min / 5 min / 1 h / 1 jour,
+// PvP en ligne (spec-pvp-online §6) : cadence au choix (1 min / 5 min,
 // catalogue PVW_CADENCES de constants.js), SANS incrément (décision utilisateur 12/07,
 // spec §6.1 v3.1 — un incrément vidait le timer de son sens). 5 min = défaut/fallback.
 const PVW_TEMPS_INITIAL = 300;   // secondes par joueur (fallback si cadence absente)
@@ -284,7 +285,7 @@ function synchroniserAffichage() {
           // et les boutons de navigation restent accessibles sur téléphone.
           ? 150 + TOTAL_LEARN_GAMES * 84 + 64 + 78 + 38 + 24
           : state.phase === 'puzzle-hub'
-            ? 150 + TOTAL_PUZZLES * 108 + 64 + 78 + 38 + 24
+            ? 150 + TOTAL_PUZZLES * 84 + 64 + 78 + 38 + 24
             : state.phase === 'decks' ? 1140
               : state.phase === 'deck-picker' ? 1400
                 : 1020)
@@ -361,6 +362,7 @@ function menuState() {
     _cavEnemyCell: null,
     buzz: 0,
     ecus: [0, 0],
+    statUpgradesCount: 0,
     replay: null,
     _replayTimer: null,
     _replayList: [],
@@ -520,6 +522,7 @@ function commencerReplay(replayData) {
     taille,
     turn: 0,
     ecus: [0, 0],
+    statUpgradesCount: 0,
     winner: null,
     ai: null,
     selected: null,
@@ -639,7 +642,11 @@ function executerEvenementReplay(e) {
     if (!pos) return;
     const piece = state.board[pos.r][pos.c];
     if (!piece) return;
+    const statDejaSurPiece = piece.upgrades.some(estAmeliorationStat);
     piece.upgrades.push(e.upgrade);
+    if (estAmeliorationStat(e.upgrade) && !statDejaSurPiece) {
+      state.statUpgradesCount = (state.statUpgradesCount || 0) + 1;
+    }
     if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(e.upgrade)) piece.shield = true;
     piece._goldT = performance.now();
     state.ecus[e.owner] -= e.cost;
@@ -650,7 +657,13 @@ function executerEvenementReplay(e) {
     const pos = fromAlgebraic(e.pos, state.board);
     const piece = pos && state.board[pos.r] ? state.board[pos.r][pos.c] : null;
     if (!piece || piece.owner !== e.owner) return;
-    if (e.upgrade && !piece.upgrades.includes(e.upgrade)) piece.upgrades.push(e.upgrade);
+    if (e.upgrade && !piece.upgrades.includes(e.upgrade)) {
+      const statDejaSurPiece = piece.upgrades.some(estAmeliorationStat);
+      piece.upgrades.push(e.upgrade);
+      if (estAmeliorationStat(e.upgrade) && !statDejaSurPiece) {
+        state.statUpgradesCount = (state.statUpgradesCount || 0) + 1;
+      }
+    }
     if (e.upgrade && ['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(e.upgrade)) {
       piece.shield = true;
     }
@@ -1801,13 +1814,21 @@ function acheter(id, { remote = false } = {}) {
     state.buzz = performance.now(); state.buzzId = id;
     return;
   }
+  const statDejaSurPiece = estAmeliorationStat(id)
+    && p.upgrades.some(estAmeliorationStat);
+  const statPlafondAtteint = estAmeliorationStat(id)
+    && !statDejaSurPiece
+    && (state.statUpgradesCount || 0) >= MAX_STATS_PAR_PARTIE;
   if (p.upgrades.includes(id) || p.upgrades.length >= MAX_UPGRADES_PAR_PIECE
-      || state.ecus[state.turn] < u.cout) {
+      || statPlafondAtteint || state.ecus[state.turn] < u.cout) {
     state.buzz = performance.now(); state.buzzId = id; // refus : tremblement
     return;
   }
   state.ecus[state.turn] -= u.cout;
   p.upgrades.push(id);
+  if (estAmeliorationStat(id) && !statDejaSurPiece) {
+    state.statUpgradesCount = (state.statUpgradesCount || 0) + 1;
+  }
   // Cartes « absorbe la 1re capture » : blindage posé dès l'achat (GDD §5.5).
   if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(id)) p.shield = true;
   p._goldT = performance.now();             // flash doré
@@ -1961,6 +1982,7 @@ function hashState(s) {
     str += `|bonus:${s.taille}|${s.huntRngSeed >>> 0}|${JSON.stringify(s.huntBonuses || [])}`
       + `|${JSON.stringify(s.huntCollected || [0, 0])}`;
   }
+  str += `|statPieces:${s.statUpgradesCount || 0}`;
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   return (h >>> 0).toString(16);
@@ -2236,6 +2258,7 @@ function pvwBuildSnapshot() {
   return {
     pieces,
     ecus: [state.ecus[0], state.ecus[1]],
+    statUpgradesCount: state.statUpgradesCount || 0,
     capturesDep: [state.capturesDep[0], state.capturesDep[1]], // départage §8.3 (fix W3)
     turn: state.turn,      chain: state.chain ? { r: state.chain.piece.r, c: state.chain.piece.c, type: state.chain.type } : null,
       taille: state.taille,
@@ -2271,6 +2294,7 @@ function pvwApplySnapshot(snap) {
   }
   state.board = board;
   state.ecus = [snap.ecus[0], snap.ecus[1]];
+  state.statUpgradesCount = Number.isFinite(snap.statUpgradesCount) ? snap.statUpgradesCount : 0;
   // Départage §8.3 : valeurs de vérité du survivant (backward compat : snapshot pré-v20 sans champ).
   if (Array.isArray(snap.capturesDep)) state.capturesDep = [snap.capturesDep[0], snap.capturesDep[1]];
   state.turn = snap.turn;
@@ -2878,13 +2902,8 @@ function actionBouton(action) {
     case 'pickDifficulty':
       if (state.phase === 'menu' && state.menu) state.menu.difficulty = action.level;
       break;
-    // Variantes locales (GDD §7.2 v3) : deux axes orthogonaux combinés librement.
-    // Chaque clic met à jour l'état mémoire ; le toggle déplie l'accordéon.
-    case 'pickEconomie':
-      if (peutChoisirVariante() && ['standard', 'plafond15', 'illimite'].includes(action.value)) {
-        state.menu.economie = action.value;
-      }
-      break;
+    // Variantes locales (GDD §7.2) : seul le mode de combat est sélectionnable.
+    // Le plafond d'écus reste fixe à 30, conformément au GDD.
     case 'pickCombat':
       if (peutChoisirVariante() && ['standard', 'elimX2'].includes(action.value)) {
         state.menu.combat = action.value;

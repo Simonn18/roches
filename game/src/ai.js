@@ -9,7 +9,10 @@
 // Pouvoirs actifs (ex-règles D-E) : hors-scope v1/v2 (le bot achète, ne déclenche pas).
 // Invariant préservé : la recherche travaille sur des CLONES, l'état réel n'est jamais muté.
 import { coupsLegaux, DIRS8 } from './rules.js?v=116';
-import { VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=111';
+import {
+  VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE,
+  MAX_STATS_PAR_PARTIE, estAmeliorationStat,
+} from './constants.js?v=113';
 import { upgradesForPiece } from './decks.js?v=107';
 import { getBookBonus } from './opening.js?v=107';
 
@@ -280,12 +283,14 @@ function piecesMenacees(board, aiPlayer) {
 
 // Priorité DÉFENSE (§1.3.3) : court-circuite le gate. Renvoie le blindage à acheter
 // pour la pièce menacée la plus chère, ou null si aucun n'est abordable/pertinent.
-function pickDefense(board, aiPlayer, solde, activeDeck) {
+function pickDefense(board, aiPlayer, solde, activeDeck, statCount) {
   for (const p of piecesMenacees(board, aiPlayer)) {
     if (p.upgrades.length >= MAX_UPGRADES_PAR_PIECE) continue;
     const id = BLINDAGE[p.type];
     if (!id) continue;                         // Fou : pas de blindage → fuite par le coup
     if (p.upgrades.includes(id)) continue;     // déjà blindé
+    const statDejaSurPiece = p.upgrades.some(estAmeliorationStat);
+    if (estAmeliorationStat(id) && !statDejaSurPiece && statCount >= MAX_STATS_PAR_PARTIE) continue;
     if (p.type === 'P' && solde < 12) continue; // pion : on ne le blinde que si l'or abonde
     const cost = UPGRADES[id].cout;
     if (cost > solde) continue;
@@ -299,7 +304,7 @@ function pickDefense(board, aiPlayer, solde, activeDeck) {
 
 // Construit les candidats d'achat (§1.3.4), identique aux 3 niveaux. `base` = éval du
 // plateau avant achat, pour calculer gainEval = éval(après) - éval(avant).
-function buildCandidates(board, aiPlayer, solde, base, activeDeck) {
+function buildCandidates(board, aiPlayer, solde, base, activeDeck, statCount) {
   const cands = [];
   // Phase A.5 v2 — size-aware.
   for (let r = 0; r < board.length; r++) {
@@ -310,6 +315,8 @@ function buildCandidates(board, aiPlayer, solde, base, activeDeck) {
       const ids = upgradesForPiece(activeDeck, p.type, UPGRADES_PAR_TYPE[p.type]);
       for (const id of ids) {
         if (p.upgrades.includes(id)) continue;
+        const statDejaSurPiece = p.upgrades.some(estAmeliorationStat);
+        if (estAmeliorationStat(id) && !statDejaSurPiece && statCount >= MAX_STATS_PAR_PARTIE) continue;
         const u = UPGRADES[id];
         if (!u || u.cout > solde) continue;
         const clone = cloneBoard(board);
@@ -327,9 +334,10 @@ function buildCandidates(board, aiPlayer, solde, base, activeDeck) {
 //   - `board`  : clone du plateau AVEC les achats appliqués (pour la recherche de coup).
 // `realBoard` = state.board (jamais muté) ; les cibles renvoyées y sont ré-adressées par
 // coordonnées (un achat ne déplace pas les pièces, donc les coords restent valides).
-function decideAchats(realBoard, aiPlayer, ecus, difficulty, activeDeck) {
+function decideAchats(realBoard, aiPlayer, ecus, difficulty, activeDeck, initialStatCount = 0) {
   const achats = [];
   let solde = ecus;
+  let statCount = initialStatCount;
   const work = cloneBoard(realBoard); // clone muté au fil des achats
   let guard = 0;
   while (guard++ < 8) {
@@ -338,12 +346,12 @@ function decideAchats(realBoard, aiPlayer, ecus, difficulty, activeDeck) {
     if (solde < 4) break;
 
     // 1) Défense prioritaire (bypass gate).
-    let chosen = pickDefense(work, aiPlayer, solde, activeDeck);
+    let chosen = pickDefense(work, aiPlayer, solde, activeDeck, statCount);
 
     // 2) Sinon, achat selon le gate de la bande.
     if (!chosen) {
       const base = evalBoard(work, aiPlayer);
-      const cands = buildCandidates(work, aiPlayer, solde, base, activeDeck);
+      const cands = buildCandidates(work, aiPlayer, solde, base, activeDeck, statCount);
       const passing = cands.filter(c => c.gainEval >= band.gate);
       if (!passing.length) break;
       if (difficulty === 1) {
@@ -362,7 +370,9 @@ function decideAchats(realBoard, aiPlayer, ecus, difficulty, activeDeck) {
     // Enregistre l'achat (cible = pièce RÉELLE) et l'applique sur le clone `work`.
     const realPiece = realBoard[chosen.piece.r][chosen.piece.c];
     achats.push({ target: realPiece, upgradeId: chosen.upgradeId });
+    const statDejaSurPiece = chosen.piece.upgrades.some(estAmeliorationStat);
     applyPurchase(work[chosen.piece.r][chosen.piece.c], chosen.upgradeId);
+    if (estAmeliorationStat(chosen.upgradeId) && !statDejaSurPiece) statCount++;
     solde -= chosen.cost;
   }
   return { achats, board: work };
@@ -542,7 +552,8 @@ export function iaDecideTour(state) {
   let achats = [];
   let boardApres = state.board;
   try {
-    const res = decideAchats(state.board, aiPlayer, ecus, difficulty, state.activeDeck);
+    const res = decideAchats(state.board, aiPlayer, ecus, difficulty, state.activeDeck,
+      state.statUpgradesCount || 0);
     achats = res.achats;
     boardApres = res.board;
   } catch (e) {

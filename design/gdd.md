@@ -174,18 +174,21 @@ Système **global** (voir décision tranchée §5.6), pas un compteur par pièce
 ### 5.2.b Variantes locales hot-seat (v3 — 2026-07-12, demande utilisateur)
 
 L'économie d'écus décrite en §5.2 peut être **personnalisée** par le **créateur de la
-partie** via **deux axes orthogonaux combinés librement**. **Six combinaisons
-résultantes** (3 × 2). La combinaison par défaut **Standard × Standard** reproduit
+partie** via un choix simple du **mode de combat**. **Deux combinaisons
+résultantes** sont proposées. La combinaison par défaut **Standard × Standard** reproduit
 *strictement* le comportement legacy — **aucune régression** des modes PvAI ou PvP en
 ligne (qui refusent la sélection, cf. §7.2 — *Scope strict*).
 
-**Axe Économie (plafond du solde par joueur) :**
+**Économie (plafond du solde par joueur) :**
 
 | Variante | Plafond | Effet attendu |
 |---|---|---|
-| Standard | **30 écus** | Identique à v2 ; thésaurisation bridée par le plafond (évite l'accumulation vers un combo dame). |
-| Plafond 15 | **15 écus** | Pression économique accrue : les cartes entre 9 et 15 écus (Couronne 9, Sacrifice 12, Passe royale 8, Décret 14, Double coup 15) deviennent **difficiles d'accès** sans capture majeure. Les blindages (Bouclier 6, Monture 7, Forteresse 8) restent atteignables en cours de partie normale. |
-| Illimité | **∞** | Pas de plafond. La thésaurisation redevient **possible** : un joueur discipliné peut accumuler au-delà de 30 pour viser directement les cartes décisives (Décret, Double coup). L'anti-thésaurisation n'est plus garantie par le plafond, mais la pression des pics de coût reste un mécanisme d'incitation à consommer. |
+| Standard | **30 écus** | Identique à v2 ; plafond lisible qui évite l'accumulation excessive vers un combo dame. |
+
+> Le réglage d'écus n'est plus une variante : le plafond est **fixé à 30 écus par joueur**.
+> Les choix **Plafond 15** et **Illimité** sont retirés de l'interface pour garder un nombre
+> de modes lisible. Les anciens ids restent acceptés uniquement pour relire des parties privées
+> ou des replays historiques ; ils ne peuvent plus être sélectionnés pour une nouvelle partie.
 
 **Axe Combat (revenu de base et multiplicateur de capture) :**
 
@@ -300,6 +303,11 @@ que la flamme remplisse le halo au lieu d'être perdue dans le cadre large.
 - **Entrée** : achat d'une carte de catégorie « stat ».
 - **Règle** : modifie une propriété passive de la pièce (valeur en points pour le départage,
   survie à une prise, portée de contrôle). Toujours passif, aucun déclenchement.
+- **Plafond de partie** : au maximum **4 pièces distinctes** peuvent recevoir une amélioration
+  de catégorie [S] pendant la partie. Une même pièce ne consomme qu'un seul emplacement [S]
+  même si plusieurs cartes [S] lui sont attribuées ; une pièce capturée ou promue ne libère
+  pas son emplacement déjà consommé. Le plafond s'applique aux achats, aux récompenses de
+  Chasse et aux décisions de l'IA.
 - **Effet** : ex. « Vétéran » → le pion vaut 3 points au départage au lieu de 1 ; « Blindage » →
   absorbe la première capture (la pièce survit, l'attaquant reste sur sa case de départ).
 - **Feedback** : effet « feu » **vidéo mp4** projeté **DERRIÈRE** la pièce
@@ -476,16 +484,12 @@ départage à la valeur (§8.2).
 
 ### 7.2 Variantes locales hot-seat (v3 — 2026-07-12)
 
-**Matrice complète des 6 combinaisons** (croisement des axes §5.2.b) :
+**Matrice actuelle des 2 combinaisons** :
 
 | # | ID | Plafond | Revenu / coup | Capture × | Effet gameplay cible |
 |---|---|---|---|---|---|
-| 1 | `pvp_standard`     | 30 | +2 | × 1 | Identique au comportement v2 (référence). |
-| 2 | `pvp_plafond15`    | 15 | +2 | × 1 | Mode tactique — plafond bas, montée rapide des blindages. |
-| 3 | `pvp_illimite`     | ∞  | +2 | × 1 | Mode économie libre — thésaurisation possible, combos dame débloqués. |
-| 4 | `pvp_elimX2`       | 30 | +0 | × 2 | Mode sanglant — économie 100 % capture, timer d'inactivité 10 tours-joueur. |
-| 5 | `pvp_plafond15_x2` | 15 | +0 | × 2 | Combo serré — plafond bas + captures double = pression maximale. |
-| 6 | `pvp_illimite_x2`  | ∞  | +0 | × 2 | Combo berserk — pas de plafond, captures double. Assumé brut / chaotique. |
+| 1 | `pvp_standard` | 30 | +2 | × 1 | Référence lisible et identique au comportement v2. |
+| 2 | `pvp_elimX2` | 30 | +0 | × 2 | Mode sanglant — économie orientée capture, timer d'inactivité 10 tours-joueur. |
 
 **Scope (amendé v3.1) :** les variantes sont disponibles dans **deux contextes** :
 
@@ -592,14 +596,15 @@ avec l'économie d'écus et au moins une amélioration par type de pièce foncti
 3. **Économie d'écus** : revenu +2/coup, bonus de capture, plafond 30 (paramétrable dans
    les variantes locales — voir §5.2.b + §7.2), HUD par joueur.
 4. **Achat d'améliorations** : panneau par pièce, catalogue §6 filtré par type, plafond 2/pièce,
-   achat sans consommer le tour.
+  plafond global de 4 pièces distinctes porteuses d'une carte [S], achat sans consommer le tour.
+
    > Reste du catalogue = extension post-MVP.
 5. **Fin de partie par capture du roi** + écran de victoire indiquant le vainqueur.
 6. Feedback minimal : surbrillance des coups légaux, animation de déplacement, SFX
    coup/capture/achat (placeholders audio OK), compteur d'écus animé.
-7. **Variantes locales hot-seat** (§5.2.b + §7.2 — six combinaisons d'économie, matrice
-   chiffrée détaillée §7.2 ; sélection **locale hot-seat uniquement**, refusée par
-   PvAI et PvP en ligne). Paramétrage via deux axes orthogonaux sur le menu d'accueil
+7. **Variantes locales hot-seat** (§5.2.b + §7.2 — deux combinaisons simples,
+   plafond d'écus fixe à 30 ; sélection **locale hot-seat uniquement**, refusée par
+   PvAI et PvP en ligne). Paramétrage via un choix simple du mode de combat sur le menu d'accueil
    (accordéon « VARIANTES (LOCAL) » sous le bouton « 1J VS 2J »).
 
 ### Hors MVP (plus tard)

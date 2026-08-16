@@ -3,7 +3,10 @@
 // reçoit gratuitement une amélioration compatible, sans doublon, puis une nouvelle
 // case est tirée pour le même camp. Le tirage est déterministe : le mode peut donc
 // fonctionner dans le lockstep PvP privé sans désynchroniser les clients.
-import { UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE } from './constants.js?v=111';
+import {
+  UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE,
+  MAX_STATS_PAR_PARTIE, estAmeliorationStat,
+} from './constants.js?v=113';
 
 function casesLibres(state, interdites = []) {
   const interditesSet = new Set(interdites.filter(Boolean).map((cell) => `${cell.r},${cell.c}`));
@@ -54,6 +57,7 @@ export function recolterChasse(state, piece) {
   // Une carte déjà portée par la pièce est exclue du tirage. Si toutes les cartes
   // compatibles sont déjà prises, la case réapparaît sans modifier la pièce.
   const possedees = new Set(piece.upgrades || []);
+  const statDejaSurPiece = (piece.upgrades || []).some(estAmeliorationStat);
   const candidates = piece.upgrades.length >= MAX_UPGRADES_PAR_PIECE
     ? []
     : (UPGRADES_PAR_TYPE[piece.type] || [])
@@ -65,7 +69,10 @@ export function recolterChasse(state, piece) {
         return !!upgrade
           && upgrade.piece === piece.type
           && !upgrade.nonImplemente
-          && !possedees.has(id);
+          && !possedees.has(id)
+          && (!estAmeliorationStat(id)
+            || statDejaSurPiece
+            || (state.statUpgradesCount || 0) < MAX_STATS_PAR_PARTIE);
       });
   const upgradeId = candidates.length
     ? candidates[tirageDeterministe(state, candidates.length)]
@@ -80,6 +87,9 @@ export function recolterChasse(state, piece) {
   }
 
   piece.upgrades.push(upgradeId);
+  if (estAmeliorationStat(upgradeId) && !statDejaSurPiece) {
+    state.statUpgradesCount = (state.statUpgradesCount || 0) + 1;
+  }
   const upgrade = UPGRADES[upgradeId];
   if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(upgradeId)) {
     piece.shield = true;

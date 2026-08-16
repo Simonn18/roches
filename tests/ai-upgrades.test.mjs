@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { creerPiece } from '../game/src/board.js?v=109';
-import { UPGRADES_PAR_TYPE } from '../game/src/constants.js?v=111';
+import { UPGRADES_PAR_TYPE, MAX_STATS_PAR_PARTIE } from '../game/src/constants.js?v=113';
 import { choisirPouvoirIA, iaDecideTour } from '../game/src/ai.js?v=111';
 
 function plateauVide() {
@@ -50,6 +50,7 @@ function etatIA(owner, board, ecus = 30, deck = deckComplet()) {
     board,
     activeDeck: deck,
     variant: { plafond: Infinity, revenueBase: 1, captureMul: 1 },
+    statUpgradesCount: 0,
   };
 }
 
@@ -88,6 +89,22 @@ describe('IA — les quatre améliorations des cases bonus', () => {
     const toutesDansLesQuatre = ids.every((id) =>
       ['pas-diag', 'epine', 'grand-saut', 'haute-fuite'].includes(id));
     assert.equal(toutesDansLesQuatre, true, `achats: ${ids.join(', ')}`);
+  });
+
+  test('iaDecideTour respecte le plafond global des améliorations stat', () => {
+    const board = plateauVide();
+    placer(board, 'P', 0, 6, 0);
+    placer(board, 'K', 0, 7, 4);
+    const statDeck = { slots: {
+      P: { S: 'bouclier' },
+      K: { S: 'majeste' },
+    } };
+    const state = etatIA(0, board, 30, statDeck);
+    state.statUpgradesCount = MAX_STATS_PAR_PARTIE;
+
+    const tour = iaDecideTour(state);
+    assert.ok(tour, 'un tour est décidé');
+    assert.deepEqual(tour.achats, [], 'aucune carte stat ne doit être achetée au plafond');
   });
 
   test('iaDecideTour génère un coup avec Grand saut quand c’est le seul légal', () => {

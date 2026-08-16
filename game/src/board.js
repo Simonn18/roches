@@ -10,8 +10,8 @@
 //           Note : états du moteur qui bouclent sur 8 hardcodé (coupsLegaux/
 //           evalBoard dans rules.js et ai.js) généraliseront en Phase A.5 v3.
 
-import { SOLDE_DEPART } from './constants.js?v=111';
-import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=108';
+import { SOLDE_DEPART } from './constants.js?v=113';
+import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=110';
 // Note Phase A.5 v2 polish : `TAILLES` n'est PAS importé ici — les call sites
 // qui en ont besoin (render.js pour le bouton TAILLE DE PLATEAU, plus tard
 // online.js pour le lockstep header) importeront directement depuis './tailles.js'.
@@ -118,6 +118,9 @@ export function creerEtat(options) {
     huntRngSeed,             // PRNG partagé par les clients PvP privés
     turn: 0,                 // joueur actif
     ecus: [SOLDE_DEPART, SOLDE_DEPART],
+    // Nombre de pièces distinctes ayant reçu une carte [S] dans cette partie.
+    // Une pièce déjà porteuse d'une [S] ne consomme pas un nouvel emplacement.
+    statUpgradesCount: 0,
     winner: null,
     phase: 'play',           // 'menu' | 'play' | 'animating' | 'ruee-target' | 'rayon-target' | 'decret-target' | 'gameover'
     mode,                    // 'pvp' | 'pvai' (SPEC §1.2 ; default 'pvp' = non-régression)

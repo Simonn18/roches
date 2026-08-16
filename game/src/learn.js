@@ -2,9 +2,9 @@
 // Les scénarios préparent des plateaux, puis réutilisent le moteur réel de main.js.
 // Aucun réseau, replay ou trophée n'est impliqué dans ce mode.
 import { creerPiece } from './board.js?v=109';
-import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=108';
+import { reglesEconomie, DEFAULT_VARIANT } from './variants.js?v=110';
 import { coupsLegaux, roiEnEchec } from './rules.js?v=116';
-import { CELL, OX, OY } from './constants.js?v=111';
+import { CELL, OX, OY } from './constants.js?v=113';
 
 const STORAGE_KEY = 'roychec-learn-progress';
 

@@ -8,7 +8,8 @@ import {
   UPGRADES,
   UPGRADES_PAR_TYPE,
   MAX_UPGRADES_PAR_PIECE,
-} from '../game/src/constants.js?v=111';
+  MAX_STATS_PAR_PARTIE,
+} from '../game/src/constants.js?v=113';
 import { initialiserChasse, recolterChasse } from '../game/src/hunt.js?v=3';
 
 const TYPES = ['P', 'N', 'B', 'R', 'Q', 'K'];
@@ -125,6 +126,58 @@ describe('Chasse — récompense utilisable par la pièce collectrice', () => {
 
   test('limite chaque pièce à deux améliorations', () => {
     assert.equal(MAX_UPGRADES_PAR_PIECE, 2);
+  });
+
+  test('bloque une récompense stat quand le plafond global de la partie est atteint', () => {
+    const index = UPGRADES_PAR_TYPE.P;
+    const originalIndex = index.slice();
+    index.splice(0, index.length, 'bouclier');
+    try {
+      const state = etatPour('P');
+      state.statUpgradesCount = MAX_STATS_PAR_PARTIE;
+      const award = recolterChasse(state, state.piece);
+      assert.equal(award.upgradeId, null);
+      assert.equal(state.statUpgradesCount, MAX_STATS_PAR_PARTIE);
+      assert.deepEqual(state.piece.upgrades, []);
+    } finally {
+      index.splice(0, index.length, ...originalIndex);
+    }
+  });
+
+  test('compte une récompense stat dans le plafond global', () => {
+    const index = UPGRADES_PAR_TYPE.P;
+    const originalIndex = index.slice();
+    index.splice(0, index.length, 'bouclier');
+    try {
+      const state = etatPour('P');
+      state.statUpgradesCount = MAX_STATS_PAR_PARTIE - 1;
+      const award = recolterChasse(state, state.piece);
+      assert.equal(award.upgradeId, 'bouclier');
+      assert.equal(state.statUpgradesCount, MAX_STATS_PAR_PARTIE);
+    } finally {
+      index.splice(0, index.length, ...originalIndex);
+    }
+  });
+
+  test('une seconde carte stat sur la même pièce ne consomme pas un nouvel emplacement', () => {
+    const extraId = '__test-stat-pion';
+    const index = UPGRADES_PAR_TYPE.P;
+    const originalIndex = index.slice();
+    UPGRADES[extraId] = {
+      id: extraId, nom: 'Stat de test', cat: 'S', cout: 4, piece: 'P',
+    };
+    index.splice(0, index.length, extraId);
+    try {
+      const state = etatPour('P');
+      state.piece.upgrades = ['bouclier'];
+      state.statUpgradesCount = MAX_STATS_PAR_PARTIE;
+      const award = recolterChasse(state, state.piece);
+      assert.equal(award.upgradeId, extraId);
+      assert.equal(state.statUpgradesCount, MAX_STATS_PAR_PARTIE);
+    } finally {
+      index.splice(0, index.length, ...originalIndex);
+      delete UPGRADES[extraId];
+    }
   });
 
   test('ne dépasse pas le plafond d’améliorations de la pièce', () => {

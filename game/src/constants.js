@@ -165,16 +165,21 @@ for (const u of Object.values(UPGRADES)) {
 }
 
 export const MAX_UPGRADES_PAR_PIECE = 2; // GDD §5.3 — maximum 2 améliorations par pièce
+export const MAX_STATS_PAR_PARTIE = 4; // Limite globale de pièces distinctes porteuses d'une [S]
+
+// Une pièce ne consomme qu'un emplacement global, même si elle reçoit plusieurs [S] :
+// la capture ou la promotion de sa pièce ne libère pas un nouvel emplacement.
+export function estAmeliorationStat(id) {
+  return UPGRADES[id]?.cat === 'S';
+}
 
 // --- PvP en ligne : cadences proposées (spec-pvp-online §6) ---
 // Temps initial par joueur, en secondes. SANS incrément (décision utilisateur 12/07,
 // spec §6.1 v3.1). Le choix se fait APRÈS « Lancer une recherche » / « Jouer avec un ami »
 // et AVANT tout appel réseau ; deux joueurs ne s'apparient que sur la même cadence.
 export const PVW_CADENCES = [
-  { s: 60,    label: '1 minute',  sub: 'bullet',  emoji: '⚡' },
-  { s: 300,   label: '5 minutes', sub: 'blitz',   emoji: '🔥' },
-  { s: 3600,  label: '1 heure',   sub: 'longue',  emoji: '🕐' },
-  { s: 86400, label: '1 journée', sub: 'lente',   emoji: '📅' },
+  { s: 60,  label: '1 minute',  sub: 'bullet', emoji: '⚡' },
+  { s: 300, label: '5 minutes', sub: 'blitz',  emoji: '🔥' },
 ];
 // Libellé court d'une cadence depuis son temps initial (fallback : mm min).
 export function cadenceLabel(s) {

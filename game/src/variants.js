@@ -1,22 +1,30 @@
 // roychec — variantes locales hot-seat (GDD §5.2.b + §7.2 v3, 2026-07-12)
 //
-// Six combinaisons résultent du croisement orthogonal de DEUX axes (3 économie ×
-// 2 combat = 6). La valeur par défaut « Standard × Standard » reproduit strictement
+// Deux combinaisons simples résultent du croisement de DEUX axes (1 économie ×
+// 2 combats). La valeur par défaut « Standard × Standard » reproduit strictement
 // l'économie legacy du MVP v2 : aucune régression des modes PvAI ou PvP en ligne,
 // qui REFUSENT la sélection (fallback « Standard × Standard » + console.warn —
 // décision verrouillée GDD §7.2 scope strict hot-seat local).
 //
 // Implémenté par gameplay-dev sur spec du game-designer 12/07.
 
-import { REVENU_PAR_COUP } from './constants.js?v=111';
+import { REVENU_PAR_COUP } from './constants.js?v=113';
 
-// --- Catalogues des deux axes orthogonaux ---
+// --- Catalogue du mode de combat (l'économie reste Standard) ---
 
-// Plafond du solde par joueur (GDD §5.2.b). Infinity = pas de plafond (illimité).
+// Plafond du solde par joueur (GDD §5.2.b). Les variantes économiques
+// Plafond 15 et Illimité ne sont plus proposées dans l'interface.
 export const ECONOMIES = [
-  { id: 'standard',  plafond: 30,       label: 'Plafond 30 écus', sub: 'plafond 30 écus' },
-  { id: 'plafond15', plafond: 15,       label: 'Plafond 15 écus', sub: 'plafond bas, tactique' },
-  { id: 'illimite',  plafond: Infinity, label: 'Illimité',   sub: 'thésaurisation libre' },
+  { id: 'standard', plafond: 30, label: 'Plafond 30 écus', sub: 'plafond 30 écus' },
+];
+
+// Compatibilité descendante uniquement : ces anciennes variantes restent
+// compréhensibles pour une partie privée ou un replay créé avant leur retrait,
+// mais ne sont jamais renvoyées par variantIdFromMenu().
+const ECONOMIES_COMPAT = [
+  ...ECONOMIES,
+  { id: 'plafond15', plafond: 15, label: 'Plafond 15 écus', sub: 'ancien mode' },
+  { id: 'illimite', plafond: Infinity, label: 'Illimité', sub: 'ancien mode' },
 ];
 
 // Revenu de base par coup joué ET multiplicateur de capture (GDD §5.2.b).
@@ -28,15 +36,19 @@ export const COMBATS = [
     label: 'Élim. ×2 écus', sub: '+0/coup, capture ×2, filet 10' },
 ];
 
-// --- Catalogue complet des 6 combinaisons (référence matrice GDD §7.2) ---
+// --- Catalogue actuel des 2 combinaisons proposées ---
 
 export const VARIANT_PRESETS = [
-  { id: 'pvp_standard',     economie: 'standard',  combat: 'standard' },
+  { id: 'pvp_standard', economie: 'standard', combat: 'standard' },
+  { id: 'pvp_elimX2',   economie: 'standard', combat: 'elimX2' },
+];
+
+const VARIANT_PRESETS_COMPAT = [
+  ...VARIANT_PRESETS,
   { id: 'pvp_plafond15',    economie: 'plafond15', combat: 'standard' },
   { id: 'pvp_illimite',     economie: 'illimite',  combat: 'standard' },
-  { id: 'pvp_elimX2',       economie: 'standard',  combat: 'elimX2'   },
-  { id: 'pvp_plafond15_x2', economie: 'plafond15', combat: 'elimX2'   },
-  { id: 'pvp_illimite_x2',  economie: 'illimite',  combat: 'elimX2'   },
+  { id: 'pvp_plafond15_x2', economie: 'plafond15', combat: 'elimX2' },
+  { id: 'pvp_illimite_x2',  economie: 'illimite',  combat: 'elimX2' },
 ];
 
 export const DEFAULT_VARIANT = 'pvp_standard';
@@ -49,13 +61,12 @@ export const DEFAULT_VARIANT = 'pvp_standard';
 // verrouillés Standard × Standard.
 export const MODES_VARIANTE = new Set(['pvp']);
 
-// Libellé humain d'une variante (« Plafond 15 × Élim. ×2 »). Utilisé par les écrans
-// en ligne (cadence privé / code ami / match trouvé) et le header replay.
+// Libellé humain d'une variante. Les anciens ids restent lisibles pour les
+// replays et parties privées déjà créés.
 export function variantLabel(variantId) {
-  const preset = VARIANT_PRESETS.find((v) => v.id === variantId) || VARIANT_PRESETS[0];
-  const eco = ECONOMIES.find((e) => e.id === preset.economie) || ECONOMIES[0];
+  const preset = VARIANT_PRESETS_COMPAT.find((v) => v.id === variantId) || VARIANT_PRESETS[0];
   const cbt = COMBATS.find((c) => c.id === preset.combat) || COMBATS[0];
-  return `${eco.label} × ${cbt.label}`;
+  return cbt.label;
 }
 
 // --- Résolution des règles d'économie depuis un id de variante ---
@@ -65,8 +76,8 @@ export function variantLabel(variantId) {
 // Renvoie un objet riche consommé par board.js (champ state.variant) et main.js
 // (gagnerEcus, stagnationTick).
 export function reglesEconomie(variantId) {
-  const preset = VARIANT_PRESETS.find((v) => v.id === variantId) || VARIANT_PRESETS[0];
-  const eco = ECONOMIES.find((e) => e.id === preset.economie) || ECONOMIES[0];
+  const preset = VARIANT_PRESETS_COMPAT.find((v) => v.id === variantId) || VARIANT_PRESETS[0];
+  const eco = ECONOMIES_COMPAT.find((e) => e.id === preset.economie) || ECONOMIES[0];
   const cbt = COMBATS.find((c) => c.id === preset.combat) || COMBATS[0];
   return {
     id: preset.id,
@@ -101,16 +112,13 @@ export function variantePourMode(mode, demandeId) {
   return DEFAULT_VARIANT;
 }
 
-// Helper UI : reconstitue l'id de variante à partir des DEUX axes orthogonaux
-// sélectionnés au menu (state.menu.economie × state.menu.combat). Si l'utilisateur
-// n'a touché à rien, retourne le défaut. Utilisé par le bouton « 1J vs 2J » du menu
-// pour passer la bonne variante à commencerPartie().
+// Helper UI : reconstitue l'id de variante depuis le mode de combat sélectionné.
+// Le plafond d'écus est toujours Standard (30). Si l'état historique contient encore
+// une ancienne valeur d'économie, elle est volontairement ignorée.
 export function variantIdFromMenu(state) {
   const m = (state && state.menu) || {};
-  const eco = m.economie || 'standard';
   const cbt = m.combat || 'standard';
-  // Si l'utilisateur a bricolé manuellement un état incohérent, retombe sur standard.
-  return ([...VARIANT_PRESETS]).find((v) => v.economie === eco && v.combat === cbt)?.id
+  return ([...VARIANT_PRESETS]).find((v) => v.combat === cbt)?.id
     || DEFAULT_VARIANT;
 }
 
@@ -123,8 +131,8 @@ export function variantIdFromMenu(state) {
 // Note : la valeur injectée est TOUJOURS +REVENU_PAR_COUP (=2), même en élimination
 // où le revenu de base est 0 — c'est précisément le rôle du filet : débloquer une
 // économie gelée par deux joueurs passifs (sans transformer le mode en gracieux).
-// Note 2 : `state.ecus` n'est PAS infini par défaut : on borne par v.plafond pour
-// rester cohérent avec le plafond basse/variants plafond15.
+// Note 2 : `state.ecus` est borné par le plafond Standard ; les anciens ids
+// conservent leur plafond historique uniquement lors de leur résolution compat.
 // Renvoie le montant EFFECTIVEMENT injecté (0 hors seuil) — consommé par
 // crediterCoup (main.js) pour la fidélité du gain enregistré au replay.
 export function stagnationTick(state, wasCapture) {

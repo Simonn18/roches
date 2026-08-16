@@ -1,9 +1,9 @@
 // roychec — enregistrement de partie (replay) pour tutoriel / analyse.
 // Hooké dans main.js (jouerCoup, acheter, pouvoirs, finPartie).
 // Sortie : markdown téléchargeable + localStorage (max 20 parties).
-import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP, UPGRADES } from './constants.js?v=111';
-import { traduire } from './i18n.js?v=9';
-import { VARIANT_PRESETS, ECONOMIES, COMBATS, DEFAULT_VARIANT } from './variants.js?v=108';
+import { NOM_JOUEUR, ACCENT, REVENU_PAR_COUP, UPGRADES } from './constants.js?v=113';
+import { traduire } from './i18n.js?v=10';
+import { VARIANT_PRESETS, COMBATS, DEFAULT_VARIANT, variantLabel } from './variants.js?v=110';
 // Phase A.5 v2 : toAlgebraic doit connaître la hauteur du plateau pour encoder
 // correctement les rangées sous forme algébrique (8 - r sur plateau 8×N).
 import { DEFAULT_TAILLE, getBoardH } from './tailles.js?v=108';
@@ -199,17 +199,14 @@ export function toMarkdown(state) {
   md += `**${t('Date')}:** ${formatTime(r.startTime)}  \n`;
   md += `**${t('Durée')}:** ${r.result.totalActions} ${t('actions')} (${formatDuration(r.result.duration)})  \n`;
   md += `**${t('Vainqueur')}:** ${winnerName}${win === 0 || win === 1 ? ` — ${t('capture du roi')} 🏆` : ''}\n`;
-  // Variante locale (GDD §7.2 v3) : libellé lisible de l'en-tête (« Plafond 15 ×
-  // Élim. ×2 »). Lookup direct dans les catalogues ECONOMIES / COMBATS (qui sont
-  // importés au-dessus). Les parties standard (DEFAULT_VARIANT) et pré-v3 (variant
-  // absent) n'affichent rien — l'en-tête reste concis pour le MVP.
+  // Variante locale (GDD §7.2) : seul le mode de combat varie désormais ;
+  // le plafond d'écus est fixe à 30 et n'est pas répété dans l'en-tête.
   if (r.variant && r.variant !== DEFAULT_VARIANT) {
     const preset = VARIANT_PRESETS.find((v) => v.id === r.variant);
-    if (preset) {
-      const ecoLabel = t((ECONOMIES.find((e) => e.id === preset.economie) || {}).label || preset.economie);
-      const cbtLabel = t((COMBATS.find((c) => c.id === preset.combat) || {}).label || preset.combat);
-      md += `**${t('Variante')}:** ${ecoLabel} × ${cbtLabel}\n`;
-    }
+    const label = preset
+      ? (COMBATS.find((c) => c.id === preset.combat) || {}).label
+      : variantLabel(r.variant);
+    md += `**${t('Variante')}:** ${t(label || r.variant)}\n`;
   }
   md += '\n';
 

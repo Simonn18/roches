@@ -9,15 +9,15 @@ import {
   CELL, OX as OX_DESKTOP, OY as OY_DESKTOP, PANEL_X, CANVAS_W as CANVAS_W_DESKTOP, CANVAS_H as CANVAS_H_DESKTOP,
   C_CLAIR, C_FONCE, C_SEL, C_MOVE, C_CAP, C_RUEE,
   LETTRE, VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, COULEUR_CAT,
-  MAX_UPGRADES_PAR_PIECE, ACCENT, NOM_JOUEUR,
+  MAX_UPGRADES_PAR_PIECE, MAX_STATS_PAR_PARTIE, estAmeliorationStat, ACCENT, NOM_JOUEUR,
   DUREE_ANIM, DUREE_FLASH, DUREE_POPUP, DUREE_GOLD, REVENU_PAR_COUP,
   C_BRUME, C_CARTE, C_ENCRE, C_SAUGE, C_IVOIRE_BOIS,
   C_ENCRE_DOUX, C_ENCRE_PALE, C_CARTE_BORD, C_OMBRE,
   C_AMBRE, C_AMBRE_FONCE, C_TERRACOTTA, C_SAUGE_FONCE, C_AMBRE_CLAIR, DECK_ACCENT,
   UI_THEME, REMPLI_PIECE,C_ENCRE_sub,
   PVW_CADENCES, cadenceLabel,
-} from './constants.js?v=111';
-import { VARIANT_PRESETS, ECONOMIES, COMBATS, variantLabel, variantIdFromMenu } from './variants.js?v=108';
+} from './constants.js?v=113';
+import { VARIANT_PRESETS, COMBATS, variantLabel, variantIdFromMenu } from './variants.js?v=110';
 import { creerPlateau } from './board.js?v=109';
 // Phase A.5 v2 Phase 3 : TAILLE DE PLATEAU chips itèrent sur TAILLES (maison canonique
 // zero-dep de tailles.js). Pas de cycle : tailles.js n'importe aucun autre module.
@@ -30,7 +30,7 @@ import { STEPS, TOTAL_STEPS, progressionTutoriel, tutorielEtapeDebloquee, tutori
 import { loadDecks, getActiveDeck, setActiveDeck, createDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import { LEARN_GAMES, TOTAL_LEARN_GAMES, PUZZLES, TOTAL_PUZZLES,
   apprendreHint, apprendreEstDebloque, apprendrePuzzleEstDebloque, learnPermet } from './learn.js?v=23';
-import { traduire } from './i18n.js?v=9';
+import { traduire } from './i18n.js?v=10';
 
 
 // Polices (DA §3) : Archivo Black pour tout le display (titres, HUD, badges,
@@ -1228,15 +1228,9 @@ function dessinePopups(ctx, state, now) {
 }
 
 // Horloge depuis un nombre de secondes (arrondi haut, jamais négatif).
-// < 1 h : mm:ss (inchangé). ≥ 1 h (cadences 1 heure / 1 journée) : « 5h32 » — les
-// secondes n'apportent rien à cette échelle et déborderaient la pastille (« 1440:00 »).
+// Les deux cadences proposées restent affichées au format mm:ss.
 function fmtClock(s) {
   s = Math.max(0, Math.ceil(s));
-  if (s >= 3600) {
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    return `${h}h${m < 10 ? '0' : ''}${m}`;
-  }
   const m = Math.floor(s / 60);
   const ss = s % 60;
   return `${m}:${ss < 10 ? '0' : ''}${ss}`;
@@ -1292,12 +1286,11 @@ function dessineHorlogesPvw(ctx, state, x, w, y, now) {
 function dessineResumeVariante(ctx, state, x, y, w) {
   const variant = state.variant || {};
   const taille = TAILLES[state.taille] || TAILLES.std;
-  const economie = variant.plafond === Infinity ? '∞' : `${variant.plafond ?? 30}`;
-  // Résumé compact mais fidèle : Élim. ×2 supprime le revenu de base,
-  // tandis que Standard crédite le revenu normal par coup.
+  // Résumé compact : le plafond d'écus est fixe et documenté dans À propos,
+  // tandis que ce panneau ne montre que les réglages réellement variables.
   const revenu = variant.revenueBase > 0 ? REVENU_PAR_COUP : 0;
   const combat = `+${revenu} · ×${variant.captureMul || 1}`;
-  const items = [      ['ÉCUS', economie === '∞' ? '∞ max' : `${economie} max`],
+  const items = [
       ['COMBAT', combat],
       ['PLATEAU', traduire(taille.label.replace(/\\s/g, ''), state.language)],
 
@@ -1619,14 +1612,17 @@ function dessineCatalogueMobile(ctx, state, x, y, w, now) {
     const verrou = state.mode === 'tutorial' && !tutorielPermet(state, { type: 'buy', id });
     const deja = p.upgrades.includes(id);
     const plein = p.upgrades.length >= MAX_UPGRADES_PAR_PIECE;
+    const statPlafond = u.cat === 'S'
+      && !p.upgrades.some(estAmeliorationStat)
+      && (state.statUpgradesCount || 0) >= MAX_STATS_PAR_PARTIE;
     const abordable = solde >= u.cout;
     const learnVerrou = state.mode === 'learn' && !learnPermet(state, { type: 'buy', id });
-    const achetable = !bientot && !verrou && !learnVerrou && !deja && !plein && abordable;
+    const achetable = !bientot && !verrou && !learnVerrou && !deja && !plein && !statPlafond && abordable;
     state.ui.buttons.push({
       x: cardX, y: cardY, w: cardW, h: cardH,
       action: { kind: 'buy', id }, enabled: !learnVerrou, radius: 8,
     });
-    const bg = bientot || verrou || !abordable ? UI_THEME.disabled
+    const bg = bientot || verrou || statPlafond || !abordable ? UI_THEME.disabled
       : deja ? UI_THEME.panelAlt : UI_THEME.card;
     carte(ctx, cardX, cardY, cardW, cardH, 8, bg, { shadow: achetable || deja, stroke: null });
     ctx.lineWidth = deja ? 2 : 1;
@@ -2004,10 +2000,13 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
     const verrou = state.mode === 'tutorial' && !tutorielPermet(state, { type: 'buy', id });
     const deja = p.upgrades.includes(id);
     const plein = p.upgrades.length >= MAX_UPGRADES_PAR_PIECE;
+    const statPlafond = u.cat === 'S'
+      && !p.upgrades.some(estAmeliorationStat)
+      && (state.statUpgradesCount || 0) >= MAX_STATS_PAR_PARTIE;
     const abordable = solde >= u.cout;
     const learnVerrou = state.mode === 'learn'
       && !learnPermet(state, { type: 'buy', id });
-    const achetable = !bientot && !verrou && !learnVerrou && !deja && !plein && abordable;
+    const achetable = !bientot && !verrou && !learnVerrou && !deja && !plein && !statPlafond && abordable;
     const learnButtonDisabled = state.mode === 'learn' && !achetable;
     const premium = u.cout >= 12;            // tier « carte chère » (DA §11.1.b) — signal de rareté
     const h = 62;
@@ -2021,7 +2020,7 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
 
     // Fond de carte selon l'état (priorité : bientôt/verrou > achetée > premium > standard, DA §11.1).
     let bg;
-    if (bientot || verrou) bg = UI_THEME.disabled;
+    if (bientot || verrou || statPlafond) bg = UI_THEME.disabled;
     else if (deja) bg = UI_THEME.panelAlt;
     else if (premium) bg = abordable ? UI_THEME.card : UI_THEME.disabled; // grisé chaud
     else bg = abordable ? UI_THEME.card : UI_THEME.disabled;
@@ -2498,7 +2497,7 @@ function wrapTextLimite(ctx, text, x, y, maxW, lh, maxLines = 2) {
 // Les formulaires (email / code / pseudo) restent gérés en DOM (overlay).
 // S'ouvre via { kind: 'toggleHamburger' } ; se ferme au clic sur le scrim ou Échap.
 function mobileWrap(ctx, text, x, y, maxWidth, lineHeight, maxLines = 4) {
-  const words = String(text || '').split(/\\s+/);
+  const words = String(text || '').split(/\s+/);
   let line = '';
   let lines = 0;
   for (const word of words) {
@@ -2642,7 +2641,7 @@ function dessineBandeauCompteMobile(ctx, state) {
       for (const line of [
         'ROYCHEC est un jeu d’échecs augmenté. Capture le roi adverse pour gagner.',
         'Les améliorations ont trois types : D = déplacement, A = actif, S = statistique. Elles donnent de nouvelles options sans remplacer les règles de base.',
-        'Les écus se gagnent en jouant : chaque coup rapporte des écus et une capture ajoute la valeur de la pièce prise. Les variantes peuvent modifier ces gains.',
+        'Le maximum d’écus est bloqué à 30 par joueur.',
         'Utilise tes écus dans le panneau « Améliorer » pour acheter une carte compatible avec la pièce. Une pièce peut porter au maximum deux améliorations : choisis ta combinaison.',
       ]) yy += mobileWrap(ctx, traduire(line, language), px + pad, yy, pw - 2 * pad, 17, 4) + 9;
       ctx.fillStyle = UI_THEME.muted;
@@ -2868,7 +2867,7 @@ function dessineBandeauCompte(ctx, state) {
       const aboutLines = [
         'ROYCHEC est un jeu d’échecs augmenté. Capture le roi adverse pour gagner.',
         'Les améliorations ont trois types : D = déplacement, A = actif, S = statistique. Elles donnent de nouvelles options sans remplacer les règles de base.',
-        'Les écus se gagnent en jouant : chaque coup rapporte des écus et une capture ajoute la valeur de la pièce prise. Les variantes peuvent modifier ces gains.',
+        'Le maximum d’écus est bloqué à 30 par joueur.',
         'Utilise tes écus dans le panneau « Améliorer » pour acheter une carte compatible avec la pièce. Une pièce peut porter au maximum deux améliorations : choisis ta combinaison.',
       ];
       for (const line of aboutLines) {
@@ -2984,20 +2983,23 @@ function dessineMenuMobile(ctx, state) {
   } else {
     mobileText(ctx, 'DIFFICULTÉ', contentX, contentY + 12, `700 10px ${F_DISPLAY}`, C.muted);
     const diffGap = 5, diffW = (contentW - diffGap * 2) / 3;
+    // Les intitulés longs doivent rester entièrement dans leur case, notamment
+    // INTERMÉDIAIRE sur les petits téléphones : la zone tactile reste inchangée.
     ['Débutant', 'Intermédiaire', 'Avancé'].forEach((label, i) => mobileButton(state, ctx,
       contentX + i * (diffW + diffGap), contentY + 27, diffW, 32, label,
       { kind: 'pickDifficulty', level: i + 1 }, { color: selectedDiff === i + 1 ? C.wine : C.card,
-        textColor: C.text }));
+        textColor: C.text, fontSize: 8 }));
     mobileButton(state, ctx, contentX + 12, contentY + 70, contentW - 24, 36,
       'Jouer contre l’ordinateur', { kind: 'pickMode', mode: 'pvai' },
       { enabled: !!selectedDiff, color: C.primary, textColor: C.text });
   }
 
-  const variantY = 382, variantH = 190;
+  // La ligne ÉCUS ayant été retirée, la carte ne garde que les deux rangées
+  // visibles et le bouton DECKS : on supprime l'espace vide sous ce bouton.
+  const variantY = 382, variantH = 148;
   mobileCard(ctx, pad, variantY, inner, variantH, C.panel, 18);
   mobileText(ctx, 'RÉGLAGES DE PARTIE', pad + 16, variantY + 22, `700 11px ${F_DISPLAY}`, C.muted);
   const variantRows = [
-    ['ÉCUS', ECONOMIES.slice(0, 3).map((item) => ({ value: item.id, label: item.id === 'standard' ? '30 max' : item.id === 'plafond15' ? '15 max' : '∞ max' })), 'pickEconomie', state.menu?.economie || 'standard'],
     ['COMBAT', COMBATS.map((item) => ({ value: item.id, label: item.id === 'standard' ? '+2 / coup' : 'capture ×2' })), 'pickCombat', state.menu?.combat || 'standard'],
     ['PLATEAU', [['std', '8 × 8'], ['l15', '15 × 8'], ['bonus', 'BONUS']].map(([value, label]) => ({ value, label })), 'pickTaille', selectedSize],
   ];
@@ -3009,7 +3011,7 @@ function dessineMenuMobile(ctx, state) {
     options.forEach(({ value, label: optionLabel }, i) => {
       const selected = value === selectedValue;
       mobileButton(state, ctx, startX + i * (chipW + chipGap), yy, chipW, 24, optionLabel,
-        { kind, value }, { color: selected ? (row === 1 ? C.wine : C.primary) : C.field,
+        { kind, value }, { color: selected ? (row === 0 ? C.wine : C.primary) : C.field,
           textColor: selected ? C.text : C.muted });
     });
   });
@@ -3017,7 +3019,7 @@ function dessineMenuMobile(ctx, state) {
   // sans encombrer la grille de navigation principale.
   // Même largeur, rayon et traitement que les contrôles de réglages ; la hauteur
   // reste de 44 px pour conserver une cible tactile confortable.
-  mobileButton(state, ctx, pad + 72, variantY + 141, inner - 88, 24, 'DECKS  ›',
+  mobileButton(state, ctx, pad + 72, variantY + 112, inner - 88, 24, 'DECKS  ›',
     { kind: 'ouvrirDecks' }, { color: C.field, textColor: C.text });
 
   const navY = 82, navW = (inner - 8) / 2;
@@ -3033,7 +3035,9 @@ function dessineMenuMobile(ctx, state) {
   const historyX = pad + columnW + columnsGap;
   // Cartes carrées sur téléphone : la largeur de chaque colonne devient leur
   // hauteur pour garder une composition nette et équilibrée.
-  const previewY = 588;
+  // Seize pixels de respiration après la bordure des réglages, sans laisser
+  // l'ancien espace réservé à la ligne supprimée.
+  const previewY = 546;
   const previewH = columnW;
   const historyY = previewY;
   const historyH = previewH;
@@ -3283,7 +3287,6 @@ function dessineMenuDashboard(ctx, state) {
   const R_CARD = 18, R_INNER = 12, R_PILL = 999;
   const cx = CANVAS_W / 2;
   const activeMode = (state.menu && state.menu.activeMode) || 'pvw';
-  const varEco = (state.menu && state.menu.economie) || 'standard';
   const varCbt = (state.menu && state.menu.combat) || 'standard';
   const varTail = (state.menu && state.menu.taille) || 'std';
   const tailleLabel = (TAILLES[varTail] || TAILLES.std).label;
@@ -3706,14 +3709,7 @@ function dessineMenuDashboard(ctx, state) {
     const optionX = x + 16;
     const optionLabelW = 54;
     const optionGap = 4;
-    const ecoW = (contentW - optionLabelW - optionGap * 2 - 8) / 3;
-    dbText('ÉCUS', optionX, optionY + 12, `700 9px ${F_DB}`, C.muted);
-    ECONOMIES.slice(0, 3).forEach((item, i) => dbControl(
-      optionX + optionLabelW + i * (ecoW + optionGap), optionY, ecoW, 24,
-      traduire(item.label, state.language).toUpperCase(), { kind: 'pickEconomie', value: item.id },
-      { fill: item.id === varEco ? C.forest : C.field, selected: item.id === varEco, radius: 7, font: `700 8px ${F_DB}` },
-    ));
-    const combatY = optionY + 28;
+    const combatY = optionY;
     const combatW = (contentW - optionLabelW - optionGap - 8) / 2;
     dbText('COMBAT', optionX, combatY + 12, `700 9px ${F_DB}`, C.muted);
     COMBATS.forEach((item, i) => dbControl(
@@ -3880,7 +3876,7 @@ function dessineMatchmaking(ctx, state) {
       ? 'Temps de réflexion de la partie privée (ton ami en hérite)'
       : 'Temps de réflexion — tu ne rencontres que des joueurs de la même cadence', state.language), cx, titleY + 28);
 
-    // Grille 2×2 de cadences (sans incrément — spec §6.1 v3.1).
+    // Sélecteur compact des deux cadences disponibles (sans incrément).
     const gw = mobileLobby ? Math.min(310, contentW) : 155;
     const gh = 58, gap = 10;
     PVW_CADENCES.forEach((c, i) => {
@@ -3898,7 +3894,7 @@ function dessineMatchmaking(ctx, state) {
     // Les variantes historiques ÉCUS/COMBAT ont été retirées de la création privée.
     // Une partie « Jouer avec un ami » démarre désormais en Standard × Standard ;
     // le Plateau bonus reste sélectionnable séparément via TAILLE DE PLATEAU.
-    const retourY = mobileLobby ? 524 : 432;
+    const retourY = mobileLobby ? 400 : 322;
 
     // Retour au lobby (aucun réseau engagé à ce stade).
     bouton(state, ctx, cx - wB / 2, retourY, wB, hB, '← Retour',
@@ -4509,22 +4505,6 @@ const PARCOURS_JEU = {
   locked: UI_THEME.disabled,
 };
 
-// Les puzzles gardent la texture forêt (feuillage, voile, tracé), mais leur
-// fond principal suit le thème actif au lieu du vert de référence. La fonction
-// relit UI_THEME à chaque rendu pour que le changement clair/sombre soit immédiat.
-function paletteFondPuzzles() {
-  return {
-    ...PARCOURS_DA,
-    forest: UI_THEME.background,
-    forestDeep: UI_THEME.background,
-    leafDark: UI_THEME.wineDark,
-    leaf: UI_THEME.card,
-    olive: UI_THEME.amberDark,
-    cream: UI_THEME.text,
-    creamMuted: UI_THEME.muted,
-  };
-}
-
 function dessineFondParcours(ctx, pal = PARCOURS_DA) {
   ctx.fillStyle = pal.forestDeep;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -4611,8 +4591,7 @@ function dessineCheminParcours(ctx, positions, pal = PARCOURS_DA) {
 
 // Niveau en forme de tuile carrée arrondie, comme les cases du plateau :
 // ombre, halo actif, fond plat, contour épais et numéro centré. `pal` choisit
-// la palette (forêt pour les Puzzles, couleurs du jeu pour Tutoriel/Apprendre)
-// sans changer la forme ni les états.
+// la palette sans changer la forme ni les états.
 function dessineTuileNiveau(ctx, cxNode, cyNode, size, radius, done, active, text, fill, stroke, numero, pal = PARCOURS_DA) {
   ctx.save();
   const half = size / 2;
@@ -4783,21 +4762,19 @@ function dessinePuzzleHub(ctx, state) {
   const mobile = !!(state.ui && state.ui.mobileLayout);
   const cx = CANVAS_W / 2;
   const completed = new Set(state.puzzleProgress?.completed || []);
-  // Sept puzzles : le dernier nœud prolonge le zigzag sur la droite.
-  // Parcours en escalier : on part en bas à gauche, puis on monte
-  // progressivement vers la droite. Chaque puzzle rejoint directement le
-  // précédent, sans saut visuel ni croisement du chemin.
-  const positions = mobile
-    ? PUZZLES.map((_, index) => ({ x: cx, y: 150 + index * 84 }))
-    : [
-      { x: 150, y: 620 }, { x: 150, y: 470 },
-      { x: 350, y: 470 }, { x: 350, y: 320 },
-      { x: 550, y: 320 }, { x: 550, y: 170 },
-      { x: 780, y: 170 },
-    ];
+  // Même grille que le Parcours classique : les puzzles reprennent le chemin
+  // serpent, les espacements et la respiration visuelle des niveaux classiques.
+  const columns = mobile ? 1 : 9;
+  const positions = PUZZLES.map((_, index) => {
+    const row = Math.floor(index / columns);
+    const col = index % columns;
+    const leftToRight = row % 2 === 0;
+    return mobile
+      ? { x: cx, y: 150 + row * 84 }
+      : { x: leftToRight ? 60 + col * 110 : 940 - col * 110, y: 180 + row * 145 };
+  });
   const nodeW = 60, nodeH = 60, nodeRadius = 14;
-
-  const palettePuzzle = paletteFondPuzzles();
+  const palettePuzzle = PARCOURS_JEU;
   dessineFondParcours(ctx, palettePuzzle);
 
   ctx.fillStyle = palettePuzzle.cream; ctx.font = `34px ${F_DISPLAY}`;
@@ -4814,28 +4791,28 @@ function dessinePuzzleHub(ctx, state) {
     const done = completed.has(puzzle.id);
     const unlocked = apprendrePuzzleEstDebloque(state, index);
     const active = unlocked && !done;
-    const nodeColors = couleursNoeudParcours(done, active);
+    const nodeColors = couleursNoeudParcours(done, active, PARCOURS_JEU);
     const fill = nodeColors.fill;
     const stroke = nodeColors.stroke;
     const text = nodeColors.text;
     ctx.save();
     // Même composition que le parcours classique : uniquement la tuile
     // numérotée sur le chemin serpent, sans nom ni statut.
-    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1);
+    dessineTuileNiveau(ctx, cxNode, cyNode, nodeW, nodeRadius, done, active, text, fill, stroke, index + 1, PARCOURS_JEU);
     ctx.restore();
     motionMenuBouton(state, x, y, nodeW, nodeH,
       { kind: 'puzzleStart', index }, unlocked, 12, 'rect');
   });
 
   const doneCount = completed.size;
-  ctx.fillStyle = PARCOURS_DA.cream; ctx.font = `700 12px ${F_TEXTE}`;
+  ctx.fillStyle = PARCOURS_JEU.cream; ctx.font = `700 12px ${F_TEXTE}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const footerY = mobile ? 150 + PUZZLES.length * 84 + 64 : 590;
   ctx.fillText(traduire(`${doneCount}/${TOTAL_PUZZLES} puzzles résolus`, state.language), cx, footerY);
-  bouton(state, ctx, mobile ? cx - 110 : 32, mobile ? footerY + 32 : 700, 220, mobile ? 38 : 34, '← Parcours classique', { kind: 'classicHub' },
-    { color: PARCOURS_DA.card, textColor: PARCOURS_DA.cream, outlineColor: PARCOURS_DA.oliveLight });
-  bouton(state, ctx, cx - 110, mobile ? footerY + 78 : 700, 220, mobile ? 38 : 34, '← Menu principal', { kind: 'retourMenu' },
-    { color: PARCOURS_DA.card, textColor: PARCOURS_DA.cream, outlineColor: PARCOURS_DA.oliveLight });
+  bouton(state, ctx, mobile ? cx - 110 : 32, mobile ? footerY + 32 : 635, 220, mobile ? 38 : 34, '← Parcours classique', { kind: 'classicHub' },
+    { color: UI_THEME.amber, textColor: UI_THEME.buttonText, outlineColor: UI_THEME.amberLight });
+  bouton(state, ctx, cx - 110, mobile ? footerY + 78 : 635, 220, mobile ? 38 : 34, '← Menu principal', { kind: 'retourMenu' },
+    { color: UI_THEME.card, textColor: UI_THEME.text, outlineColor: UI_THEME.border });
 }
 
 function dessineLearnPanel(ctx, state, now) {
