@@ -77,6 +77,12 @@
     canvas.mobile-menu {
       touch-action: pan-y;
     }
+    /* La vue des améliorations est un panneau Canvas avec son propre défilement
+       vertical : le geste doit rester dans la liste au lieu de faire défiler toute
+       la page derrière le voile. */
+    canvas.upgrades-scroll {
+      touch-action: none;
+    }
     /* Les écrans de partie sont plus compacts que le dashboard : le plateau ne
        remplit plus toute la hauteur/largeur sur desktop, mais reste fluide sur mobile. */
     canvas.game-screen {

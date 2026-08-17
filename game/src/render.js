@@ -76,7 +76,9 @@ function finEcranMobile(state) {
 }
 function largeurPanneauFin(state, largeurDesktop) {
   if (!finEcranMobile(state)) return largeurDesktop;
-  return Math.min(largeurDesktop, Math.max(280, CANVAS_W - 24));
+  // Sur téléphone, garder une marge visible autour de l'encadré et éviter qu'il
+  // prenne presque toute la largeur de l'écran.
+  return Math.min(320, Math.max(280, CANVAS_W - 40));
 }
 function mobileInstructionHeight(state) {
   if (!mobileInstructionsAuDessus(state)) return 0;
@@ -157,12 +159,17 @@ function tilePath(ctx, r, c) {
 // Mapping type interne -> nom de fichier ; owner 0 = bleu, owner 1 = corail.
 const SPRITE_NOM = { P: 'pion', N: 'cavalier', B: 'fou', R: 'tour', Q: 'dame', K: 'roi' };
 const SPRITE_CAMP = ['1', '1-2'];
-// Phase A.5 v2 Phase 5.A — SPRITE_H size-aware : la cible std (60 px) est préservée à
-// cellSize=70, et la pièce shrink proportionnellement quand __CELL_SIZE descend (l15).
-// std 70×0.857=60 ; l15 51×0.857=44 (vs cellule 47 utile). On garde un ratio dérivable,
-// pas un const : si tailles.js rajoute une taille plus grande, le scaling suit.
-const SPRITE_H_RATIO = 60 / 70; // 0.857143
-function getSpriteHeight() { return Math.round(__CELL_SIZE * SPRITE_H_RATIO); }
+// Phase A.5 v2 Phase 5.A — SPRITE_H size-aware : la cible desktop std (60 px) est
+// préservée à cellSize=70. Sur téléphone, on laisse davantage d'air autour de la pièce
+// pour que sa silhouette ne remplisse pas presque toute la case rétrécie.
+const SPRITE_H_RATIO = 60 / 70;          // desktop : 60 px à cellSize=70
+const MOBILE_SPRITE_H_RATIO = 50 / 70;  // mobile : ~32 px à cellSize=45
+function getSpriteHeight(state) {
+  const ratio = state && state.ui && state.ui.mobileGameplay
+    ? MOBILE_SPRITE_H_RATIO
+    : SPRITE_H_RATIO;
+  return Math.round(__CELL_SIZE * ratio);
+}
 // Incrémente ce numéro après avoir changé les images dans assets/pieces/
 // pour forcer le navigateur à recharger les sprites au lieu d'utiliser son cache.
 const SPRITE_VERSION = 13;
@@ -672,8 +679,9 @@ function dessinePiece(ctx, state, p, x, y, now, rayon = Math.round(__CELL_SIZE *
   const vOwner = campVisuel(state, p.owner);
   const img = spritePret(vOwner, p.type);
   // Rayon d'ancrage des anneaux d'état : englobe le sprite (~30 std) ou le jeton.
-  // Phase A.5 v2 Phase 5.A — size-aware via getSpriteHeight() (std 60/2=30, l15 44/2=22).
-  const rEtat = img ? getSpriteHeight() / 2 : rayon;
+  // Phase A.5 v2 Phase 5.A — size-aware via getSpriteHeight() (desktop std 60/2=30 ;
+  // mobile 8×8 ~32/2, avec une marge visuelle plus confortable autour de la pièce).
+  const rEtat = img ? getSpriteHeight(state) / 2 : rayon;
 
   // 1. Effet feu (pivot v3.2 — 2026-07-11) D'ABORD : derrière le sprite (le user a
   // demandé explicitement « DERRIÈRE la pièce »). Halo radius 34 px autour de (x, y),
@@ -698,7 +706,7 @@ function dessinePiece(ctx, state, p, x, y, now, rayon = Math.round(__CELL_SIZE *
     // un peu d'air avec le halo du feu).
     // Phase A.5 v2 Phase 5.A — hauteur (et largeur) size-aware via getSpriteHeight().
     const ratio = img.naturalWidth / img.naturalHeight;
-    const h = getSpriteHeight(), w = h * ratio;
+    const h = getSpriteHeight(state), w = h * ratio;
     ctx.drawImage(img, x - w / 2, y - h / 2 - 1, w, h);
   } else {
     // Fallback jeton flat : aplat pastel par camp, contour Encre commun.
@@ -1117,15 +1125,18 @@ function dessineEchiquier(ctx, state, now) {
   // Le verrouillage reste uniquement logique : un clic sur une mauvaise cible est
   // refusé par main.js et affiche le feedback ACTION GUIDÉE.
   const mobileGameplay = !!(state.ui && state.ui.mobileGameplay);
-  const moveDotRadius = mobileGameplay ? Math.max(5, __CELL_SIZE * 0.14) : 10;
-  const teleRadius = mobileGameplay ? Math.max(7, __CELL_SIZE * 0.18) : 13;
-  const specialRadius = mobileGameplay ? Math.max(6, __CELL_SIZE * 0.14) : Math.max(10, __CELL_SIZE * 0.18);
+  // Marqueurs proportionnels à la case : les minima mobiles évitent qu'un point
+  // reste visuellement énorme sur un petit téléphone, tout en gardant les hitboxes
+  // de la case inchangées pour le tactile.
+  const moveDotRadius = mobileGameplay ? Math.max(3.5, __CELL_SIZE * 0.10) : 10;
+  const teleRadius = mobileGameplay ? Math.max(5, __CELL_SIZE * 0.13) : 13;
+  const specialRadius = mobileGameplay ? Math.max(4, __CELL_SIZE * 0.10) : Math.max(10, __CELL_SIZE * 0.18);
   const markerLineWidth = mobileGameplay ? 2 : 3;
   for (const mv of state.legalMoves) {
     const { x, y } = cellCenterVue(state, mv.r, mv.c);
     if (mv.capture) {
-      ctx.beginPath(); ctx.arc(x, y, __CELL_SIZE / 2 - (mobileGameplay ? 6 : 4), 0, Math.PI * 2);
-      ctx.lineWidth = mobileGameplay ? 3 : 5; ctx.strokeStyle = C_CAP; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, __CELL_SIZE / 2 - (mobileGameplay ? 8 : 4), 0, Math.PI * 2);
+      ctx.lineWidth = mobileGameplay ? 2 : 5; ctx.strokeStyle = C_CAP; ctx.stroke();
     } else if (mv.tele) {
       ctx.save();
       ctx.beginPath(); ctx.arc(x, y, teleRadius, 0, Math.PI * 2);
@@ -1153,8 +1164,8 @@ function dessineEchiquier(ctx, state, now) {
       : state.phase === 'echange-target' ? '#7FB069'
       : state.phase === 'cavalerie-push' ? '#5BC0EB' // cyan vif pour les destinations
       : C_RUEE;
-    const targetRadius = mobileGameplay ? __CELL_SIZE / 2 - 6 : __CELL_SIZE / 2 - 3;
-    const targetLineWidth = mobileGameplay ? 3 : 4;
+    const targetRadius = mobileGameplay ? __CELL_SIZE / 2 - 8 : __CELL_SIZE / 2 - 3;
+    const targetLineWidth = mobileGameplay ? 2 : 4;
     for (const t of state.ruTargets) {
       const { x, y } = cellCenterVue(state, t.r, t.c);
       ctx.beginPath(); ctx.arc(x, y, targetRadius, 0, Math.PI * 2);
@@ -1779,13 +1790,37 @@ function dessineVueAmeliorations(ctx, state) {
   const w = mobile ? CANVAS_W - 20 : Math.min(660, CANVAS_W - 220);
   const colW = mobile ? w - panelPad * 2 : (w - panelPad * 2 - colGap) / 2;
   const contentTop = headerH;
-  const h = mobile
+  const contentH = mobile
     ? headerH + campH(0) + campH(1) + 12 + panelPad
     : headerH + Math.max(campH(0), campH(1)) + panelPad;
+  // Sur téléphone, le catalogue peut contenir une pièce par ligne pour chaque
+  // camp. La fenêtre reste donc à hauteur d'écran et son contenu défile au lieu
+  // de sortir du téléphone (swipe vertical ou roulette sur desktop).
+  const h = mobile
+    ? Math.min(contentH, Math.max(300, Math.min(620, CANVAS_H - 24)))
+    : contentH;
   const x0 = Math.max(10, (CANVAS_W - w) / 2);
-  const y0 = Math.max(12, (CANVAS_H - h) / 2);
+  // Le panneau mobile commence en haut du canvas : l'utilisateur voit toujours
+  // son titre dès l'ouverture, puis fait défiler les améliorations à l'intérieur.
+  const y0 = mobile ? 12 : Math.max(12, (CANVAS_H - h) / 2);
+  const clipTop = y0 + headerH;
+  const clipBottom = y0 + h - panelPad;
+  const maxScroll = mobile ? Math.max(0, contentH - h) : 0;
+  if (state.ui) {
+    state.ui.upgradesScrollMax = maxScroll;
+    state.ui.upgradesScroll = Math.max(0, Math.min(maxScroll, Number(state.ui.upgradesScroll) || 0));
+    state.ui.upgradesPanel = { x: x0, y: y0, w, h, contentTop: clipTop, contentBottom: clipBottom };
+  }
 
   carte(ctx, x0, y0, w, h, 16, UI_THEME.panel, { shadow: true, stroke: null });
+  if (mobile && maxScroll > 0) {
+    // Laisser une indication visuelle discrète de la zone défilable.
+    ctx.fillStyle = UI_THEME.muted;
+    ctx.globalAlpha = 0.3;
+    roundRect(ctx, x0 + w - 7, clipTop + 4, 3, Math.max(1, clipBottom - clipTop - 8), 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
   ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.border;
   roundRect(ctx, x0, y0, w, h, 16); ctx.stroke();
 
@@ -1846,8 +1881,27 @@ function dessineVueAmeliorations(ctx, state) {
   };
 
   if (mobile) {
-    drawCamp(0, x0 + panelPad, y0 + contentTop);
-    drawCamp(1, x0 + panelPad, y0 + contentTop + campH(0) + 12);
+    const scroll = state.ui?.upgradesScroll || 0;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0 + 1, clipTop, w - 2, Math.max(0, clipBottom - clipTop));
+    ctx.clip();
+    drawCamp(0, x0 + panelPad, y0 + contentTop - scroll);
+    drawCamp(1, x0 + panelPad, y0 + contentTop + campH(0) + 12 - scroll);
+    ctx.restore();
+
+    if (maxScroll > 0) {
+      const trackH = Math.max(1, clipBottom - clipTop - 8);
+      const visibleContentH = Math.max(1, h - headerH);
+      const scrollableContentH = Math.max(visibleContentH, contentH - headerH);
+      const thumbH = Math.max(34, trackH * visibleContentH / scrollableContentH);
+      const thumbY = clipTop + 4 + (trackH - thumbH) * (scroll / maxScroll);
+      ctx.fillStyle = UI_THEME.secondary;
+      ctx.globalAlpha = 0.9;
+      roundRect(ctx, x0 + w - 7, thumbY, 3, thumbH, 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   } else {
     const top = y0 + contentTop;
     drawCamp(0, x0 + panelPad, top);
@@ -2341,20 +2395,27 @@ function dessineGameOver(ctx, state, now) {
   // QA-PVW-18). state.trophy est posé par reporterResultatPvP (pending → résolu).
   const tr = state.trophy;
   const pvw = state.mode === 'pvw' && state.pvw;
-  const voided = !!(pvw && state.pvw.voided);          // match annulé (désync, §3.4)
-  const showTrophy = pvw && !voided && tr && !tr.pending;
-  const pendingTrophy = pvw && !voided && tr && tr.pending;
+  // Les trophées sont réservés au PvP public classé Standard × 8×8.
+  // Les parties privées, variantes, 8×15 et Bonus restent jouables sans afficher
+  // ni calculer de trophées sur l'écran de victoire.
+  const rankedPvw = !!(pvw && state.pvw.ranked);
+  const voided = !!(rankedPvw && state.pvw.voided);      // match annulé (désync, §3.4)
+  const showTrophy = rankedPvw && !voided && tr && !tr.pending;
+  const pendingTrophy = rankedPvw && !voided && tr && tr.pending;
   const guestEph = false;                               // PvP = compte requis, jamais éphémère
 
   // Panneau centré, cadre Doré 3 px (DA §11.5). Hauteur adaptée au contenu.
   const hasReplay = !!state.replay;
   const mobile = finEcranMobile(state);
   const pw = largeurPanneauFin(state, 380);
-  let ph = 210;
-  if (showTrophy || pendingTrophy || voided) ph += 60;
+  // Version mobile plus compacte : la largeur, les espacements et la hauteur de
+  // chaque bouton sont réduits, mais les cibles restent suffisamment grandes pour
+  // le tactile (40 px de haut minimum).
+  let ph = mobile ? 184 : 210;
+  if (showTrophy || pendingTrophy || voided) ph += mobile ? 48 : 60;
   /* replay button moved to bottom-right of canvas — no extra panel height needed */
-  if (pvw && !voided) ph += 56;                         // bouton Revanche
-  if (pvw) ph += 56;                                    // bouton Nouvelle partie (aussi si voided)
+  if (pvw && !voided) ph += mobile ? 48 : 56;            // bouton Revanche
+  if (pvw) ph += mobile ? 48 : 56;                       // bouton Nouvelle partie (aussi si voided)
   const px = cx - pw / 2, py = cy - ph / 2;
   carte(ctx, px, py, pw, ph, 14, UI_THEME.panel, { shadow: true, stroke: null });
   ctx.lineWidth = 3; ctx.strokeStyle = C_AMBRE;
@@ -2363,8 +2424,8 @@ function dessineGameOver(ctx, state, now) {
   // Couronne centrée sur le bord supérieur du panneau (moitié dépasse, DA §11.5).
   dessineCouronne(ctx, cx, py - 17);
 
-  // Nom du vainqueur : Archivo Black 32 px, liseré Encre 1.5 px puis remplissage camp.
-  ctx.font = `32px ${F_DISPLAY}`;
+  // Nom du vainqueur : taille réduite sur téléphone pour préserver les marges.
+  ctx.font = `${mobile ? 26 : 32}px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.strokeStyle = C_ENCRE;
   // PvP en ligne : nom du vainqueur = « Toi » / pseudo adverse ; nulle possible (§6.3).
@@ -2382,21 +2443,22 @@ function dessineGameOver(ctx, state, now) {
     titre = `${traduire(NOM_JOUEUR[state.winner], state.language).toUpperCase()} ${traduire('GAGNE !', state.language)}`;
     titreColor = ACCENT[campVisuel(state, state.winner)];
   }
-  ctx.strokeText(titre, cx, py + 48);
+  const titreY = py + (mobile ? 38 : 48);
+  ctx.strokeText(titre, cx, titreY);
   ctx.fillStyle = titreColor;
-  ctx.fillText(titre, cx, py + 48);
+  ctx.fillText(titre, cx, titreY);
 
   // Sous-texte selon la cause de fin.
-  ctx.fillStyle = UI_THEME.muted; ctx.font = `15px ${F_TEXTE}`;
+  ctx.fillStyle = UI_THEME.muted; ctx.font = `${mobile ? 12 : 15}px ${F_TEXTE}`;
   let soustexte = 'Roi capturé';
   if (voided) soustexte = 'Partie annulée';
   else if (pvw && state.pvw.endReason === 'time') soustexte = state.winner === null ? 'Égalité au temps (départage)' : 'Victoire au temps (départage)';
   else if (pvw && state.pvw.endReason === 'resign') soustexte = 'Abandon';
   else if (pvw && state.pvw.endReason === 'abandon') soustexte = 'Victoire locale — résultat non classé';
-  ctx.fillText(traduire(soustexte, state.language), cx, py + 84);
+  ctx.fillText(traduire(soustexte, state.language), cx, py + (mobile ? 70 : 84));
 
   // --- Bloc central : trophée (PvP), calcul en cours, ou annulation ---
-  const midY = py + 116;
+  const midY = py + (mobile ? 98 : 116);
   if (voided) {
     ctx.fillStyle = UI_THEME.danger; ctx.font = `14px ${F_TEXTE}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -2413,8 +2475,8 @@ function dessineGameOver(ctx, state, now) {
   // --- Boutons empilés depuis le bas ---
   // Sur téléphone, les dimensions suivent la largeur utile du panneau et gardent
   // une cible tactile confortable. Le desktop conserve exactement ses valeurs.
-  const endButtonH = mobile ? 44 : 46;
-  const endButtonStep = mobile ? 52 : 54;
+  const endButtonH = mobile ? 40 : 46;
+  const endButtonStep = mobile ? 48 : 54;
   const endButtonMaxW = Math.max(0, pw - 32);
   const endButtonW = (desktopW) => mobile ? Math.min(desktopW, endButtonMaxW) : desktopW;
   const endButtonX = (width) => cx - width / 2;
@@ -2422,7 +2484,7 @@ function dessineGameOver(ctx, state, now) {
   const splitButtonW = mobile ? Math.floor((endButtonMaxW - splitButtonGap) / 2) : 124;
   const splitButtonX = (side) => cx - (splitButtonW * 2 + splitButtonGap) / 2
     + (side === 1 ? splitButtonW + splitButtonGap : 0);
-  let btnY = py + ph - 58;
+  let btnY = py + ph - (mobile ? 50 : 58);
   // Bouton principal : retour au menu (tous modes).
   const mainButtonW = endButtonW(200);
   bouton(state, ctx, endButtonX(mainButtonW), btnY, mainButtonW, endButtonH, pvw ? 'Menu' : 'Nouvelle partie',
@@ -4031,9 +4093,8 @@ function dessineMatchmaking(ctx, state) {
         { color: c.s === 300 ? UI_THEME.amber : UI_THEME.card, textColor: c.s === 300 ? UI_THEME.buttonText : UI_THEME.text, sub: traduire(c.sub, state.language) });
     });
 
-    // Les variantes historiques ÉCUS/COMBAT ont été retirées de la création privée.
-    // Une partie « Jouer avec un ami » démarre désormais en Standard × Standard ;
-    // le Plateau bonus reste sélectionnable séparément via TAILLE DE PLATEAU.
+    // Les variantes et la taille sont choisies dans le menu principal avant
+    // d'entrer ici. L'écran de cadence ne modifie aucune option de partie.
     const retourY = mobileLobby ? 400 : 322;
 
     // Retour au lobby (aucun réseau engagé à ce stade).

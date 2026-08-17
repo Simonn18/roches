@@ -22,6 +22,7 @@ const online = {
   cadence: 300,          // temps initial par joueur (s) — choisi avant recherche/privé, confirmé par le serveur
   variant: 'pvp_standard', // variante (GDD §7.2) — privé : le créateur impose, public : Standard × Standard
   taille: 'std',          // file publique séparée par taille ; le Plateau bonus reste hors classement
+  ranked: false,           // trophées actifs uniquement en public Standard × 8×8
   searchStart: 0,        // timestamp de début de recherche
   privateCode: null,     // code de partie privée (créateur)
   error: null,           // message d'erreur utilisateur (dégradation gracieuse)
@@ -89,6 +90,7 @@ export function leave() {
   online.cadence = 300;
   online.variant = 'pvp_standard';
   online.taille = 'std';
+  online.ranked = false;
   online.error = null;
   online._readyFired = false;
   online._pollFails = 0;
@@ -123,6 +125,9 @@ export function findMatch(cadence = 300, _variant = 'pvp_standard', taille = 'st
   // Chaque taille possède sa propre file. Bonus est donc public, mais uniquement
   // contre un autre joueur bonus (le serveur filtre aussi cette clé).
   online.taille = ['std', 'l15', 'bonus'].includes(taille) ? taille : 'std';
+  // La file publique ne classe que Standard × 8×8. Les files l15 et Bonus
+  // restent jouables, mais ne doivent ni calculer ni afficher de trophées.
+  online.ranked = online.taille === 'std';
   online.status = 'searching';
   online.searchStart = Date.now();
   online.band = 100;
@@ -158,12 +163,19 @@ export async function createPrivate(cadence = 300, variant = 'pvp_standard', tai
   online.cadence = cadence | 0 || 300;
   online.variant = variant || 'pvp_standard';
   online.taille = taille || 'std'; // créateur privé impose la taille ; bonus public suit une file dédiée
+  online.ranked = false; // aucune partie privée ne participe au classement
   online.status = 'private_create';
   try {
-    // Phase A.5 v3 : p_taille est envoyé pour toute taille non-standard,
-    // notamment `bonus` (Plateau bonus) en partie privée.
-    const privParams = { p_cadence: online.cadence, p_variant: online.variant };
-    if (online.taille && online.taille !== 'std') privParams.p_taille = online.taille;
+    // Toujours envoyer p_taille, y compris pour `std`. Supabase peut avoir
+    // simultanément l'ancienne RPC à 2 paramètres et la RPC étendue à 3 :
+    // omettre p_taille rend alors l'appel ambigu (« Could not choose the best
+    // candidate function »). La présence explicite de p_taille sélectionne
+    // sans ambiguïté pvp_create_private(int, text, text).
+    const privParams = {
+      p_cadence: online.cadence,
+      p_variant: online.variant,
+      p_taille: ['std', 'l15', 'bonus'].includes(online.taille) ? online.taille : 'std',
+    };
     const { data, error } = await online.supabase.rpc('pvp_create_private', privParams);
     if (error) {
       // Ne pas remplacer l'erreur PostgREST par `empty_result` : un 400 indique
@@ -213,6 +225,7 @@ export async function joinByCode(code) {
     online.side = 1;
     online.oppPseudo = row.opp_pseudo;
     online.oppTrophies = row.opp_trophies;
+    online.ranked = false; // le code d'invitation correspond à une partie privée
     // Cadence + variante + taille choisies par le CRÉATEUR (le rejoignant ne choisit pas) —
     // serveur autoritaire (GDD §7.2 v3.1/3.5). Taille suit le même canal depuis Phase A.5 v2.
     if (row.cadence) online.cadence = row.cadence;
@@ -603,9 +616,9 @@ export async function resumeMatch(matchId, side, meta = {}) {
     // complète, puis une forme compatible avec les anciens schémas pour qu'une
     // partie standard reste reprenable avant le déploiement de cette migration.
     const selects = [
-      'id,status,cadence,variant,taille,p1_trophies,p2_trophies',
-      'id,status,cadence,variant,p1_trophies,p2_trophies',
-      'id,status,cadence,variant',
+      'id,status,cadence,variant,taille,private,p1_trophies,p2_trophies',
+      'id,status,cadence,variant,private,p1_trophies,p2_trophies',
+      'id,status,cadence,variant,private',
       'id,status',
     ];
     let data = null;
@@ -644,6 +657,9 @@ export async function resumeMatch(matchId, side, meta = {}) {
     online.cadence = data.cadence | 0 || meta.cadence | 0 || 300;
     online.variant = data.variant || meta.variant || 'pvp_standard';
     online.taille = data.taille || meta.taille || 'std';
+    online.ranked = data.private === false
+      && online.variant === 'pvp_standard'
+      && online.taille === 'std';
     online.status = 'matched';
     online.error = null;
     // Handshake privé : le match existe déjà, il n'y a pas de timeout de recherche.
@@ -836,6 +852,7 @@ export async function rematch(prevMatchId) {
     if (row.cadence) online.cadence = row.cadence; // la revanche reprend la cadence du match précédent
     if (row.variant) online.variant = row.variant; // … et sa variante (GDD §7.2 v3.1)
     if (row.taille) online.taille = row.taille; // … et son type de plateau
+    online.ranked = false; // les revanches sont privées/non classées
     return demarrerHandshake(true);  // pas de timeout : appariement déjà connu
   } catch (e) {
     console.warn('[online] rematch', e && (e.message || e));

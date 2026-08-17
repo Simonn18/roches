@@ -94,13 +94,15 @@ declare
   v_opp uuid;
   v_cad int;
   v_var text;
+  v_tai text;
 begin
   select trophies into v_tr from profiles where id = v_me;
   if v_tr is null then raise exception 'profile_not_found'; end if;
 
   delete from matches where p1 = v_me and status = 'waiting';
 
-  select m.id, m.p1, m.cadence, m.variant into v_id, v_opp, v_cad, v_var
+  select m.id, m.p1, m.cadence, m.variant, m.taille::text
+    into v_id, v_opp, v_cad, v_var, v_tai
   from matches m
   where m.code = upper(p_code)
     and m.status = 'waiting'
@@ -116,8 +118,10 @@ begin
    where m.id = v_id and m.status = 'waiting';
   if not found then raise exception 'match_not_found'; end if;
 
+  -- La signature expose 7 colonnes : la taille doit être renvoyée elle aussi.
+  -- Sans cette colonne, PostgreSQL lève 42804 (6 colonnes retournées pour 7 attendues).
   return query
-    select v_id, 1, pr.pseudo, pr.trophies, v_cad, v_var
+    select v_id, 1, pr.pseudo, pr.trophies, v_cad, v_var, v_tai
     from profiles pr where pr.id = v_opp;
 end $$;
 

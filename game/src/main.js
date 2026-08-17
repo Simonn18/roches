@@ -19,7 +19,7 @@ import { initAccount, startAuth, logout, ouvrirActivationMfa, getAccount, getSup
 import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, resumeMatch, leave as onlineLeave, getOnline, on as onOnline,
   sendAction, startPlaying, takeNextAction, __debugEnqueue, requestResync, sendResync,
   setSeq as onlineSetSeq, clearInbox as onlineClearInbox,
-  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=115';
+  sendRematch, rematch as onlineRematch, report as onlineReport, inboxHasGap } from './online.js?v=116';
 // Deck editor (recovery 29/07 [23:30]) : API complète de decks.js (couche DONNÉES).
 // loadDecks/saveDecks étaient déjà importés ; on ajoute les helpers d'id/active/clone.
 import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
@@ -397,7 +397,7 @@ function menuState() {
 
 function commencerPartie(mode, difficultyOrOptions) {
   if (mode === 'pvw') {
-    // Mode PvP en ligne (spec-pvp-online). difficultyOrOptions = { side, matchId, oppPseudo, oppTrophies, cadence, variant }.
+    // Mode PvP en ligne (spec-pvp-online). difficultyOrOptions = { side, matchId, oppPseudo, oppTrophies, cadence, variant, taille, ranked }.
     const opts = difficultyOrOptions || {};
     const tempsInitial = (opts.cadence | 0) || PVW_TEMPS_INITIAL;
     // Variante (GDD §7.2 v3.1) : le public et le privé utilisent la variante
@@ -419,6 +419,7 @@ function commencerPartie(mode, difficultyOrOptions) {
       matchId: opts.matchId || null,
       oppPseudo: opts.oppPseudo || 'Adversaire',
       oppTrophies: opts.oppTrophies || 0,
+      ranked: opts.ranked === true, // trophées uniquement pour la file publique Standard × 8×8
       // --- Horloge (§6) : cadence choisie, sans incrément (v3.1) ---      cadence: tempsInitial,          // temps initial par joueur (s) — sert à « Nouvelle partie » (même cadence)
           variant: state.variant.id,      // variante effective (privé) — affichage HUD/fin de partie
           taille: state.taille,           // Phase A.5 v2 : taille plateau miroir du state.taille (lockstep cross-client)
@@ -733,11 +734,10 @@ function finPartie(winner) {
     if (state.replay && state.replay.events && winner != null) {
       updateBook(state.replay.events, winner, state.replay.taille);
     }
-    // PvP en ligne (CYCLE W3, spec §3.5/§8) : SEULE source de trophées du jeu. Chaque
-    // client rapporte son résultat ; l'Elo K=32 n'est écrit côté serveur que si les deux
-    // rapports concordent. Le PvAI n'écrit RIEN (hookTrophees
-    // débranché) — QA-PVW-18.
-    if (state.mode === 'pvw' && state.pvw) reporterResultatPvP();
+    // PvP en ligne classé uniquement (Standard × 8×8, file publique) : seule
+    // cette configuration rapporte et calcule des trophées. Les parties privées,
+    // variantes, 8×15 et Bonus restent jouables mais hors classement.
+    if (state.mode === 'pvw' && state.pvw && state.pvw.ranked) reporterResultatPvP();
   }
 }
 
@@ -746,6 +746,7 @@ function finPartie(winner) {
 // réutiliser dessineBlocTrophee. Le serveur exige désormais deux rapports concordants
 // pour attribuer des trophées ; un abandon local peut donc rester non classé.
 function reporterResultatPvP() {
+  if (!state.pvw || !state.pvw.ranked) return;
   // Conserver la référence de l'écran de fin : une réponse réseau tardive ne doit
   // jamais écrire dans le state d'une nouvelle partie ou du menu.
   const gameState = state;
@@ -1951,6 +1952,7 @@ function commencerPartiePvP() {
     // public : std confirmé par online.js pollMatchmaking ou joinByCode). Mirror dans
     // state.pvw.taille côté main.js. Sans ça, l15 en PvP en ligne retombait en std 8x8.
     taille: ol.taille,
+    ranked: ol.ranked,
   });
 }
 
@@ -2514,14 +2516,11 @@ function pvwTick() {
 
 // ---------- Entrées ----------
 
-// Les chips ÉCONOMIE/COMBAT sont cliquables au menu local ET sur l'écran cadence
-// d'une partie privée en ligne (GDD §7.2 v3.1 — le créateur impose sa variante).
-// La sélection vit dans state.menu dans les deux cas (mémoire partagée).
+// Les chips ÉCONOMIE/COMBAT et PLATEAU sont choisis uniquement dans le menu principal.
+// Le lobby privé ne fait que choisir la cadence et conserve ces valeurs inchangées.
+// La création relit ensuite les options depuis state.menu, comme les autres modes.
 function peutChoisirVariante() {
-  if (!state.menu) return false;
-  if (state.phase === 'menu') return true;
-  return state.phase === 'matchmaking' && state.matchmaking
-    && state.matchmaking.mode === 'cadence' && state.matchmaking.pendingAction === 'private';
+  return !!state.menu && state.phase === 'menu';
 }
 
 function actionBouton(action) {
@@ -2744,6 +2743,8 @@ function actionBouton(action) {
     // améliorations équipées par les deux camps (demande utilisateur).
     case 'toggleUpgradesView':
       state.upgradesView = !state.upgradesView;
+      // Une nouvelle ouverture repart toujours au début de la liste.
+      if (state.upgradesView && state.ui) state.ui.upgradesScroll = 0;
       break;
     case 'endChain':
       if (state.chain) {
@@ -3053,6 +3054,9 @@ function boutonSous(x, y) {
   if (!state.ui || !state.ui.buttons) return null; // Sécurité
   for (let i = state.ui.buttons.length - 1; i >= 0; i--) {
     const b = state.ui.buttons[i];
+    // La vue des améliorations est modale : seules ses hitboxes de fermeture
+    // restent actives, les boutons du gameplay situés dessous sont ignorés.
+    if (state.upgradesView && b.action?.kind !== 'toggleUpgradesView') continue;
     // Le drawer est un voile modal : tant qu'il est ouvert, les contrôles du
     // menu situé derrière ne doivent ni être survolés ni recevoir le clic.
     // Les seuls boutons autorisés sont ceux du panneau et le bouton hamburger.
@@ -3118,6 +3122,20 @@ canvas.addEventListener('mousemove', (e) => {
   mettreAJourPointeur(e);
 });
 
+// La roulette reste utile sur desktop et avec une souris/trackpad sur mobile.
+canvas.addEventListener('wheel', (e) => {
+  if (!state.upgradesView || !state.ui?.upgradesPanel) return;
+  const point = souris(e);
+  const panel = state.ui.upgradesPanel;
+  if (point.x < panel.x || point.x > panel.x + panel.w
+      || point.y < panel.contentTop || point.y > panel.contentBottom) return;
+  const maxScroll = state.ui.upgradesScrollMax || 0;
+  if (!maxScroll) return;
+  e.preventDefault();
+  state.ui.upgradesScroll = Math.max(0, Math.min(maxScroll,
+    (state.ui.upgradesScroll || 0) + e.deltaY));
+}, { passive: false });
+
 canvas.addEventListener('mouseleave', () => {
   if (!state.ui) return;
   state.ui.pointer = { x: -1, y: -1, inside: false };
@@ -3128,8 +3146,29 @@ canvas.addEventListener('mouseleave', () => {
 // Pointer Events unifient doigt et stylet avec la souris. Les pointeurs tactiles
 // délèguent au chemin mousedown existant afin de conserver un seul hit-test.
 let pendingMobileTap = null;
+let pendingUpgradeScroll = null;
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse') return;
+  // La liste des améliorations possède son propre scroll tactile. On ne passe
+  // pas par mousedown ici : sinon le clic « hors bouton » fermerait le modal.
+  if (state.upgradesView && state.ui && state.ui.mobileGameplay) {
+    const start = souris(e);
+    const button = boutonSous(start.x, start.y);
+    const panel = state.ui.upgradesPanel;
+    const dansContenu = panel
+      && start.x >= panel.x && start.x <= panel.x + panel.w
+      && start.y >= panel.contentTop && start.y <= panel.contentBottom;
+    if (!button && dansContenu) {
+      pendingUpgradeScroll = {
+        startY: start.y,
+        startScroll: state.ui.upgradesScroll || 0,
+        moved: false,
+      };
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* non bloquant */ }
+      e.preventDefault();
+      return;
+    }
+  }
   // Dans l’historique mobile, différer l’action jusqu’au relâchement permet
   // d’entamer un scroll sur une ligne sans ouvrir accidentellement le replay.
   if (state.ui && state.ui.mobileLayout) {
@@ -3162,6 +3201,14 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 canvas.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'mouse') return;
+  if (pendingUpgradeScroll) {
+    const point = souris(e);
+    const delta = pendingUpgradeScroll.startY - point.y;
+    if (Math.abs(delta) > 6) pendingUpgradeScroll.moved = true;
+    const maxScroll = state.ui?.upgradesScrollMax || 0;
+    state.ui.upgradesScroll = Math.max(0, Math.min(maxScroll, pendingUpgradeScroll.startScroll + delta));
+    return;
+  }
   if (pendingMobileTap) {
     const point = souris(e);
     if (Math.hypot(point.x - pendingMobileTap.x, point.y - pendingMobileTap.y) > 10) {
@@ -3176,6 +3223,21 @@ canvas.addEventListener('pointermove', (e) => {
 });
 canvas.addEventListener('pointerup', (e) => {
   if (e.pointerType === 'mouse') return;
+  if (pendingUpgradeScroll) {
+    const point = souris(e);
+    const panel = state.ui?.upgradesPanel;
+    // Comme avant l'ajout du scroll : un tap hors de la fenêtre ferme le modal,
+    // tandis qu'un tap dans une zone inerte ne déclenche rien.
+    if (!pendingUpgradeScroll.moved
+        && (!panel || point.x < panel.x || point.x > panel.x + panel.w
+          || point.y < panel.y || point.y > panel.y + panel.h)) {
+      state.upgradesView = false;
+    }
+    pendingUpgradeScroll = null;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* non bloquant */ }
+    libererBoutonPresse();
+    return;
+  }
   if (pendingMobileTap) {
     const point = souris(e);
     const button = boutonSous(point.x, point.y);
@@ -3192,6 +3254,7 @@ canvas.addEventListener('pointerup', (e) => {
 });
 canvas.addEventListener('pointercancel', (e) => {
   pendingMobileTap = null;
+  pendingUpgradeScroll = null;
   try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* non bloquant */ }
   libererBoutonPresse();
 });
@@ -3523,6 +3586,7 @@ function loop(now) {
   // un plateau utilisent une largeur plus compacte sur desktop.
   canvas.classList.toggle('game-screen', !!state.board);
   canvas.classList.toggle('mobile-gameplay', !!(state.ui && state.ui.mobileGameplay));
+  canvas.classList.toggle('upgrades-scroll', !!state.upgradesView);
   canvas.classList.toggle('mobile-menu', !!(state.ui && state.ui.mobileLayout));
   render(ctx, state, now);
   requestAnimationFrame(loop);

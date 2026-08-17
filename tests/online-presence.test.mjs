@@ -60,9 +60,12 @@ class FakeChannel {
   }
 }
 
-function clientFor(channel) {
+function clientFor(channel, calls = []) {
   return {
-    rpc: async () => ({ data: [{ match_id: 'match-test', code: 'ABC123' }], error: null }),
+    rpc: async (name, params) => {
+      calls.push({ name, params });
+      return { data: [{ match_id: 'match-test', code: 'ABC123' }], error: null };
+    },
     channel: () => channel,
   };
 }
@@ -85,6 +88,36 @@ afterEach(() => {
   leave();
   on('oppLeft', null);
   on('disconnected', null);
+});
+
+describe('Parties privées entre amis', () => {
+  test('transmet toutes les options privées du créateur au RPC', async () => {
+    const cases = [
+      { variant: 'pvp_standard', taille: 'std' },
+      { variant: 'pvp_elimX2', taille: 'l15' },
+      { variant: 'pvp_elimX2', taille: 'bonus' },
+    ];
+
+    for (const option of cases) {
+      const channel = new FakeChannel();
+      const calls = [];
+      initOnline(clientFor(channel, calls));
+      const code = await createPrivate(60, option.variant, option.taille);
+
+      assert.equal(code, 'ABC123');
+      assert.deepEqual(calls[0], {
+        name: 'pvp_create_private',
+        params: {
+          p_cadence: 60,
+          p_variant: option.variant,
+          p_taille: option.taille,
+        },
+      });
+      assert.equal(getOnline().variant, option.variant);
+      assert.equal(getOnline().taille, option.taille);
+      leave();
+    }
+  });
 });
 
 describe('Presence PvP et reconnexion', () => {
