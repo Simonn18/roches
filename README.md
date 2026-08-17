@@ -12,6 +12,9 @@ Au 12/07/2026 : 15 cartes en jeu, PvP en ligne W1+W2+W3 livrés et validés util
 2. `/feature <feature>` — boucle design → code → playtest.
 3. `/niveau`, `/art`, `/audio`, `/playtest` — au besoin.
 
+## Déploiement
+Le site (roychec.com) se met à jour via GitHub + cron cPanel : voir [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
 ## Marketing
 L'équipe marketing NAIOM (lancement du jeu : pitch deck, posts, trailer) vit dans le projet
 voisin `../roychec/`.
