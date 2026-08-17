@@ -22,8 +22,11 @@ node_modules/
 dist/
 build/
 *.log
+# Secrets locaux et variantes d’environnement : ne jamais versionner.
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
 
 # Python
 __pycache__/
@@ -47,3 +50,9 @@ playtest-*.png
 
 # Obsidian KV cache (not vault notes)
 .obsidian/cache/
+
+# Artefacts locaux non destinés au dépôt
+/exemple.png
+/obsidian/Logs/2026-08-12.md
+/server.pid
+/start_server.py
