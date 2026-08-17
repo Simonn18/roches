@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { creerPiece } from '../game/src/board.js?v=109';
-import { UPGRADES_PAR_TYPE, MAX_STATS_PAR_PARTIE } from '../game/src/constants.js?v=113';
+import { UPGRADES_PAR_TYPE, MAX_STATS_PAR_JOUEUR } from '../game/src/constants.js?v=113';
 import { choisirPouvoirIA, iaDecideTour } from '../game/src/ai.js?v=111';
 
 function plateauVide() {
@@ -50,7 +50,7 @@ function etatIA(owner, board, ecus = 30, deck = deckComplet()) {
     board,
     activeDeck: deck,
     variant: { plafond: Infinity, revenueBase: 1, captureMul: 1 },
-    statUpgradesCount: 0,
+    statUpgradesCount: [0, 0],
   };
 }
 
@@ -91,7 +91,7 @@ describe('IA — les quatre améliorations des cases bonus', () => {
     assert.equal(toutesDansLesQuatre, true, `achats: ${ids.join(', ')}`);
   });
 
-  test('iaDecideTour respecte le plafond global des améliorations stat', () => {
+  test('iaDecideTour respecte le plafond par joueur des améliorations stat', () => {
     const board = plateauVide();
     placer(board, 'P', 0, 6, 0);
     placer(board, 'K', 0, 7, 4);
@@ -100,7 +100,8 @@ describe('IA — les quatre améliorations des cases bonus', () => {
       K: { S: 'majeste' },
     } };
     const state = etatIA(0, board, 30, statDeck);
-    state.statUpgradesCount = MAX_STATS_PAR_PARTIE;
+    // Le camp de l'IA (0) est au plafond : aucune carte stat ne doit être achetée.
+    state.statUpgradesCount = [MAX_STATS_PAR_JOUEUR, 0];
 
     const tour = iaDecideTour(state);
     assert.ok(tour, 'un tour est décidé');

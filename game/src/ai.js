@@ -11,7 +11,7 @@
 import { coupsLegaux, DIRS8 } from './rules.js?v=116';
 import {
   VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE,
-  MAX_STATS_PAR_PARTIE, estAmeliorationStat,
+  MAX_STATS_PAR_JOUEUR, estAmeliorationStat,
 } from './constants.js?v=113';
 import { upgradesForPiece } from './decks.js?v=107';
 import { getBookBonus } from './opening.js?v=107';
@@ -290,7 +290,7 @@ function pickDefense(board, aiPlayer, solde, activeDeck, statCount) {
     if (!id) continue;                         // Fou : pas de blindage → fuite par le coup
     if (p.upgrades.includes(id)) continue;     // déjà blindé
     const statDejaSurPiece = p.upgrades.some(estAmeliorationStat);
-    if (estAmeliorationStat(id) && !statDejaSurPiece && statCount >= MAX_STATS_PAR_PARTIE) continue;
+    if (estAmeliorationStat(id) && !statDejaSurPiece && statCount >= MAX_STATS_PAR_JOUEUR) continue;
     if (p.type === 'P' && solde < 12) continue; // pion : on ne le blinde que si l'or abonde
     const cost = UPGRADES[id].cout;
     if (cost > solde) continue;
@@ -316,7 +316,7 @@ function buildCandidates(board, aiPlayer, solde, base, activeDeck, statCount) {
       for (const id of ids) {
         if (p.upgrades.includes(id)) continue;
         const statDejaSurPiece = p.upgrades.some(estAmeliorationStat);
-        if (estAmeliorationStat(id) && !statDejaSurPiece && statCount >= MAX_STATS_PAR_PARTIE) continue;
+        if (estAmeliorationStat(id) && !statDejaSurPiece && statCount >= MAX_STATS_PAR_JOUEUR) continue;
         const u = UPGRADES[id];
         if (!u || u.cout > solde) continue;
         const clone = cloneBoard(board);
@@ -552,8 +552,9 @@ export function iaDecideTour(state) {
   let achats = [];
   let boardApres = state.board;
   try {
+    // Plafond [S] PAR JOUEUR : l'IA ne compte que les cartes stat de SON camp.
     const res = decideAchats(state.board, aiPlayer, ecus, difficulty, state.activeDeck,
-      state.statUpgradesCount || 0);
+      (state.statUpgradesCount && state.statUpgradesCount[aiPlayer]) || 0);
     achats = res.achats;
     boardApres = res.board;
   } catch (e) {

@@ -8,7 +8,7 @@ import {
   UPGRADES,
   UPGRADES_PAR_TYPE,
   MAX_UPGRADES_PAR_PIECE,
-  MAX_STATS_PAR_PARTIE,
+  MAX_STATS_PAR_JOUEUR,
 } from '../game/src/constants.js?v=113';
 import { initialiserChasse, recolterChasse } from '../game/src/hunt.js?v=3';
 
@@ -22,6 +22,7 @@ function etatPour(type, owner = 0) {
     huntBonuses: owner === 0 ? [cell, null] : [null, cell],
     huntCollected: [0, 0],
     huntLastAward: null,
+    statUpgradesCount: [0, 0],
     piece: { owner, type, r: cell.r, c: cell.c, upgrades: [], shield: false },
   };
 }
@@ -128,32 +129,33 @@ describe('Chasse — récompense utilisable par la pièce collectrice', () => {
     assert.equal(MAX_UPGRADES_PAR_PIECE, 2);
   });
 
-  test('bloque une récompense stat quand le plafond global de la partie est atteint', () => {
+  test('bloque une récompense stat quand le plafond par joueur est atteint', () => {
     const index = UPGRADES_PAR_TYPE.P;
     const originalIndex = index.slice();
     index.splice(0, index.length, 'bouclier');
     try {
       const state = etatPour('P');
-      state.statUpgradesCount = MAX_STATS_PAR_PARTIE;
+      // Le camp du collecteur (0) est au plafond : aucune récompense stat.
+      state.statUpgradesCount = [MAX_STATS_PAR_JOUEUR, 0];
       const award = recolterChasse(state, state.piece);
       assert.equal(award.upgradeId, null);
-      assert.equal(state.statUpgradesCount, MAX_STATS_PAR_PARTIE);
+      assert.equal(state.statUpgradesCount[0], MAX_STATS_PAR_JOUEUR);
       assert.deepEqual(state.piece.upgrades, []);
     } finally {
       index.splice(0, index.length, ...originalIndex);
     }
   });
 
-  test('compte une récompense stat dans le plafond global', () => {
+  test('compte une récompense stat dans le plafond par joueur', () => {
     const index = UPGRADES_PAR_TYPE.P;
     const originalIndex = index.slice();
     index.splice(0, index.length, 'bouclier');
     try {
       const state = etatPour('P');
-      state.statUpgradesCount = MAX_STATS_PAR_PARTIE - 1;
+      state.statUpgradesCount = [MAX_STATS_PAR_JOUEUR - 1, 0];
       const award = recolterChasse(state, state.piece);
       assert.equal(award.upgradeId, 'bouclier');
-      assert.equal(state.statUpgradesCount, MAX_STATS_PAR_PARTIE);
+      assert.equal(state.statUpgradesCount[0], MAX_STATS_PAR_JOUEUR);
     } finally {
       index.splice(0, index.length, ...originalIndex);
     }
@@ -170,10 +172,10 @@ describe('Chasse — récompense utilisable par la pièce collectrice', () => {
     try {
       const state = etatPour('P');
       state.piece.upgrades = ['bouclier'];
-      state.statUpgradesCount = MAX_STATS_PAR_PARTIE;
+      state.statUpgradesCount = [MAX_STATS_PAR_JOUEUR, 0];
       const award = recolterChasse(state, state.piece);
       assert.equal(award.upgradeId, extraId);
-      assert.equal(state.statUpgradesCount, MAX_STATS_PAR_PARTIE);
+      assert.equal(state.statUpgradesCount[0], MAX_STATS_PAR_JOUEUR);
     } finally {
       index.splice(0, index.length, ...originalIndex);
       delete UPGRADES[extraId];

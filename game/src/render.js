@@ -9,7 +9,7 @@ import {
   CELL, OX as OX_DESKTOP, OY as OY_DESKTOP, PANEL_X, CANVAS_W as CANVAS_W_DESKTOP, CANVAS_H as CANVAS_H_DESKTOP,
   C_CLAIR, C_FONCE, C_SEL, C_MOVE, C_CAP, C_RUEE,
   LETTRE, VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, COULEUR_CAT,
-  MAX_UPGRADES_PAR_PIECE, MAX_STATS_PAR_PARTIE, estAmeliorationStat, ACCENT, NOM_JOUEUR,
+  MAX_UPGRADES_PAR_PIECE, MAX_STATS_PAR_JOUEUR, estAmeliorationStat, ACCENT, NOM_JOUEUR,
   DUREE_ANIM, DUREE_FLASH, DUREE_POPUP, DUREE_GOLD, REVENU_PAR_COUP,
   C_BRUME, C_CARTE, C_ENCRE, C_SAUGE, C_IVOIRE_BOIS,
   C_ENCRE_DOUX, C_ENCRE_PALE, C_CARTE_BORD, C_OMBRE,
@@ -1291,7 +1291,7 @@ function dessineResumeVariante(ctx, state, x, y, w) {
   const revenu = variant.revenueBase > 0 ? REVENU_PAR_COUP : 0;
   const combat = `+${revenu} · ×${variant.captureMul || 1}`;
   const items = [
-      ['COMBAT', combat],
+      ['ECUS', combat],
       ['PLATEAU', traduire(taille.label.replace(/\\s/g, ''), state.language)],
 
   ];
@@ -1557,6 +1557,14 @@ function dessinePanneau(ctx, state, now) {
     y = dessineCatalogue(ctx, state, x, y, w, now);
   }
 
+  // Vue « Améliorations achetées » : bouton sous le catalogue d'achat (hors
+  // modes guidés et replay) ouvrant l'overlay des améliorations des deux camps.
+  if (state.mode !== 'tutorial' && state.mode !== 'learn' && state.phase !== 'replay') {
+    bouton(state, ctx, x, y, w, 30, traduire('Voir les améliorations', state.language),
+      { kind: 'toggleUpgradesView' },
+      { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 11 });
+    y += 38;
+  }
 
   // Bouton Retour (spectateur) / Abandonner (PvP, PvAI) — ancré en bas du panneau.
   if (state.phase !== 'gameover' && state.phase !== 'menu' && state.phase !== 'replay') {
@@ -1614,7 +1622,7 @@ function dessineCatalogueMobile(ctx, state, x, y, w, now) {
     const plein = p.upgrades.length >= MAX_UPGRADES_PAR_PIECE;
     const statPlafond = u.cat === 'S'
       && !p.upgrades.some(estAmeliorationStat)
-      && (state.statUpgradesCount || 0) >= MAX_STATS_PAR_PARTIE;
+      && ((state.statUpgradesCount || [0, 0])[p.owner] || 0) >= MAX_STATS_PAR_JOUEUR;
     const abordable = solde >= u.cout;
     const learnVerrou = state.mode === 'learn' && !learnPermet(state, { type: 'buy', id });
     const achetable = !bientot && !verrou && !learnVerrou && !deja && !plein && !statPlafond && abordable;
@@ -1728,6 +1736,123 @@ function dessineSuiviJoueursMobile(ctx, state, x, y, w, now) {
     y += cardH + gap;
   }
   return y + 2;
+}
+
+// Vue « Améliorations achetées » (overlay) : liste les pièces équipées d'au moins
+// une amélioration pour chaque camp, avec les cartes achetées affichées une par
+// ligne sous le nom de la pièce (pastille de catégorie D/A/S). Ouverte via le
+// bouton « Voir les améliorations » du panneau (desktop + mobile), fermée par ✕,
+// un clic hors panneau ou Échap.
+function dessineVueAmeliorations(ctx, state) {
+  const mobile = !!(state.ui && state.ui.mobileGameplay);
+  // Voile : signale le modal, le plateau reste lisible dessous (comme Promotion).
+  ctx.fillStyle = UI_THEME.overlay;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Pièces équipées par camp (ordre du plateau = état actuel, lockstep compris).
+  const equipees = [[], []];
+  if (state.board) {
+    for (const row of state.board) {
+      for (const p of row) {
+        if (p && Array.isArray(p.upgrades) && p.upgrades.length) equipees[p.owner].push(p);
+      }
+    }
+  }
+
+  const headerH = 54;
+  const campHeaderH = 34;
+  // Chaque pièce affiche son nom puis SES améliorations les unes sous les autres :
+  // la hauteur d'une carte dépend donc du nombre de cartes équipées.
+  const nomH = mobile ? 18 : 16;   // hauteur de la ligne du nom de pièce
+  const ligneH = mobile ? 17 : 16; // hauteur d'une ligne d'amélioration
+  const entryPad = 4;              // padding haut/bas de chaque carte
+  const entryH = (p) => entryPad * 2 + nomH + p.upgrades.length * ligneH;
+  const videH = 28;
+  const campPad = 12;
+  const colGap = 16;
+  const panelPad = 20;
+  const campH = (camp) => campHeaderH
+    + (equipees[camp].length
+      ? equipees[camp].reduce((s, p) => s + entryH(p), 0)
+      : videH) + campPad * 2;
+
+  const w = mobile ? CANVAS_W - 20 : Math.min(660, CANVAS_W - 220);
+  const colW = mobile ? w - panelPad * 2 : (w - panelPad * 2 - colGap) / 2;
+  const contentTop = headerH;
+  const h = mobile
+    ? headerH + campH(0) + campH(1) + 12 + panelPad
+    : headerH + Math.max(campH(0), campH(1)) + panelPad;
+  const x0 = Math.max(10, (CANVAS_W - w) / 2);
+  const y0 = Math.max(12, (CANVAS_H - h) / 2);
+
+  carte(ctx, x0, y0, w, h, 16, UI_THEME.panel, { shadow: true, stroke: null });
+  ctx.lineWidth = 2; ctx.strokeStyle = UI_THEME.border;
+  roundRect(ctx, x0, y0, w, h, 16); ctx.stroke();
+
+  // Titre + fermeture ✕.
+  ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(traduire('AMÉLIORATIONS ACHETÉES', state.language), x0 + panelPad, y0 + 28);
+  const cw = 26;
+  const cxBtn = x0 + w - panelPad - cw;
+  state.ui.buttons.push({ x: cxBtn, y: y0 + 15, w: cw, h: cw,
+    action: { kind: 'toggleUpgradesView' }, enabled: true, radius: 7 });
+  ctx.fillStyle = UI_THEME.danger;
+  roundRect(ctx, cxBtn, y0 + 15, cw, cw, 7); ctx.fill();
+  ctx.fillStyle = UI_THEME.text; ctx.font = `15px ${F_DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('✕', cxBtn + cw / 2, y0 + 28);
+
+  const drawCamp = (camp, cx, top) => {
+    const vj = campVisuel(state, camp);
+    // En-tête du camp : point d'accent + nom (Toi / pseudo adverse en pvw).
+    let nomJ = NOM_JOUEUR[camp];
+    if (state.mode === 'pvw' && state.pvw) {
+      nomJ = camp === state.pvw.side ? 'Toi' : (state.pvw.oppPseudo || 'Adversaire');
+    }
+    ctx.fillStyle = ACCENT[vj];
+    ctx.beginPath(); ctx.arc(cx + 12, top + 17, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = UI_THEME.text; ctx.font = `700 11px ${F_DISPLAY}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(traduire(nomJ, state.language).toUpperCase(), cx + 28, top + 17);
+
+    let ey = top + campHeaderH;
+    if (!equipees[camp].length) {
+      ctx.fillStyle = UI_THEME.muted; ctx.font = `12px ${F_TEXTE}`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(traduire('Aucune amélioration achetée', state.language), cx + 10, ey + videH / 2);
+      return;
+    }
+    for (const p of equipees[camp]) {
+      const eh = entryH(p);
+      carte(ctx, cx, ey, colW, eh - 4, 7, UI_THEME.card, { shadow: false });
+      const nom = nomType(p.type, state.language);
+      ctx.fillStyle = UI_THEME.text; ctx.font = `700 12px ${F_TEXTE}`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(nom, cx + 10, ey + entryPad + nomH / 2);
+      // Cartes achetées : une ligne PAR amélioration, empilées sous le nom.
+      const ups = p.upgrades.map((id) => UPGRADES[id]).filter(Boolean);
+      let ly = ey + entryPad + nomH + ligneH / 2;
+      ctx.font = `10px ${F_TEXTE}`;
+      for (const u of ups) {
+        ctx.fillStyle = COULEUR_CAT[u.cat];
+        ctx.beginPath(); ctx.arc(cx + 16, ly, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = UI_THEME.muted;
+        ctx.fillText(traduire(u.nom, state.language).toUpperCase(), cx + 24, ly);
+        ly += ligneH;
+      }
+      ey += eh;
+    }
+  };
+
+  if (mobile) {
+    drawCamp(0, x0 + panelPad, y0 + contentTop);
+    drawCamp(1, x0 + panelPad, y0 + contentTop + campH(0) + 12);
+  } else {
+    const top = y0 + contentTop;
+    drawCamp(0, x0 + panelPad, top);
+    drawCamp(1, x0 + panelPad + colW + colGap, top);
+  }
 }
 
 function dessinePanneauMobile(ctx, state, now) {
@@ -1848,6 +1973,15 @@ function dessinePanneauMobile(ctx, state, now) {
 
   if (state.panelPiece && state.phase !== 'gameover') y = dessineCatalogueMobile(ctx, state, x, y, w, now) + 8;
 
+  // Vue « Améliorations achetées » : bouton sous le catalogue d'achat (hors
+  // tutoriel — le replay a son propre HUD et ne passe pas ici).
+  if (state.mode !== 'tutorial' && state.phase !== 'replay') {
+    bouton(state, ctx, x, y, w, 40, traduire('Voir les améliorations', state.language),
+      { kind: 'toggleUpgradesView' },
+      { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 11 });
+    y += 48;
+  }
+
   if (state.phase !== 'gameover' && state.phase !== 'menu' && state.phase !== 'replay'
       && state.mode !== 'tutorial') {
     bouton(state, ctx, x + w - 118, y, 118, 44, state.mode === 'spectator' ? '◀ Retour' : 'Abandonner', {
@@ -1941,7 +2075,7 @@ function dessineLearnActionsMobile(ctx, state, now) {
   const footY = CANVAS_H - 48;
   const footGap = 8, footW = (w - footGap) / 2;
   bouton(state, ctx, x, footY, footW, 34, '↻ Recommencer', { kind: state.learnKind === 'puzzle' ? 'puzzleRestart' : 'learnRestart' }, { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 10 });
-  bouton(state, ctx, x + footW + footGap, footY, footW, 34, state.learnKind === 'puzzle' ? '← Menu puzzles' : '← Menu Apprendre', { kind: state.learnKind === 'puzzle' ? 'puzzleHub' : 'learnHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10 });
+  bouton(state, ctx, x + footW + footGap, footY, footW, 34, state.learnKind === 'puzzle' ? '← Menu puzzles' : ' Menu Défi', { kind: state.learnKind === 'puzzle' ? 'puzzleHub' : 'learnHub' }, { color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10 });
 }
 
 // En mobile, le panneau conserve toutes ses cartes et actions mais est rendu sous
@@ -1952,6 +2086,10 @@ function dessinePanneauGameplay(ctx, state, now) {
     dessinePanneau(ctx, state, now);
     return;
   }
+  // En replay, le HUD mobile (lecture + contrôles + suivi joueurs) occupe toute
+  // la zone sous le plateau : pas de panneau d'actions — il n'a pas de sens en
+  // spectateur et recouvrirait les contrôles.
+  if (state.phase === 'replay') return;
   const originePlateau = OY;
   OY = originePlateau + __BOARD_H + 16;
   try {
@@ -2002,7 +2140,7 @@ function dessineCatalogue(ctx, state, x, y, w, now) {
     const plein = p.upgrades.length >= MAX_UPGRADES_PAR_PIECE;
     const statPlafond = u.cat === 'S'
       && !p.upgrades.some(estAmeliorationStat)
-      && (state.statUpgradesCount || 0) >= MAX_STATS_PAR_PARTIE;
+      && ((state.statUpgradesCount || [0, 0])[p.owner] || 0) >= MAX_STATS_PAR_JOUEUR;
     const abordable = solde >= u.cout;
     const learnVerrou = state.mode === 'learn'
       && !learnPermet(state, { type: 'buy', id });
@@ -2622,7 +2760,7 @@ function dessineBandeauCompteMobile(ctx, state) {
       ctx.font = `12px ${F_TEXTE}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
       ctx.fillStyle = UI_THEME.text;
       ctx.fillText(traduire('Choisis la langue de l’interface.', language), px + pad, contentY + 24);
-      [['fr', '🇫🇷  Français'], ['en', '🇬🇧  English']].forEach(([code, label], index) => {
+      [['fr', 'Français'], ['en', 'English']].forEach(([code, label], index) => {
         const yy = contentY + 58 + index * 44;
         enregistrerBouton(state, px + pad, yy, pw - 2 * pad, 36,
           { kind: 'setLanguage', code }, true, true, 10);
@@ -2641,13 +2779,11 @@ function dessineBandeauCompteMobile(ctx, state) {
       for (const line of [
         'ROYCHEC est un jeu d’échecs augmenté. Capture le roi adverse pour gagner.',
         'Les améliorations ont trois types : D = déplacement, A = actif, S = statistique. Elles donnent de nouvelles options sans remplacer les règles de base.',
+        'Les améliorations de type S sont bloqués à 4 achats par joueur (seulement 4 pièces peuvent avoir un bouclier)',
         'Le maximum d’écus est bloqué à 30 par joueur.',
         'Utilise tes écus dans le panneau « Améliorer » pour acheter une carte compatible avec la pièce. Une pièce peut porter au maximum deux améliorations : choisis ta combinaison.',
       ]) yy += mobileWrap(ctx, traduire(line, language), px + pad, yy, pw - 2 * pad, 17, 4) + 9;
-      ctx.fillStyle = UI_THEME.muted;
-      ctx.fillText(traduire('Fermer avec Échap', language), px + pad, Math.min(py + ph - 30, yy + 4));
     }
-    mobileText(ctx, 'Roychec · bêta', px + pw / 2, py + ph - 17, `10px ${F_TEXTE}`, UI_THEME.muted, 'center');
   } else if (state.ui) {
     state.ui.hamburgerPanel = null;
   }
@@ -2837,8 +2973,8 @@ function dessineBandeauCompte(ctx, state) {
       ctx.fillText(traduire('Choisis la langue de l’interface.', language), dx + pad, y + 4);
       y += 30;
       const langOptions = [
-        ['fr', '🇫🇷  Français'],
-        ['en', '🇬🇧  English'],
+        ['fr', 'Français'],
+        ['en', 'English'],
       ];
       for (const [code, label] of langOptions) {
         const selected = language === code;
@@ -2867,6 +3003,7 @@ function dessineBandeauCompte(ctx, state) {
       const aboutLines = [
         'ROYCHEC est un jeu d’échecs augmenté. Capture le roi adverse pour gagner.',
         'Les améliorations ont trois types : D = déplacement, A = actif, S = statistique. Elles donnent de nouvelles options sans remplacer les règles de base.',
+        'Les améliorations de type S sont bloqués à 4 achats par joueur (seulement 4 pièces peuvent avoir un bouclier)',
         'Le maximum d’écus est bloqué à 30 par joueur.',
         'Utilise tes écus dans le panneau « Améliorer » pour acheter une carte compatible avec la pièce. Une pièce peut porter au maximum deux améliorations : choisis ta combinaison.',
       ];
@@ -2885,13 +3022,9 @@ function dessineBandeauCompte(ctx, state) {
         }
         if (current) { ctx.fillText(current, dx + pad, y); y += 28; }
       }
-      ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
-      ctx.fillText(traduire('Fermer avec Échap', language), dx + pad, y + 12);
+      //ctx.fillStyle = UI_THEME.muted; ctx.font = `11px ${F_TEXTE}`;
+      //ctx.fillText(traduire('Fermer avec Échap', language), dx + pad, y + 12);
     }
-
-    // Pied du drawer : mention de version discrète.
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';      ctx.fillStyle = UI_THEME.muted; ctx.font = `10px ${F_TEXTE}`;
-    ctx.fillText(traduire('Roychec · bêta', language), dx + pw / 2, py + ph - 16);
   } else {
     if (state.ui) state.ui.hamburgerPanel = null;
   }
@@ -3000,7 +3133,7 @@ function dessineMenuMobile(ctx, state) {
   mobileCard(ctx, pad, variantY, inner, variantH, C.panel, 18);
   mobileText(ctx, 'RÉGLAGES DE PARTIE', pad + 16, variantY + 22, `700 11px ${F_DISPLAY}`, C.muted);
   const variantRows = [
-    ['COMBAT', COMBATS.map((item) => ({ value: item.id, label: item.id === 'standard' ? '+2 / coup' : 'capture ×2' })), 'pickCombat', state.menu?.combat || 'standard'],
+    ['ECUS', COMBATS.map((item) => ({ value: item.id, label: item.id === 'standard' ? '+2 / coup' : 'capture ×2' })), 'pickCombat', state.menu?.combat || 'standard'],
     ['PLATEAU', [['std', '8 × 8'], ['l15', '15 × 8'], ['bonus', 'BONUS']].map(([value, label]) => ({ value, label })), 'pickTaille', selectedSize],
   ];
   variantRows.forEach(([label, options, kind, selectedValue], row) => {
@@ -3023,8 +3156,8 @@ function dessineMenuMobile(ctx, state) {
     { kind: 'ouvrirDecks' }, { color: C.field, textColor: C.text });
 
   const navY = 82, navW = (inner - 8) / 2;
-  mobileButton(state, ctx, pad, navY, navW, 44, '✦  TUTORIEL', { kind: 'tutoriel' }, { color: C.panelAlt, textColor: C.text });
-  mobileButton(state, ctx, pad + navW + 8, navY, navW, 44, '◎  APPRENDRE', { kind: 'apprendre' }, { color: C.wine, textColor: C.text });
+  mobileButton(state, ctx, pad, navY, navW, 44, 'TUTORIEL', { kind: 'tutoriel' }, { color: C.panelAlt, textColor: C.text });
+  mobileButton(state, ctx, pad + navW + 8, navY, navW, 44, 'DEFI', { kind: 'apprendre' }, { color: C.wine, textColor: C.text });
   // L’historique reste accessible dans sa carte dédiée sous l’aperçu.
 
   // Sur téléphone, l’aperçu et l’historique partagent la même ligne : deux
@@ -3049,6 +3182,9 @@ function dessineMenuMobile(ctx, state) {
   // Le plateau est construit avant la géométrie afin que toute taille future reste
   // automatiquement cadrée (std/bonus = 8×8, l15 = 15×8).
   const previewState = state.ui.preview[selectedSize] || state.ui.preview.std;
+  // Tant que l'aperçu n'a pas été lancé (▶ LANCER), le plateau reste neutre :
+  // aucune amélioration n'est signalée comme active.
+  const previewLaunched = previewState.playing || previewState.finished || previewState.elapsed > 0;
   const previewMoves = previewSequence(selectedSize);
   const previewBoard = decoratePreviewBoard(
     clonePreviewBoard(previewBoardInitial(selectedSize)), selectedSize,
@@ -3133,7 +3269,7 @@ function dessineMenuMobile(ctx, state) {
     // sprite de camp réel, puis flamme derrière la pièce si une amélioration est
     // équipée. Le glyph Unicode reste uniquement le fallback de chargement.
     const img = spritePret(piece.owner, piece.type);
-    const fire = optionsFeuPour(piece);
+    const fire = previewLaunched ? optionsFeuPour(piece) : null;
     const previewRadius = Math.max(8, previewCell * 0.72);
     const previewStateRadius = Math.max(5, previewCell * 0.36);
     if (fire) {
@@ -3151,7 +3287,7 @@ function dessineMenuMobile(ctx, state) {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(previewGlyphs[piece.type] || '♟', x, y);
     }
-    if (piece.shield) {
+    if (previewLaunched && piece.shield) {
       ctx.strokeStyle = C.primary;
       ctx.lineWidth = Math.max(1, previewCell * 0.06);
       ctx.beginPath(); ctx.arc(x, y, Math.max(4, previewCell * 0.4), 0, Math.PI * 2); ctx.stroke();
@@ -3170,6 +3306,12 @@ function dessineMenuMobile(ctx, state) {
       const eased = previewProgress < 0.5
         ? 2 * previewProgress * previewProgress
         : 1 - Math.pow(-2 * previewProgress + 2, 2) / 2;
+      // Une capture reste lisible pendant l'approche : la pièce attaquée est
+      // dessinée d'abord, puis la pièce en mouvement passe visuellement dessus.
+      const capturedPiece = previewPieceAt(previewCurrent.to.r, previewCurrent.to.c);
+      if (capturedPiece && capturedPiece !== movingPiece) {
+        drawPreviewPiece(capturedPiece, previewCurrent.to.r, previewCurrent.to.c);
+      }
       const movingX = previewBoardX + (previewCurrent.from.c + 0.5
         + (previewCurrent.to.c - previewCurrent.from.c) * eased) * previewCell;
       const movingY = previewBoardY + (previewCurrent.from.r + 0.52
@@ -3352,6 +3494,9 @@ function dessineMenuDashboard(ctx, state) {
   function drawPreviewBoard(x, y, w, h, state) {
     const taille = varTail === 'l15' ? 'l15' : varTail === 'bonus' ? 'bonus' : 'std';
     const previewState = state.ui.preview[taille];
+    // Tant que l'aperçu n'a pas été lancé (▶ LANCER), le plateau reste neutre :
+    // aucune amélioration n'est signalée comme active.
+    const previewLaunched = previewState.playing || previewState.finished || previewState.elapsed > 0;
     // Toute la carte est interactive : l'indicateur est volontairement visuel,
     // la hitbox reste fixe pour que le mouvement du bouton ne décale pas le plateau.
     enregistrerBouton(state, x, y, w, h, { kind: 'togglePreview', taille }, true, true, R_INNER);
@@ -3430,7 +3575,7 @@ function dessineMenuDashboard(ctx, state) {
 
     function drawPiece(piece, r, c, px = ox + (c + 0.5) * cell, py = oy + (r + 0.52) * cell) {
       if (!piece) return;
-      const flameOpts = optionsFeuPour(piece);
+      const flameOpts = previewLaunched ? optionsFeuPour(piece) : null;
       if (flameOpts) {
         // Même pipeline que le vrai plateau : flamme derrière la pièce,
         // proportionnée et contenue dans la cellule du mini-plateau.
@@ -3442,9 +3587,9 @@ function dessineMenuDashboard(ctx, state) {
           flameOpts.pulsed, Math.min(40, Math.max(8, cell * 0.42)));
         ctx.restore();
       }
-      const upgradeCats = [...new Set((piece.upgrades || [])
+      const upgradeCats = previewLaunched ? [...new Set((piece.upgrades || [])
         .map((id) => UPGRADES[id]?.cat)
-        .filter(Boolean))];
+        .filter(Boolean))] : [];
       if (upgradeCats.length) {
         ctx.save();
         // Le halo reste visuellement contenu dans la case : il signale la carte
@@ -3472,7 +3617,7 @@ function dessineMenuDashboard(ctx, state) {
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(glyphs[piece.type] || '♟', px, py);
       }
-      if (piece.shield) {
+      if (previewLaunched && piece.shield) {
         ctx.beginPath();
         ctx.arc(px, py, Math.max(7, cell * 0.43), 0, Math.PI * 2);
         ctx.strokeStyle = COULEUR_CAT.S;
@@ -3583,8 +3728,8 @@ function dessineMenuDashboard(ctx, state) {
   }
 
   function drawSideMenu(x, y, w, h) {
-    dbControl(x, y, w, 48, '✦  TUTORIEL', { kind: 'tutoriel' }, { fill: C.panelHi, font: `700 13px ${F_DB}` });
-    dbControl(x, y + 60, w, 48, '◎  APPRENDRE', { kind: 'apprendre' }, { fill: C.wine, font: `700 13px ${F_DB}` });
+    dbControl(x, y, w, 48, 'TUTORIEL', { kind: 'tutoriel' }, { fill: C.panelHi, font: `700 13px ${F_DB}` });
+    dbControl(x, y + 60, w, 48, 'DEFI', { kind: 'apprendre' }, { fill: C.wine, font: `700 13px ${F_DB}` });
 
     // La carte Historique remplit la colonne jusqu'à Decks.
     // Decks s'aligne sur le bas des cartes Plateau / Feuille de partie,
@@ -3711,7 +3856,7 @@ function dessineMenuDashboard(ctx, state) {
     const optionGap = 4;
     const combatY = optionY;
     const combatW = (contentW - optionLabelW - optionGap - 8) / 2;
-    dbText('COMBAT', optionX, combatY + 12, `700 9px ${F_DB}`, C.muted);
+    dbText('ECUS', optionX, combatY + 12, `700 9px ${F_DB}`, C.muted);
     COMBATS.forEach((item, i) => dbControl(
       optionX + optionLabelW + i * (combatW + optionGap), combatY, combatW, 24,
       traduire(item.label, state.language).toUpperCase(), { kind: 'pickCombat', value: item.id },
@@ -3870,11 +4015,6 @@ function dessineMatchmaking(ctx, state) {
     // même cadence (file publique) / le créateur impose la sienne (partie privée).
     ctx.fillStyle = UI_THEME.text; ctx.font = `18px ${F_DISPLAY}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';      ctx.fillText(traduire('CADENCE DE JEU', state.language), cx, titleY);
-
-    ctx.fillStyle = UI_THEME.muted; ctx.font = `13px ${F_TEXTE}`;
-    ctx.fillText(traduire(mm.pendingAction === 'private'
-      ? 'Temps de réflexion de la partie privée (ton ami en hérite)'
-      : 'Temps de réflexion — tu ne rencontres que des joueurs de la même cadence', state.language), cx, titleY + 28);
 
     // Sélecteur compact des deux cadences disponibles (sans incrément).
     const gw = mobileLobby ? Math.min(310, contentW) : 155;
@@ -4058,67 +4198,113 @@ for (const [alias, token] of Object.entries({
 
 function dessineReplays(ctx, state) {
   const cx = CANVAS_W / 2;
+  // Sur téléphone, l'écran utilise le canvas mobile : liste verticale en une
+  // seule colonne. Sur ordinateur, on garde la grille 2 colonnes historique.
+  const mobile = !!(state.ui && state.ui.mobile);
 
   // Fond graphite + panneau flottant : adaptation sombre de la liste Replays.
   ctx.fillStyle = REPLAY_UI.bg;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  carte(ctx, 24, 24, CANVAS_W - 48, 744, 22, REPLAY_UI.panel,
+  carte(ctx, 24, 24, CANVAS_W - 48, mobile ? CANVAS_H - 48 : 744, 22, REPLAY_UI.panel,
     { shadow: false, stroke: REPLAY_UI.border });
   ctx.fillStyle = REPLAY_UI.ink; ctx.font = `36px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText('♞ ROYCHEC', cx, 86);
+  ctx.fillText('REPLAYS', cx, 86);
 
-  ctx.fillStyle = REPLAY_UI.ink; ctx.font = `18px ${F_DISPLAY}`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(`🎬 ${traduire('REPLAYS', state.language)}`, cx, 160);
   ctx.fillStyle = REPLAY_UI.muted; ctx.font = `13px ${F_TEXTE}`;
-  ctx.fillText(traduire('Revoir tes dernières parties — les 20 plus récentes sont conservées', state.language), cx, 188);
+  ctx.fillText(traduire('Les 20 parties les plus récentes sont conservées', state.language), cx, 148);
 
   const replays = state._replayList || [];
   if (!replays.length) {
     ctx.fillStyle = REPLAY_UI.muted; ctx.font = `15px ${F_TEXTE}`;
-    ctx.fillText(traduire('Aucun replay pour l\'instant — joue une partie !', state.language), cx, 300);
+    ctx.fillText(traduire('Aucun replay pour l\'instant — joue une partie !', state.language), cx, 200);
   }
 
-  // 2 colonnes de 10 lignes max (20 entrées ≤ CANVAS_H).
-  const rW = 430, rH = 36, rGap = 8, parCol = 10;
-  const colX = [cx - rW - 12, cx + 12];
-  for (let i = 0; i < replays.length && i < 20; i++) {
-    const rp = replays[i];
-    const col = Math.floor(i / parCol);
-    const x = colX[col];
-    const ry = 222 + (i % parCol) * (rH + rGap);
-    const d = new Date(rp.startTime);
+  if (mobile) {
+    // Sur téléphone : les replays s'affichent les uns sous les autres, en
+    // pleine largeur. La hauteur du canvas suit le nombre de parties, la page
+    // défile pour atteindre la fin de la liste.
+    // Les cartes de parties restent à l'intérieur de l'encadré REPLAYS
+    // (panneau 24 → CANVAS_W-24) : marge de 12 px de chaque côté.
+    const padX = 36;
+    const rW = CANVAS_W - padX * 2;
+    const rH = 46, rGap = 8, parCol = 20;
     const locale = state.language === 'en' ? 'en-GB' : 'fr-FR';
-    const dateStr = `${d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit' })} ${d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}`;
-    const modeStr = rp.mode === 'spectator' ? traduire('Spect.', state.language)
-      : rp.mode === 'pvai' ? traduire('PvAI', state.language)
-      : rp.mode === 'pvw' ? traduire('En ligne', state.language) : traduire('PvP', state.language);
-    const diffStr = rp.difficulty ? ` ${traduire('niv.', state.language)}${rp.difficulty}` : '';
-    const winnerStr = rp.winner !== null ? `  ·  🏆 ${traduire(NOM_JOUEUR[rp.winner], state.language)}` : '';
-    const label = `${modeStr}${diffStr}  ·  ${rp.totalActions} ${traduire('act.', state.language)}  ·  ${dateStr}${winnerStr}`;
-    state.ui.buttons.push({
-      x, y: ry, w: rW, h: rH,
-      action: { kind: 'startReplay', key: rp.key }, enabled: true, radius: 8,
-    });
-    // Carte interactive : surface étagée et lisible sur graphite.
-    ctx.fillStyle = REPLAY_UI.cardShadow;
-    roundRect(ctx, x, ry + 3, rW, rH, 8); ctx.fill();
-    ctx.fillStyle = REPLAY_UI.card;
-    roundRect(ctx, x, ry, rW, rH, 8); ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = REPLAY_UI.border;
-    roundRect(ctx, x, ry, rW, rH, 8); ctx.stroke();
-    ctx.fillStyle = REPLAY_UI.ink; ctx.font = `12px ${F_TEXTE}`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(traduire(label, state.language), x + rW / 2, ry + rH / 2);
-  }
+    for (let i = 0; i < replays.length && i < parCol; i++) {
+      const rp = replays[i];
+      const ry = 222 + i * (rH + rGap);
+      const d = new Date(rp.startTime);
+      const dateStr = `${d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit' })} ${d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}`;
+      const modeStr = rp.mode === 'spectator' ? traduire('Spect.', state.language)
+        : rp.mode === 'pvai' ? traduire('PvAI', state.language)
+        : rp.mode === 'pvw' ? traduire('En ligne', state.language) : traduire('PvP', state.language);
+      const diffStr = rp.difficulty ? ` ${traduire('niv.', state.language)}${rp.difficulty}` : '';
+      const winnerStr = rp.winner !== null ? `  ·  🏆 ${traduire(NOM_JOUEUR[rp.winner], state.language)}` : '';
+      const label = `${modeStr}${diffStr}  ·  ${rp.totalActions} ${traduire('act.', state.language)}  ·  ${dateStr}${winnerStr}`;
+      state.ui.buttons.push({
+        x: padX, y: ry, w: rW, h: rH,
+        action: { kind: 'startReplay', key: rp.key }, enabled: true, radius: 10,
+      });
+      // Carte interactive : surface étagée et lisible sur graphite.
+      ctx.fillStyle = REPLAY_UI.cardShadow;
+      roundRect(ctx, padX, ry + 3, rW, rH, 10); ctx.fill();
+      ctx.fillStyle = REPLAY_UI.card;
+      roundRect(ctx, padX, ry, rW, rH, 10); ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = REPLAY_UI.border;
+      roundRect(ctx, padX, ry, rW, rH, 10); ctx.stroke();
+      ctx.fillStyle = REPLAY_UI.ink; ctx.font = `12px ${F_TEXTE}`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(traduire(label, state.language), padX + 12, ry + rH / 2);
+    }
+    // Retour en bas de la liste défilante (ou à la place de la liste si vide).
+    const wB = Math.min(320, CANVAS_W - 72), hB = 52;
+    const backY = replays.length
+      ? 222 + Math.min(replays.length, parCol) * (rH + rGap) + 16 : 420;
+    bouton(state, ctx, cx - wB / 2, backY, wB, hB, '← Retour',
+      { kind: 'fermerReplays' },
+      { color: REPLAY_UI.green, textColor: REPLAY_UI.ink, outlineColor: REPLAY_UI.greenD,
+        sub: 'revenir au menu', subColor: REPLAY_UI.muted });
+  } else {
+    // 2 colonnes de 10 lignes max (20 entrées ≤ CANVAS_H).
+    const rW = 430, rH = 36, rGap = 8, parCol = 10;
+    const colX = [cx - rW - 12, cx + 12];
+    for (let i = 0; i < replays.length && i < 20; i++) {
+      const rp = replays[i];
+      const col = Math.floor(i / parCol);
+      const x = colX[col];
+      const ry = 222 + (i % parCol) * (rH + rGap);
+      const d = new Date(rp.startTime);
+      const locale = state.language === 'en' ? 'en-GB' : 'fr-FR';
+      const dateStr = `${d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit' })} ${d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}`;
+      const modeStr = rp.mode === 'spectator' ? traduire('Spect.', state.language)
+        : rp.mode === 'pvai' ? traduire('PvAI', state.language)
+        : rp.mode === 'pvw' ? traduire('En ligne', state.language) : traduire('PvP', state.language);
+      const diffStr = rp.difficulty ? ` ${traduire('niv.', state.language)}${rp.difficulty}` : '';
+      const winnerStr = rp.winner !== null ? `  ·  🏆 ${traduire(NOM_JOUEUR[rp.winner], state.language)}` : '';
+      const label = `${modeStr}${diffStr}  ·  ${rp.totalActions} ${traduire('act.', state.language)}  ·  ${dateStr}${winnerStr}`;
+      state.ui.buttons.push({
+        x, y: ry, w: rW, h: rH,
+        action: { kind: 'startReplay', key: rp.key }, enabled: true, radius: 8,
+      });
+      // Carte interactive : surface étagée et lisible sur graphite.
+      ctx.fillStyle = REPLAY_UI.cardShadow;
+      roundRect(ctx, x, ry + 3, rW, rH, 8); ctx.fill();
+      ctx.fillStyle = REPLAY_UI.card;
+      roundRect(ctx, x, ry, rW, rH, 8); ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = REPLAY_UI.border;
+      roundRect(ctx, x, ry, rW, rH, 8); ctx.stroke();
+      ctx.fillStyle = REPLAY_UI.ink; ctx.font = `12px ${F_TEXTE}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(traduire(label, state.language), x + rW / 2, ry + rH / 2);
+    }
 
-  // Retour au menu (sous les 2 colonnes de 10 → 222 + 10×44 = 662).
-  const wB = 320, hB = 52;
-  bouton(state, ctx, cx - wB / 2, 700, wB, hB, '← Retour',
-    { kind: 'fermerReplays' },
-    { color: REPLAY_UI.green, textColor: REPLAY_UI.ink, outlineColor: REPLAY_UI.greenD,
-      sub: 'revenir au menu (Échap)', subColor: REPLAY_UI.muted });
+    // Retour au menu (sous les 2 colonnes de 10 → 222 + 10×44 = 662).
+    const wB = 320, hB = 52;
+    bouton(state, ctx, cx - wB / 2, 700, wB, hB, '← Retour',
+      { kind: 'fermerReplays' },
+      { color: REPLAY_UI.green, textColor: REPLAY_UI.ink, outlineColor: REPLAY_UI.greenD,
+        sub: 'revenir au menu', subColor: REPLAY_UI.muted });
+  }
 
   dessineBandeauCompte(ctx, state);
 }
@@ -4719,7 +4905,7 @@ function dessineLearnHub(ctx, state) {
 
   ctx.fillStyle = PARCOURS_JEU.cream; ctx.font = `34px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText(traduire('APPRENDRE', state.language), cx, 55);
+  ctx.fillText(traduire('DEFI', state.language), cx, 55);
   ctx.fillStyle = PARCOURS_JEU.creamMuted; ctx.font = `13px ${F_TEXTE}`;
   ctx.fillText(traduire('Avance case après case pour maîtriser les améliorations.', state.language), cx, 80);
 
@@ -4825,7 +5011,7 @@ function dessineLearnPanel(ctx, state, now) {
   if (state.panelPiece && state.phase !== 'gameover') {
     ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText(traduire('ACHAT · APPRENDRE', state.language), x, OY + 8);
+    ctx.fillText(traduire('ACHAT · DEFI', state.language), x, OY + 8);
     ctx.fillStyle = game.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
     ctx.fillText(`${traduire(game.title, state.language).toUpperCase()} · ${traduire(game.upgrade, state.language).toUpperCase()}`, x, OY + 30);
     dessineCatalogue(ctx, state, x, OY + 48, w, now);
@@ -4834,12 +5020,12 @@ function dessineLearnPanel(ctx, state, now) {
     const footGap = 8, footW = (w - footGap) / 2, footY = CANVAS_H - 48;
     bouton(state, ctx, x, footY, footW, 34, '↻ Recommencer', { kind: 'learnRestart' },
       { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 10 });
-    bouton(state, ctx, x + footW + footGap, footY, footW, 34, '← Menu Apprendre', { kind: 'learnHub' },
+    bouton(state, ctx, x + footW + footGap, footY, footW, 34, '← Menu Défi', { kind: 'learnHub' },
       { color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10 });
     return;
   }
   ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';    ctx.fillText(traduire('APPRENDRE', state.language), x, OY + 8);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';    ctx.fillText(traduire('DEFI', state.language), x, OY + 8);
 
   carte(ctx, x, OY + 22, w, 150, 10, UI_THEME.panel, { shadow: true });
   ctx.fillStyle = game.color || UI_THEME.amber; ctx.font = `700 10px ${F_TEXTE}`;
@@ -4871,7 +5057,7 @@ function dessineLearnPanel(ctx, state, now) {
   const footGap = 8, footW = (w - footGap) / 2, footY = CANVAS_H - 48;
   bouton(state, ctx, x, footY, footW, 34, '↻ Recommencer', { kind: 'learnRestart' },
     { color: UI_THEME.card, textColor: UI_THEME.text, fontSize: 10 });
-  bouton(state, ctx, x + footW + footGap, footY, footW, 34, '← Menu Apprendre', { kind: 'learnHub' },
+  bouton(state, ctx, x + footW + footGap, footY, footW, 34, ' Menu défi', { kind: 'learnHub' },
     { color: UI_THEME.primary, textColor: UI_THEME.text, fontSize: 10 });
 }
 
@@ -5156,6 +5342,9 @@ export function render(ctx, state, now) {
   if (state.phase === 'gameover' && state.mode !== 'tutorial') dessineGameOver(ctx, state, now);
   if (state.phase === 'replay') dessineReplayHUD(ctx, state);
   if (state.phase === 'tutorial-done') dessineTutorielFin(ctx, state);
+  // Vue « Améliorations achetées » : overlay par-dessus tout (dernier, avant les
+  // hitboxes) — comme Promotion, elle masque le reste tant qu'elle est ouverte.
+  if (state.upgradesView) dessineVueAmeliorations(ctx, state);
   finaliserBoutons(ctx, state);
 }
 
@@ -5381,6 +5570,13 @@ function dessineTutorielFin(ctx, state) {
 function dessineReplayHUD(ctx, state) {
   const data = state.replayData;
   if (!data) return;
+  // Sur téléphone, le replay prend tout le dessous du plateau : panneau de
+  // lecture compact (libellé + Play/Pause + Quitter, progression, vitesses)
+  // puis suivi joueurs. Le desktop garde sa barre unique historique.
+  if (state.ui && state.ui.mobileGameplay) {
+    dessineReplayHUDMobile(ctx, state, Math.max(0, state.replayIndex), data.events.length);
+    return;
+  }
   const barY = OY + __BOARD_H + 4;
   const barH = 52;
 
@@ -5456,8 +5652,106 @@ function dessineReplayHUD(ctx, state) {
   ctx.fillStyle = REPLAY_UI.rose;
   roundRect(ctx, qX, barY + barH / 2 - qH / 2 - 1, qW, qH, 6); ctx.fill();
   ctx.lineWidth = 1; ctx.strokeStyle = REPLAY_UI.roseD;
-  roundRect(ctx, qX, barY + barH / 2 - qH / 2 - 1, qW, qH, 6); ctx.stroke();
-  ctx.fillStyle = REPLAY_UI.roseInk; ctx.font = `10px ${F_DISPLAY}`;
+  roundRect(ctx, qX, barY + barH / 2 - qH / 2 - 1, qW, qH, 6); ctx.stroke();  ctx.fillStyle = REPLAY_UI.roseInk; ctx.font = `10px ${F_DISPLAY}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(traduire('QUITTER', state.language), qX + qW / 2, barY + barH / 2 - 1);
+}
+
+// HUD replay mobile : panneau compact sous le plateau — ligne 1 libellé de
+// lecture + Play/Pause + Quitter, ligne 2 progression, ligne 3 vitesses — puis
+// le suivi joueurs (tour + écus) pour garder la lecture lisible sur téléphone.
+function dessineReplayHUDMobile(ctx, state, idx, total) {
+  const x = OX;
+  const w = __BOARD_W;
+  const barY = OY + __BOARD_H + 8;
+  const barH = 104;
+  const playing = state.replayPlaying;
+
+  // Panneau graphite sous le plateau.
+  ctx.fillStyle = REPLAY_UI.panel;
+  roundRect(ctx, x, barY, w, barH, 10); ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = REPLAY_UI.border;
+  roundRect(ctx, x, barY, w, barH, 10); ctx.stroke();
+
+  // Ligne 1 : libellé de lecture à gauche, Play/Pause + Quitter à droite.
+  const btnY = barY + 12, btnH = 30;
+  const qW = 60, ppW = 48, gap = 8;
+  const qx = x + w - qW - gap;
+  const ppX = qx - ppW - gap;
+  const label = playing
+    ? `▶ ${traduire('REPLAY', state.language)} — ${traduire('Action', state.language)} ${idx + 1} / ${total}`
+    : (idx >= total
+      ? `⏹ ${traduire('FIN DU REPLAY', state.language)}`
+      : `⏸ ${traduire('PAUSE', state.language)} — ${traduire('Action', state.language)} ${idx + 1} / ${total}`);
+  ctx.fillStyle = REPLAY_UI.ink; ctx.font = `12px ${F_DISPLAY}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const maxLabelW = Math.max(40, ppX - x - 24);
+  let labelText = label;
+  if (ctx.measureText(labelText).width > maxLabelW) {
+    while (labelText.length > 1 && ctx.measureText(`${labelText}…`).width > maxLabelW) {
+      labelText = labelText.slice(0, -1);
+    }
+    labelText += '…';
+  }
+  ctx.fillText(labelText, x + 12, barY + 27);
+
+  // Play/Pause.
+  state.ui.buttons.push({ x: ppX, y: btnY, w: ppW, h: btnH,
+    action: { kind: 'replayPlayPause' }, enabled: idx < total, radius: 8 });
+  ctx.fillStyle = REPLAY_UI.green;
+  roundRect(ctx, ppX, btnY, ppW, btnH, 8); ctx.fill();
+  ctx.lineWidth = 1; ctx.strokeStyle = REPLAY_UI.greenD;
+  roundRect(ctx, ppX, btnY, ppW, btnH, 8); ctx.stroke();
+  ctx.fillStyle = REPLAY_UI.darkInk; ctx.font = `15px ${F_DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(playing && idx < total ? '⏸' : '▶', ppX + ppW / 2, btnY + btnH / 2 + 1);
+
+  // Quitter.
+  state.ui.buttons.push({ x: qx, y: btnY, w: qW, h: btnH,
+    action: { kind: 'replayQuit' }, enabled: true, radius: 8 });
+  ctx.fillStyle = REPLAY_UI.rose;
+  roundRect(ctx, qx, btnY, qW, btnH, 8); ctx.fill();
+  ctx.lineWidth = 1; ctx.strokeStyle = REPLAY_UI.roseD;
+  roundRect(ctx, qx, btnY, qW, btnH, 8); ctx.stroke();
+  ctx.fillStyle = REPLAY_UI.roseInk; ctx.font = `10px ${F_DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(traduire('QUITTER', state.language), qx + qW / 2, btnY + btnH / 2 + 1);
+
+  // Ligne 2 : barre de progression pleine largeur.
+  const progW = w - 24, progH = 5;
+  const progX = x + 12, progY = barY + 58;
+  ctx.fillStyle = REPLAY_UI.field;
+  roundRect(ctx, progX, progY, progW, progH, 3); ctx.fill();
+  if (total > 0) {
+    ctx.fillStyle = REPLAY_UI.amber;
+    roundRect(ctx, progX, progY, progW * Math.min(1, (idx + 1) / total), progH, 3); ctx.fill();
+  }
+
+  // Ligne 3 : trois vitesses réparties sur la largeur.
+  const speeds = [
+    { label: 'LENT', speed: 1 },
+    { label: 'NORM', speed: 2 },
+    { label: 'RAPIDE', speed: 3 },
+  ];
+  const sW = 72, sH = 26, sGap = 8;
+  const speedsW = speeds.length * sW + (speeds.length - 1) * sGap;
+  const sX = x + (w - speedsW) / 2;
+  const sY = barY + 70;
+  speeds.forEach((s, i) => {
+    const bx = sX + i * (sW + sGap);
+    const sel = state.replaySpeed === s.speed;
+    state.ui.buttons.push({ x: bx, y: sY, w: sW, h: sH,
+      action: { kind: 'replaySpeed', speed: s.speed }, enabled: true, radius: 7 });
+    ctx.fillStyle = sel ? REPLAY_UI.green : REPLAY_UI.field;
+    roundRect(ctx, bx, sY, sW, sH, 7); ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = sel ? REPLAY_UI.greenD : REPLAY_UI.border;
+    roundRect(ctx, bx, sY, sW, sH, 7); ctx.stroke();
+    ctx.fillStyle = sel ? REPLAY_UI.darkInk : REPLAY_UI.muted;
+    ctx.font = `10px ${F_DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(traduire(s.label, state.language), bx + sW / 2, sY + sH / 2 + 1);
+  });
+
+  // Suivi joueurs (tour + écus) sous le panneau de lecture. `now` n'est pas
+  // utilisé par le suivi : on l'appelle sans pour ne pas dépendre du paramètre.
+  dessineSuiviJoueursMobile(ctx, state, x, barY + barH + 12, w);
 }

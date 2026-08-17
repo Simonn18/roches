@@ -118,9 +118,9 @@ export function creerEtat(options) {
     huntRngSeed,             // PRNG partagé par les clients PvP privés
     turn: 0,                 // joueur actif
     ecus: [SOLDE_DEPART, SOLDE_DEPART],
-    // Nombre de pièces distinctes ayant reçu une carte [S] dans cette partie.
+    // Nombre de pièces distinctes ayant reçu une carte [S], PAR CAMP [camp0, camp1].
     // Une pièce déjà porteuse d'une [S] ne consomme pas un nouvel emplacement.
-    statUpgradesCount: 0,
+    statUpgradesCount: [0, 0],
     winner: null,
     phase: 'play',           // 'menu' | 'play' | 'animating' | 'ruee-target' | 'rayon-target' | 'decret-target' | 'gameover'
     mode,                    // 'pvp' | 'pvai' (SPEC §1.2 ; default 'pvp' = non-régression)
@@ -129,6 +129,7 @@ export function creerEtat(options) {
     selected: null,          // pièce sélectionnée
     legalMoves: [],          // [{ r, c, capture, tele? }]
     panelPiece: null,        // pièce dont le panneau d'amélioration est ouvert
+    upgradesView: false,     // vue « Améliorations achetées » ouverte (overlay les deux camps)
     ruTargets: [],           // cibles d'un ciblage en cours (Ruée / Rayon / Décret)
     huntBonuses: null,       // cases bonus réservées à chaque camp en mode Chasse
     huntCollected: [0, 0],   // nombre de cases bonus récupérées par camp

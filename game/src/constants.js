@@ -25,12 +25,12 @@ export const UPGRADES = {
   },
   'vet':{
     id: 'vet', nom: 'Vétéran',cat:'A',cout:5,piece: 'P', cooldown: 4,
-    desc: "Capture le pion ennemi se trouvant directement en face du pion, sans bouger (consomme le tour)."
+    desc: "Capture le pion ennemi se trouvant directement en face du pion, sans bouger."
   },
   
   'second': {
     id: 'second', nom: 'Second Galop', cat: 'D', cout: 8, piece: 'N', cooldown: 3,
-    desc: 'Le cavalier peut, une fois par tour où il ne capture pas, enchaîner un 2e saut',
+    desc: 'Le cavalier peut, une fois par tour où il ne capture pas, enchaîner un 2e saut (le deuxième saut ne peut pas capturer)',
   },
   'ruee': {
     id: 'ruee', nom: 'Ruée', cat: 'A', cout: 9, piece: 'N', cooldown: 4,
@@ -69,11 +69,11 @@ export const UPGRADES = {
 
   'Tele': {
     id: 'Tele', nom: 'Téléportation courte', cat: 'D', cout: 12, piece: 'Q', cooldown:5,
-    desc: "la dame se pose sur n'importe quelle case vide à 3 cases cases autour maximum (ignore les obstacles)",
+    desc: "la dame se pose sur n'importe quelle case vide à 3 cases autour maximum (ignore les obstacles)",
   },
   'double-coup': {
     id: 'double-coup', nom: 'Double coup', cat: 'A', cout: 15, piece: 'Q', once: true,
-    desc: 'Rejoue un 2e coup (ne consomme pas le tour).',
+    desc: 'Rejoue un 2e coup.',
   },
   'couronne': {
     id: 'couronne', nom: 'Couronne', cat: 'S', cout: 9, piece: 'Q',
@@ -98,11 +98,11 @@ export const UPGRADES = {
   // Pion — 2e déplacement (cumul avec Marche arrière)
   'pas-diag': {
     id: 'pas-diag', nom: 'Pas diagonal', cat: 'D', cout: 4, piece: 'P',
-    desc: "Avance d'une case en diagonale, sans capturer (cumul avec Marche arrière).",
+    desc: "Avance d'une case en diagonale, sans capturer.",
   },
   // Pion — 2e actif : geler la case
   'epine': {
-    id: 'epine', nom: 'Épine', cat: 'A', cout: 7, piece: 'P', cooldown: 5,
+    id: 'epine', nom: 'Ronce', cat: 'A', cout: 7, piece: 'P', cooldown: 5,
     desc: "La case du pion est gelée 2 tours — aucune pièce adverse ne peut y entrer.",
   },
   // Cavalier — 2e déplacement : bond long (3,1) ou (3,2)
@@ -139,7 +139,7 @@ export const UPGRADES = {
   // Dame — 2e déplacement : pour la prochaine attaque, la dame se déplace comme n'importe quelle pièce
   'feinte': {
     id: 'feinte', nom: 'Feinte', cat: 'D', cout: 12, piece: 'Q', cooldown: 5,
-    desc: "Pour la prochaine attaque, la dame peut se déplacer comme n'importe quelle pièce (cavalier, fou ou tour).",
+    desc: "Pour la prochaine attaque, la dame peut se déplacer comme n'importe quelle pièce.",
   },
   // Dame — 2e actif : empêche le roi adverse d'utiliser ses améliorations pendant 2 tours
   'sht': {
@@ -165,7 +165,9 @@ for (const u of Object.values(UPGRADES)) {
 }
 
 export const MAX_UPGRADES_PAR_PIECE = 2; // GDD §5.3 — maximum 2 améliorations par pièce
-export const MAX_STATS_PAR_PARTIE = 4; // Limite globale de pièces distinctes porteuses d'une [S]
+// Limite PAR JOUEUR de pièces distinctes porteuses d'une [S] : chaque camp peut
+// équiper jusqu'à 4 pièces d'une carte stat (8 au total sur le plateau).
+export const MAX_STATS_PAR_JOUEUR = 4;
 
 // Une pièce ne consomme qu'un emplacement global, même si elle reçoit plusieurs [S] :
 // la capture ou la promotion de sa pièce ne libère pas un nouvel emplacement.

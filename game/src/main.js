@@ -25,7 +25,7 @@ import { initOnline, findMatch, cancelWait, createPrivate, joinByCode, resumeMat
 import { setSlot, saveDecks, loadDecks, getActiveDeck, setActiveDeck, createDeck, renameDeck, deleteDeck, sanitizeRoot, DECK_LIMIT, upgradesForPiece } from './decks.js?v=107';
 import {
   UPGRADES, UPGRADES_PAR_TYPE, VALEUR_PIECE, REVENU_PAR_COUP,
-  MAX_UPGRADES_PAR_PIECE, MAX_STATS_PAR_PARTIE, estAmeliorationStat,
+  MAX_UPGRADES_PAR_PIECE, MAX_STATS_PAR_JOUEUR, estAmeliorationStat,
   CANVAS_W, CANVAS_H, ACCENT, UI_THEME, UI_THEMES,
 } from './constants.js?v=113';
 import { variantePourMode, variantIdFromMenu, DEFAULT_VARIANT, stagnationTick } from './variants.js?v=110';
@@ -249,11 +249,13 @@ function synchroniserAffichage() {
   state.ui.mobile = mobile;
   // L'accueil garde son layout mobile dédié. Pendant une partie, le plateau
   // devient pleine largeur et le panneau d'améliorations est empilé dessous.
-  const gameplayModes = ['pvp', 'pvai', 'pvw', 'hunt', 'tutorial', 'learn', 'spectator'];
+  const gameplayModes = ['pvp', 'pvai', 'pvw', 'hunt', 'tutorial', 'learn', 'spectator', 'replay'];
   const gameplayMobile = mobile && !!state.board && gameplayModes.includes(state.mode);
   // Le menu principal et le lobby en ligne partagent la même surface mobile :
   // le lobby doit lui aussi recevoir le canvas scrollable et les dimensions téléphone.
-  const verticalHub = ['tutorial-hub', 'learn-hub', 'puzzle-hub', 'decks', 'deck-picker'].includes(state.phase);
+  // 'replays' est aussi un écran vertical sur téléphone : la liste s'affiche
+  // en une seule colonne défilable, pas en grille desktop réduite.
+  const verticalHub = ['tutorial-hub', 'learn-hub', 'puzzle-hub', 'decks', 'deck-picker', 'replays'].includes(state.phase);
   state.ui.mobileLayout = mobile && (state.phase === 'menu' || state.phase === 'matchmaking' || verticalHub);
   state.ui.mobileGameplay = gameplayMobile;
   const menuMobile = state.ui.mobileLayout;
@@ -288,7 +290,12 @@ function synchroniserAffichage() {
             ? 150 + TOTAL_PUZZLES * 84 + 64 + 78 + 38 + 24
             : state.phase === 'decks' ? 1140
               : state.phase === 'deck-picker' ? 1400
-                : 1020)
+                : state.phase === 'replays'
+                  // Liste verticale des replays sur téléphone : la hauteur suit
+                  // le nombre de parties pour que la page défile jusqu'au bout.
+                  // Le plancher couvre l'état vide (message + bouton Retour).
+                  ? Math.max(620, 260 + Math.max(0, (state._replayList || []).length) * 54 + 120)
+                  : 1020)
     : gameplayMobile
       ? guidedMobile
         ? state.panelPiece
@@ -362,7 +369,7 @@ function menuState() {
     _cavEnemyCell: null,
     buzz: 0,
     ecus: [0, 0],
-    statUpgradesCount: 0,
+    statUpgradesCount: [0, 0],
     replay: null,
     _replayTimer: null,
     _replayList: [],
@@ -522,7 +529,7 @@ function commencerReplay(replayData) {
     taille,
     turn: 0,
     ecus: [0, 0],
-    statUpgradesCount: 0,
+    statUpgradesCount: [0, 0],
     winner: null,
     ai: null,
     selected: null,
@@ -645,7 +652,7 @@ function executerEvenementReplay(e) {
     const statDejaSurPiece = piece.upgrades.some(estAmeliorationStat);
     piece.upgrades.push(e.upgrade);
     if (estAmeliorationStat(e.upgrade) && !statDejaSurPiece) {
-      state.statUpgradesCount = (state.statUpgradesCount || 0) + 1;
+      state.statUpgradesCount[e.owner] = (state.statUpgradesCount[e.owner] || 0) + 1;
     }
     if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(e.upgrade)) piece.shield = true;
     piece._goldT = performance.now();
@@ -661,7 +668,7 @@ function executerEvenementReplay(e) {
       const statDejaSurPiece = piece.upgrades.some(estAmeliorationStat);
       piece.upgrades.push(e.upgrade);
       if (estAmeliorationStat(e.upgrade) && !statDejaSurPiece) {
-        state.statUpgradesCount = (state.statUpgradesCount || 0) + 1;
+        state.statUpgradesCount[e.owner] = (state.statUpgradesCount[e.owner] || 0) + 1;
       }
     }
     if (e.upgrade && ['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(e.upgrade)) {
@@ -1816,9 +1823,11 @@ function acheter(id, { remote = false } = {}) {
   }
   const statDejaSurPiece = estAmeliorationStat(id)
     && p.upgrades.some(estAmeliorationStat);
+  // Plafond PAR JOUEUR : chaque camp peut équiper jusqu'à MAX_STATS_PAR_JOUEUR
+  // pièces distinctes d'une carte [S] (le solde adverse ne bloque pas mes achats).
   const statPlafondAtteint = estAmeliorationStat(id)
     && !statDejaSurPiece
-    && (state.statUpgradesCount || 0) >= MAX_STATS_PAR_PARTIE;
+    && ((state.statUpgradesCount || [0, 0])[p.owner] || 0) >= MAX_STATS_PAR_JOUEUR;
   if (p.upgrades.includes(id) || p.upgrades.length >= MAX_UPGRADES_PAR_PIECE
       || statPlafondAtteint || state.ecus[state.turn] < u.cout) {
     state.buzz = performance.now(); state.buzzId = id; // refus : tremblement
@@ -1827,7 +1836,7 @@ function acheter(id, { remote = false } = {}) {
   state.ecus[state.turn] -= u.cout;
   p.upgrades.push(id);
   if (estAmeliorationStat(id) && !statDejaSurPiece) {
-    state.statUpgradesCount = (state.statUpgradesCount || 0) + 1;
+    state.statUpgradesCount[p.owner] = (state.statUpgradesCount[p.owner] || 0) + 1;
   }
   // Cartes « absorbe la 1re capture » : blindage posé dès l'achat (GDD §5.5).
   if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(id)) p.shield = true;
@@ -1982,7 +1991,7 @@ function hashState(s) {
     str += `|bonus:${s.taille}|${s.huntRngSeed >>> 0}|${JSON.stringify(s.huntBonuses || [])}`
       + `|${JSON.stringify(s.huntCollected || [0, 0])}`;
   }
-  str += `|statPieces:${s.statUpgradesCount || 0}`;
+  str += `|statPieces:${(s.statUpgradesCount || [0, 0]).join(',')}`;
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   return (h >>> 0).toString(16);
@@ -2258,7 +2267,7 @@ function pvwBuildSnapshot() {
   return {
     pieces,
     ecus: [state.ecus[0], state.ecus[1]],
-    statUpgradesCount: state.statUpgradesCount || 0,
+    statUpgradesCount: [state.statUpgradesCount[0] || 0, state.statUpgradesCount[1] || 0],
     capturesDep: [state.capturesDep[0], state.capturesDep[1]], // départage §8.3 (fix W3)
     turn: state.turn,      chain: state.chain ? { r: state.chain.piece.r, c: state.chain.piece.c, type: state.chain.type } : null,
       taille: state.taille,
@@ -2294,7 +2303,9 @@ function pvwApplySnapshot(snap) {
   }
   state.board = board;
   state.ecus = [snap.ecus[0], snap.ecus[1]];
-  state.statUpgradesCount = Number.isFinite(snap.statUpgradesCount) ? snap.statUpgradesCount : 0;
+  state.statUpgradesCount = Array.isArray(snap.statUpgradesCount)
+    ? [snap.statUpgradesCount[0] || 0, snap.statUpgradesCount[1] || 0]
+    : [0, 0];
   // Départage §8.3 : valeurs de vérité du survivant (backward compat : snapshot pré-v20 sans champ).
   if (Array.isArray(snap.capturesDep)) state.capturesDep = [snap.capturesDep[0], snap.capturesDep[1]];
   state.turn = snap.turn;
@@ -2728,6 +2739,11 @@ function actionBouton(action) {
       break;
     case 'replayQuit':
       if (state.phase === 'replay') retourMenu();
+      break;
+    // Vue « Améliorations achetées » : bascule l'overlay listant les
+    // améliorations équipées par les deux camps (demande utilisateur).
+    case 'toggleUpgradesView':
+      state.upgradesView = !state.upgradesView;
       break;
     case 'endChain':
       if (state.chain) {
@@ -3195,6 +3211,13 @@ canvas.addEventListener('mousedown', (e) => {
   // 1) Boutons d'UI (prioritaires, valides même en animation pour restart).
   const b = boutonSous(x, y);
   if (b) {
+    // Vue « Améliorations achetées » ouverte : seul son bouton de fermeture
+    // (même action toggle) est actif. Un clic sur un bouton masqué par l'overlay
+    // referme la vue SANS déclencher l'action cachée.
+    if (state.upgradesView && b.action && b.action.kind !== 'toggleUpgradesView') {
+      state.upgradesView = false;
+      return;
+    }
     // Drawer hamburger — voile (scrim) : un clic sur un bouton HORS du panneau
     // (élément couvert par le voile) referme le drawer SANS déclencher l'élément.
     if (state.ui && state.ui.hamburgerOpen && b.action && b.action.kind !== 'toggleHamburger') {
@@ -3222,6 +3245,9 @@ canvas.addEventListener('mousedown', (e) => {
     const dansPanneau = pnl && x >= pnl.x && x <= pnl.x + pnl.w && y >= pnl.y && y <= pnl.y + pnl.h;
     if (!dansPanneau) state.ui.hamburgerOpen = false;
   }
+  // Vue « Améliorations achetées » : un clic hors de tout bouton la referme
+  // (même pendant une animation, l'overlay n'a pas d'autre interaction).
+  if (state.upgradesView) { state.upgradesView = false; return; }
 
   if (state.phase === 'animating' || state.phase === 'gameover' || state.phase === 'replay'
       || state.phase === 'learn-success' || state.phase === 'puzzle-success'
@@ -3370,6 +3396,8 @@ canvas.addEventListener('contextmenu', (e) => {
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    // Vue « Améliorations achetées » : Échap referme l'overlay.
+    if (state.upgradesView) { state.upgradesView = false; return; }
     // Menu hamburger : Échap referme le panneau avant toute autre action.
     if (state.ui && state.ui.hamburgerOpen) { state.ui.hamburgerOpen = false; return; }
     if (state.phase === 'replays') { retourMenu(); return; }

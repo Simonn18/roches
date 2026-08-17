@@ -5,7 +5,7 @@
 // fonctionner dans le lockstep PvP privé sans désynchroniser les clients.
 import {
   UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE,
-  MAX_STATS_PAR_PARTIE, estAmeliorationStat,
+  MAX_STATS_PAR_JOUEUR, estAmeliorationStat,
 } from './constants.js?v=113';
 
 function casesLibres(state, interdites = []) {
@@ -72,7 +72,7 @@ export function recolterChasse(state, piece) {
           && !possedees.has(id)
           && (!estAmeliorationStat(id)
             || statDejaSurPiece
-            || (state.statUpgradesCount || 0) < MAX_STATS_PAR_PARTIE);
+            || ((state.statUpgradesCount || [0, 0])[piece.owner] || 0) < MAX_STATS_PAR_JOUEUR);
       });
   const upgradeId = candidates.length
     ? candidates[tirageDeterministe(state, candidates.length)]
@@ -88,7 +88,7 @@ export function recolterChasse(state, piece) {
 
   piece.upgrades.push(upgradeId);
   if (estAmeliorationStat(upgradeId) && !statDejaSurPiece) {
-    state.statUpgradesCount = (state.statUpgradesCount || 0) + 1;
+    state.statUpgradesCount[piece.owner] = (state.statUpgradesCount[piece.owner] || 0) + 1;
   }
   const upgrade = UPGRADES[upgradeId];
   if (['forteresse', 'bouclier', 'monture', 'couronne', 'majeste', 'Zone'].includes(upgradeId)) {
