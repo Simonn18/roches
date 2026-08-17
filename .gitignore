@@ -56,3 +56,12 @@ playtest-*.png
 /obsidian/Logs/2026-08-12.md
 /server.pid
 /start_server.py
+
+# Artefacts internes retirés du dépôt public (vault obsidian, captures, exports, mockups)
+/obsidian/
+/0030_p1.png
+/0030.pdf
+/roychec-initial.png
+/roychec_interface.html
+/roychec-menu-v2.html
+/roychec-partie-*.md
