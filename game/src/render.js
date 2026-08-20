@@ -302,39 +302,6 @@ function chargerSprites() {
 }
 chargerSprites();
 
-// Icône du jeu (assets/favicon.png) affichée à côté du wordmark dans les menus.
-// Guardé comme chargerSprites : en environnement sans DOM (tests headless),
-// Image n'existe pas -> on saute et le wordmark retombe sur le glyphe ♞.
-const faviconImg = (typeof Image === 'undefined') ? null : new Image();
-if (faviconImg) faviconImg.src = 'assets/favicon.png?v=1';
-function faviconPrête() {
-  return faviconImg && faviconImg.complete && faviconImg.naturalWidth > 0;
-}
-
-// Wordmark ROYCHEC avec l'icône du jeu à la place du glyphe ♞.
-// align 'left' : x = bord gauche · align 'center' : x = centre horizontal.
-function dessineWordmark(ctx, x, y, fontSize, align = 'left') {
-  ctx.fillStyle = UI_THEME.text;
-  ctx.font = `${fontSize}px ${F_DISPLAY}`;
-  const text = 'ROYCHEC';
-  if (!faviconPrête()) {
-    ctx.textAlign = align;
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText('♞ ' + text, x, y);
-    return;
-  }
-  const textW = ctx.measureText(text).width;
-  const iconSize = Math.round(fontSize * 0.9);
-  const gap = Math.round(fontSize * 0.32);
-  const totalW = iconSize + gap + textW;
-  const startX = align === 'center' ? x - totalW / 2 : x;
-  const iconCenterY = y - Math.round(fontSize * 0.36);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.drawImage(faviconImg, startX, iconCenterY - iconSize / 2, iconSize, iconSize);
-  ctx.fillText(text, startX + iconSize + gap, y);
-}
-
 // --- Vidéo du feu (pivot v3.2 — 2026-07-11) ---
 // Le user a fourni game/assets/pieces/265194.mp4 (mp4 1920×1080 ~10 s ~60 fps H.264+AAC)
 // comme STYLE canonique : le feu procédural Canvas du commit 9f48b832 cède sa place à un
@@ -1391,7 +1358,9 @@ function dessinePanneau(ctx, state, now) {
   // Titre — wordmark Archivo Black en capitales (DA §3). Sur téléphone, le
   // wordmark est retiré pour gagner de la place (même règle que le panneau mobile).
   if (!(state.ui && state.ui.mobileGameplay)) {
-    dessineWordmark(ctx, x, OY + 8, 22, 'left');
+    ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('ROYCHEC', x, OY + 8);
   }
 
   // HUD écus des deux joueurs (joueur actif encadré, liseré latéral coloré).
@@ -3167,20 +3136,11 @@ function dessineMenuMobile(ctx, state) {
   const glow = ctx.createRadialGradient(20, 0, 0, 20, 260, 340);
   glow.addColorStop(0, `${C.wine}66`); glow.addColorStop(1, `${C.wine}00`);
   ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
-  // Wordmark : icône du jeu à côté de « ROY / CHEC ».
-  const logoSize = 28, logoGap = 7, logoX = 18, logoY = 42;
   ctx.font = `600 28px Georgia, "Times New Roman", serif`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  if (faviconPrête()) {
-    ctx.drawImage(faviconImg, logoX, logoY - logoSize / 2, logoSize, logoSize);
-    const royX = logoX + logoSize + logoGap;
-    ctx.fillStyle = C.text; ctx.fillText('ROY', royX, logoY);
-    const royW = ctx.measureText('ROY').width;
-    ctx.fillStyle = C.amberLight; ctx.fillText('CHEC', royX + royW, logoY);
-  } else {
-    ctx.fillStyle = C.text; ctx.fillText('♞ ROY', 18, 42);
-    ctx.fillStyle = C.amberLight; ctx.fillText('CHEC', 112, 42);
-  }
+  ctx.fillStyle = C.text; ctx.fillText('ROY', 18, 42);
+  const royW = ctx.measureText('ROY').width;
+  ctx.fillStyle = C.amberLight; ctx.fillText('CHEC', 18 + royW, 42);
 
   // Navigation d'apprentissage en premier : Tutoriel / Apprendre au-dessus de Jouer.
   const modeY = 136, modeH = 230;
@@ -3985,20 +3945,11 @@ function dessineMenuDashboard(ctx, state) {
   const glowB = ctx.createRadialGradient(CANVAS_W, 30, 0, CANVAS_W - 90, 220, 500);
   glowB.addColorStop(0, `${UI_THEME.primaryDark}42`); glowB.addColorStop(1, `${UI_THEME.primaryDark}00`);
   ctx.fillStyle = glowB; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  // Wordmark : icône du jeu à côté de « ROY / CHEC ».
-  const logoSize = 34, logoGap = 8, logoX = 32, logoY = 66;
-  if (faviconPrête()) {
-    ctx.drawImage(faviconImg, logoX, logoY - logoSize / 2, logoSize, logoSize);
-    const royX = logoX + logoSize + logoGap;
-    ctx.font = `600 36px ${F_DB_BRAND}`;
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    const royW = ctx.measureText('ROY').width;
-    dbText('ROY', royX, logoY, `600 36px ${F_DB_BRAND}`);
-    dbText('CHEC', royX + royW, logoY, `italic 500 36px ${F_DB_BRAND}`, C.goldBright);
-  } else {
-    dbText('♞ ROY', 32, 66, `600 36px ${F_DB_BRAND}`);
-    dbText('CHEC', 139, 66, `italic 500 36px ${F_DB_BRAND}`, C.goldBright);
-  }
+  ctx.font = `600 36px ${F_DB_BRAND}`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const royW = ctx.measureText('ROY').width;
+  dbText('ROY', 32, 66, `600 36px ${F_DB_BRAND}`);
+  dbText('CHEC', 32 + royW, 66, `italic 500 36px ${F_DB_BRAND}`, C.goldBright);
   // Zone centrale HTML : plateau / feuille / panneau latéral.
   const boardX = 24, boardW = 430;
   dbCard(boardX, mainY, boardW, mainH, C.panel, R_CARD);
@@ -4082,7 +4033,9 @@ function dessineMatchmaking(ctx, state) {
   }
 
   // Wordmark.
-  dessineWordmark(ctx, cx, 86, 36, 'center');
+  ctx.fillStyle = UI_THEME.text; ctx.font = `36px ${F_DISPLAY}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('ROYCHEC', cx, 86);
 
   const wB = lobbyW, hB = mobileLobby ? 56 : 52;
 
@@ -5553,7 +5506,9 @@ function dessineTutorielHUD(ctx, state, x, w, now) {
 
   // Titre — wordmark. Retiré sur téléphone pour gagner de la place.
   if (!(state.ui && state.ui.mobileGameplay)) {
-    dessineWordmark(ctx, x, OY + 8, 22, 'left');
+    ctx.fillStyle = UI_THEME.text; ctx.font = `22px ${F_DISPLAY}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText('ROYCHEC', x, OY + 8);
   }
 
   // Le suivi détaillé des étapes n'est pas répété sous le plateau : le niveau
