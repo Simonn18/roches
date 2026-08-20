@@ -63,7 +63,7 @@
     ]
   }
   </script>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='88'%3E%E2%99%9E%3C/text%3E%3C/svg%3E" />
+  <link rel="icon" type="image/png" href="./assets/favicon.png" />
   <style>
     /* Polices locales (DA §3) — .woff2 dans assets/fonts, jamais de CDN.
        font-display: swap => affichage immédiat en fallback puis bascule sans blocage. */
@@ -496,15 +496,6 @@
       <button id="deck-rename-cancel" type="button">Annuler</button>
     </div>
   </div>
-
-  <!-- Bloc d'introduction (SEO) : pitch d'accueil court, texte crawlable visible
-       sous le jeu (jamais masqué). Volontairement DIFFÉRENT du panneau « À propos »
-       (règles détaillées du jeu) pour ne pas faire doublon : ici un simple pitch.
-       Traduit en EN par appliquerTraductions (voir i18n.js). -->
-  <section class="seo-intro">
-    <h1>Roychec — jeu d'échecs en ligne</h1>
-    <p>Roychec est un jeu d'échecs 2D gratuit, jouable directement dans le navigateur sans installation : affronte des joueurs en PvP en ligne en temps réel ou joue contre l'IA, et grimpe au classement par trophées.</p>
-  </section>
 
   <script type="module" src="./src/main.js?v=233"></script>
 </body>
