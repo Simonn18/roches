@@ -1,0 +1,10 @@
+# roychec — Redirection HTTP → HTTPS.
+# Règles officielles o2switch (guide « Forcer l'utilisation du HTTPS »).
+# ⚠️ Ordre de déploiement : installer d'abord le certificat Let's Encrypt
+# (cPanel → Sécurité → Let's Encrypt SSL → Générer pour roychec.com), SINON les
+# visiteurs arrivent sur le certificat auto-signé d'o2switch et le site semble
+# cassé. Détail complet : DEPLOYMENT.md §HTTPS.
+RewriteEngine On
+RewriteCond %{HTTP:X-Forwarded-Proto} !https
+RewriteCond %{HTTPS} !on
+RewriteRule ^(.*) https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
