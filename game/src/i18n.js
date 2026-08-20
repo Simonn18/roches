@@ -612,15 +612,11 @@ const TEXT = {
     'Plus tard': 'Later',
     'Scanne ce QR code dans ton application d’authentification, puis saisis le code affiché.': 'Scan this QR code in your authenticator app, then enter the displayed code.',
     'Impossible de scanner ? Saisis cette clé manuellement dans ton application :': 'Unable to scan? Enter this key manually in your app:',
-    // Bloc d'introduction (SEO) sous le jeu. Apostrophes droites échappées,
+    // Bloc d'introduction (SEO) sous le jeu : pitch court, volontairement distinct
+    // du panneau « À propos » (règles détaillées). Apostrophes droites échappées,
     // à faire correspondre EXACTEMENT au HTML (appliquerTraductions = match littéral).
     'Roychec — jeu d\'échecs en ligne': 'Roychec — online chess game',
-    'Roychec est un jeu d\'échecs 2D gratuit, jouable directement dans le navigateur, sans installation. Affronte d\'autres joueurs en PvP en ligne en temps réel, ou joue en solo contre l\'IA, fais évoluer tes pièces avec des cartes d\'amélioration et grimpe au classement par trophées.': 'Roychec is a free 2D chess game that runs directly in your browser, no installation needed. Play against other players in real-time online PvP, or solo against the AI, upgrade your pieces with enhancement cards and climb the trophy leaderboard.',
-    'PvP en ligne en temps réel : matchmaking public et parties privées avec code d\'invitation': 'Real-time online PvP: public matchmaking and private games with an invite code',
-    'Mode solo contre l\'IA avec 3 niveaux de difficulté': 'Solo mode against the AI with 3 difficulty levels',
-    'Évolution des pièces : tours, remparts, sacrifices, ruée…': 'Piece evolution: towers, ramparts, sacrifices, charge…',
-    'Parties classées et classement par trophées': 'Ranked games and trophy leaderboard',
-    'Gratuit, jouable en invité sans compte obligatoire': 'Free, playable as a guest with no account required',
+    'Roychec est un jeu d\'échecs 2D gratuit, jouable directement dans le navigateur sans installation : affronte des joueurs en PvP en ligne en temps réel ou joue contre l\'IA, et grimpe au classement par trophées.': 'Roychec is a free 2D chess game that runs directly in your browser with no installation: play against other players in real-time online PvP or against the AI, and climb the trophy leaderboard.',
     'Vérifier et activer': 'Verify and enable',
     'Vérification 2FA': '2FA verification',
     'Entre le code à 6 chiffres de ton application d’authentification pour continuer.': 'Enter the 6-digit code from your authenticator app to continue.',

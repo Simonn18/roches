@@ -144,8 +144,6 @@
       font-weight: 400; font-size: 20px;
       color: var(--ui-text);
     }
-    .seo-intro ul { margin: 12px 0 0; padding-left: 20px; }
-    .seo-intro li { margin-bottom: 6px; }
 
     /* --- Overlay d'authentification (cycle A, spec-online §5.1) ---
        Saisie texte (email / code OTP / pseudo) via de vrais <input> DOM superposés au
@@ -499,19 +497,13 @@
     </div>
   </div>
 
-  <!-- Bloc d'introduction (SEO) : texte crawlable, visible sous le jeu (jamais
-       masqué — c'est le contenu que Google indexe au-delà du title/meta).
+  <!-- Bloc d'introduction (SEO) : pitch d'accueil court, texte crawlable visible
+       sous le jeu (jamais masqué). Volontairement DIFFÉRENT du panneau « À propos »
+       (règles détaillées du jeu) pour ne pas faire doublon : ici un simple pitch.
        Traduit en EN par appliquerTraductions (voir i18n.js). -->
   <section class="seo-intro">
     <h1>Roychec — jeu d'échecs en ligne</h1>
-    <p>Roychec est un jeu d'échecs 2D gratuit, jouable directement dans le navigateur, sans installation. Affronte d'autres joueurs en PvP en ligne en temps réel, ou joue en solo contre l'IA, fais évoluer tes pièces avec des cartes d'amélioration et grimpe au classement par trophées.</p>
-    <ul>
-      <li>PvP en ligne en temps réel : matchmaking public et parties privées avec code d'invitation</li>
-      <li>Mode solo contre l'IA avec 3 niveaux de difficulté</li>
-      <li>Évolution des pièces : tours, remparts, sacrifices, ruée…</li>
-      <li>Parties classées et classement par trophées</li>
-      <li>Gratuit, jouable en invité sans compte obligatoire</li>
-    </ul>
+    <p>Roychec est un jeu d'échecs 2D gratuit, jouable directement dans le navigateur sans installation : affronte des joueurs en PvP en ligne en temps réel ou joue contre l'IA, et grimpe au classement par trophées.</p>
   </section>
 
   <script type="module" src="./src/main.js?v=233"></script>
