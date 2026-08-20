@@ -131,6 +131,21 @@
     canvas.game-screen {
       width: min(100%, 820px);
     }
+    /* --- Bloc d'introduction (SEO) : texte crawlable visible sous le jeu. ---
+       Visible (jamais caché) : c'est ce que Google indexe au-delà du title/meta. */
+    .seo-intro {
+      width: min(100% - 32px, 820px); box-sizing: border-box;
+      margin: 28px auto 48px; padding: 0 4px;
+      color: var(--ui-subtext); font-size: 14px; line-height: 1.6;
+    }
+    .seo-intro h1 {
+      margin: 0 0 10px;
+      font-family: 'Archivo Black', 'Nunito Sans', system-ui, sans-serif;
+      font-weight: 400; font-size: 20px;
+      color: var(--ui-text);
+    }
+    .seo-intro ul { margin: 12px 0 0; padding-left: 20px; }
+    .seo-intro li { margin-bottom: 6px; }
 
     /* --- Overlay d'authentification (cycle A, spec-online §5.1) ---
        Saisie texte (email / code OTP / pseudo) via de vrais <input> DOM superposés au
@@ -483,6 +498,21 @@
       <button id="deck-rename-cancel" type="button">Annuler</button>
     </div>
   </div>
+
+  <!-- Bloc d'introduction (SEO) : texte crawlable, visible sous le jeu (jamais
+       masqué — c'est le contenu que Google indexe au-delà du title/meta).
+       Traduit en EN par appliquerTraductions (voir i18n.js). -->
+  <section class="seo-intro">
+    <h1>Roychec — jeu d'échecs en ligne</h1>
+    <p>Roychec est un jeu d'échecs 2D gratuit, jouable directement dans le navigateur, sans installation. Affronte d'autres joueurs en PvP en ligne en temps réel, ou joue en solo contre l'IA, fais évoluer tes pièces avec des cartes d'amélioration et grimpe au classement par trophées.</p>
+    <ul>
+      <li>PvP en ligne en temps réel : matchmaking public et parties privées avec code d'invitation</li>
+      <li>Mode solo contre l'IA avec 3 niveaux de difficulté</li>
+      <li>Évolution des pièces : tours, remparts, sacrifices, ruée…</li>
+      <li>Parties classées et classement par trophées</li>
+      <li>Gratuit, jouable en invité sans compte obligatoire</li>
+    </ul>
+  </section>
 
   <script type="module" src="./src/main.js?v=233"></script>
 </body>
