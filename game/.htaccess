@@ -8,3 +8,17 @@ RewriteEngine On
 RewriteCond %{HTTP:X-Forwarded-Proto} !https
 RewriteCond %{HTTPS} !on
 RewriteRule ^(.*) https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# --- HSTS (Strict-Transport-Security) ---
+# Signale aux navigateurs de n'utiliser QUE https://roychec.com (jamais http://)
+# pendant 1 an, même si l'utilisateur tape une URL en http ou clique un lien http.
+# À n'activer qu'une fois le HTTPS validé (c'est le cas) : sinon les visiteurs
+# resteraient bloqués sur un site inaccessible.
+# NE PAS ajouter includeSubDomains pour l'instant : les sous-domaines cPanel
+# (cpanel., webmail., mail., …) n'ont pas tous un certificat Let's Encrypt — HSTS
+# les forcerait en HTTPS et le navigateur bloquerait l'accès.
+# (preload : nécessite includeSubDomains + soumission à la liste de préchargement
+# HSTS — à réserver pour plus tard, engagement irréversible d'abandon de l'http.)
+<IfModule mod_headers.c>
+  Header always set Strict-Transport-Security "max-age=31536000"
+</IfModule>

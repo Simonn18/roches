@@ -72,7 +72,7 @@ chaque appel comptant comme activité API.
 ## Passer le site en HTTPS (Let's Encrypt)
 
 État actuel : HTTPS échoue parce qu'o2switch sert un certificat **auto-signé** par défaut
-(`SSL certificate problem: self-signed certificate`). Trois étapes :
+(`SSL certificate problem: self-signed certificate`). La procédure :
 
 1. **Installer le certificat gratuit** : cPanel → Sécurité → **Let's Encrypt SSL** →
    « Générer » en face de `roychec.com`. Décocher les domaines `.odns.fr` /
@@ -88,6 +88,10 @@ chaque appel comptant comme activité API.
 4. **Vérifier** : `https://roychec.com` → cadenas vert, puis `http://roychec.com`
    doit répondre en 301 vers HTTPS (rechargement forcé `Cmd+Shift+R`). Le jeu ne
    référence aucune ressource `http://` (contrôlé) : aucun contenu mixte attendu.
+5. **HSTS** : l'en-tête `Strict-Transport-Security: max-age=31536000` est déjà posé
+   dans `game/.htaccess` (sans `includeSubDomains` : les sous-domaines cPanel n'ont
+   pas tous un certificat Let's Encrypt). Vérifier :
+   `curl -sI https://roychec.com | grep -i strict-transport` → en-tête présent.
 
 ## Dépannage
 
