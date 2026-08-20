@@ -611,6 +611,7 @@ const TEXT = {
     'Activer la 2FA': 'Enable 2FA',
     'Plus tard': 'Later',
     'Scanne ce QR code dans ton application d’authentification, puis saisis le code affiché.': 'Scan this QR code in your authenticator app, then enter the displayed code.',
+    'Impossible de scanner ? Saisis cette clé manuellement dans ton application :': 'Unable to scan? Enter this key manually in your app:',
     'Vérifier et activer': 'Verify and enable',
     'Vérification 2FA': '2FA verification',
     'Entre le code à 6 chiffres de ton application d’authentification pour continuer.': 'Enter the 6-digit code from your authenticator app to continue.',

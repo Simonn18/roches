@@ -19,7 +19,50 @@
        ne s'applique qu'aux ressources post-premiere-frame, etc.). -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'self'">
-  <title>roychec</title>
+  <title>Roychec — Jeu d'échecs en ligne</title>
+  <meta name="description"
+        content="Roychec : jeu d'échecs 2D jouable dans le navigateur. Affronte des joueurs en PvP temps réel ou l'IA (3 niveaux), fais évoluer tes pièces et grimpe au classement. Gratuit." />
+  <link rel="canonical" href="https://roychec.com/" />
+  <!-- Réseaux sociaux (Open Graph + Twitter Cards) -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Roychec" />
+  <meta property="og:locale" content="fr_FR" />
+  <meta property="og:title" content="Roychec — Jeu d'échecs en ligne" />
+  <meta property="og:description"
+        content="Affronte des joueurs en PvP temps réel ou l'IA, fais évoluer tes pièces et grimpe au classement. Gratuit, dans le navigateur." />
+  <meta property="og:url" content="https://roychec.com/" />
+  <meta property="og:image" content="https://roychec.com/assets/og-image.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Roychec — Jeu d'échecs en ligne" />
+  <meta name="twitter:description"
+        content="Affronte des joueurs en PvP temps réel ou l'IA, fais évoluer tes pièces et grimpe au classement. Gratuit." />
+  <meta name="twitter:image" content="https://roychec.com/assets/og-image.png" />
+  <!-- Données structurées (schema.org : WebSite + VideoGame) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "name": "Roychec",
+        "url": "https://roychec.com/",
+        "inLanguage": "fr"
+      },
+      {
+        "@type": "VideoGame",
+        "name": "Roychec",
+        "url": "https://roychec.com/",
+        "image": "https://roychec.com/assets/og-image.png",
+        "description": "Jeu d'échecs 2D jouable dans le navigateur : PvP en ligne en temps réel, mode solo contre l'IA, évolution des pièces et classement par trophées.",
+        "applicationCategory": "Game",
+        "operatingSystem": "Any",
+        "genre": "Chess",
+        "inLanguage": "fr",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+      }
+    ]
+  }
+  </script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='88'%3E%E2%99%9E%3C/text%3E%3C/svg%3E" />
   <style>
     /* Polices locales (DA §3) — .woff2 dans assets/fonts, jamais de CDN.
@@ -119,6 +162,15 @@
     .auth-card input:focus { border-color: var(--ui-amber); }
     #auth-code, #auth-mfa-setup-code, #auth-mfa-challenge-code { letter-spacing: 6px; text-align: center; font-weight: 700; }
     #auth-mfa-qr { display: block; width: 180px; height: 180px; margin: 0 auto 14px; background: #fff; border-radius: 8px; padding: 8px; }
+    #auth-mfa-secret-wrap p { margin-bottom: 6px; }
+    #auth-mfa-secret {
+      display: block; width: fit-content; max-width: 100%; box-sizing: border-box;
+      margin: 0 auto 14px; padding: 8px 12px;
+      background: rgba(127,127,127,.18); border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 15px; letter-spacing: 2px; word-break: break-all;
+      user-select: all; /* appui long → tout sélectionner → copier, utile sur mobile */
+    }
 
     /* --- Écran de choix : 3 grosses options distinctes (icône + titre + explication) --- */
     .auth-method {
@@ -362,6 +414,10 @@
         <h2>Activer la 2FA</h2>
         <p>Scanne ce QR code dans ton application d’authentification, puis saisis le code affiché.</p>
         <img id="auth-mfa-qr" alt="QR code de configuration de la double authentification" hidden />
+        <div id="auth-mfa-secret-wrap" hidden>
+          <p>Impossible de scanner ? Saisis cette clé manuellement dans ton application :</p>
+          <code id="auth-mfa-secret"></code>
+        </div>
         <input id="auth-mfa-setup-code" type="text" inputmode="numeric" autocomplete="one-time-code"
                maxlength="6" pattern="[0-9]{6}" placeholder="Code à 6 chiffres" />
         <button id="auth-mfa-setup-verify" class="auth-btn" type="button">Vérifier et activer</button>

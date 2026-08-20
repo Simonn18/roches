@@ -93,6 +93,35 @@ chaque appel comptant comme activité API.
    pas tous un certificat Let's Encrypt). Vérifier :
    `curl -sI https://roychec.com | grep -i strict-transport` → en-tête présent.
 
+## Référencement (Google — visibilité « roychec »)
+
+État au 20/08/2026 : site **pas encore indexé** (aucune meta, pas de sitemap). Le socle
+est dans le repo et se déploie automatiquement :
+
+- `game/index.html` : title descriptif, meta description, canonical, Open Graph / Twitter
+  Cards, JSON-LD (schema.org `WebSite` + `VideoGame`) — testé sous la CSP stricte du jeu
+  (le JSON-LD inline n'est pas bloqué).
+- `game/robots.txt` + `game/sitemap.xml` → déployés à la racine du site.
+- `game/assets/og-image.png` (1200×630, généré depuis le favicon).
+- `.htaccess` : redirection `www.roychec.com` → `roychec.com` (canonical unique).
+
+Pour passer du « socle » à « visible dans Google » :
+
+1. **Google Search Console** (https://search.google.com/search-console) → « Ajouter une
+   propriété » → `https://roychec.com` (ou propriété de **domaine** `roychec.com` via une
+   entrée TXT dans les DNS chez o2switch).
+2. Vérifier la propriété (fichier HTML à déposer dans `public_html`, ou TXT DNS).
+3. **Sitemaps** → soumettre `https://roychec.com/sitemap.xml`.
+4. **Inspection d'URL** → `https://roychec.com/` → « Demander l'indexation ».
+5. Patienter quelques jours, puis tester « roychec » dans Google.
+
+Notes :
+
+- L'indexation d'un site neuf prend généralement 1 à 2 semaines.
+- Le jeu est une application canvas : presque aucun texte crawlable — le
+  title/description/JSON-LD portent le SEO. Un vrai texte d'intro visible (hors canvas)
+  améliorerait le référencement plus tard (à décider avec le game-designer).
+
 ## Dépannage
 
 | Symptôme | Cause probable |

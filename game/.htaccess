@@ -9,6 +9,11 @@ RewriteCond %{HTTP:X-Forwarded-Proto} !https
 RewriteCond %{HTTPS} !on
 RewriteRule ^(.*) https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
+# www → non-www (canonical SEO : www.roychec.com et roychec.com servent tous
+# deux le site — une seule URL référencée évite le contenu dupliqué).
+RewriteCond %{HTTP_HOST} ^www\.roychec\.com$ [NC]
+RewriteRule ^(.*) https://roychec.com/$1 [L,R=301]
+
 # --- HSTS (Strict-Transport-Security) ---
 # Signale aux navigateurs de n'utiliser QUE https://roychec.com (jamais http://)
 # pendant 1 an, même si l'utilisateur tape une URL en http ou clique un lien http.

@@ -684,6 +684,20 @@ async function commencerActivationMfa() {
     el.mfaQr.onload = () => { el.mfaQr.hidden = false; };
     el.mfaQr.hidden = true;
     el.mfaQr.src = qrCode;
+    // Clé de secours (base32) sous le QR : permet l'enrôlement quand le scan est
+    // impossible — QR affiché sur l'écran du téléphone, lecteur défaillant… On
+    // saisit alors la clé manuellement dans l'app d'authentification (standard
+    // GitHub/Discord). Si Supabase ne la renvoie pas, on masque simplement le bloc.
+    const secret = data.totp && data.totp.secret
+      ? String(data.totp.secret).toUpperCase().replace(/\s+/g, '')
+      : '';
+    if (secret) {
+      el.mfaSecret.textContent = formaterSecret(secret);
+      el.mfaSecretWrap.hidden = false;
+    } else {
+      el.mfaSecret.textContent = '';
+      el.mfaSecretWrap.hidden = true;
+    }
     el.mfaSetupCode.value = '';
     montrerEcran('mfa-setup');
     message('Scanne le QR code, puis saisis le code généré.', false);
@@ -698,9 +712,16 @@ async function commencerActivationMfa() {
     pendingMfaFactorId = null;
     el.mfaQr.removeAttribute('src');
     el.mfaQr.hidden = true;
+    el.mfaSecret.textContent = '';
+    el.mfaSecretWrap.hidden = true;
     el.mfaEnable.disabled = false;
     message(traduireErreurMfa(e), true);
   }
+}
+
+// Groupe une clé base32 en blocs de 4 pour une saisie manuelle sans erreur.
+function formaterSecret(secret) {
+  return secret.replace(/(.{4})/g, '$1 ').trim();
 }
 
 function normaliserQrCode(value) {
@@ -960,6 +981,8 @@ function cacheDom() {
   el.mfaEnable = q('auth-mfa-enable');
   el.mfaLater = q('auth-mfa-later');
   el.mfaQr = q('auth-mfa-qr');
+  el.mfaSecret = q('auth-mfa-secret');
+  el.mfaSecretWrap = q('auth-mfa-secret-wrap');
   el.mfaSetupCode = q('auth-mfa-setup-code');
   el.mfaSetupVerify = q('auth-mfa-setup-verify');
   el.mfaSetupBack = q('auth-mfa-setup-back');
