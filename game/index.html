@@ -19,23 +19,23 @@
        ne s'applique qu'aux ressources post-premiere-frame, etc.). -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'self'">
-  <title>Roychec — Jeu d'échecs en ligne</title>
+  <title>Roychec</title>
   <meta name="description"
-        content="Roychec : jeu d'échecs 2D jouable dans le navigateur. Affronte des joueurs en PvP temps réel ou l'IA (3 niveaux), fais évoluer tes pièces et grimpe au classement. Gratuit." />
+        content="Roychec est un jeu d'échecs amélioré : achète des améliorations pour tes pièces au fil de la partie et crée tes propres decks pour prendre l'avantage et gagner !" />
   <link rel="canonical" href="https://roychec.com/" />
   <!-- Réseaux sociaux (Open Graph + Twitter Cards) -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Roychec" />
   <meta property="og:locale" content="fr_FR" />
-  <meta property="og:title" content="Roychec — Jeu d'échecs en ligne" />
+  <meta property="og:title" content="Roychec" />
   <meta property="og:description"
-        content="Affronte des joueurs en PvP temps réel ou l'IA, fais évoluer tes pièces et grimpe au classement. Gratuit, dans le navigateur." />
+        content="Roychec est un jeu d'échecs amélioré : achète des améliorations pour tes pièces et crée tes propres decks pour prendre l'avantage et gagner !" />
   <meta property="og:url" content="https://roychec.com/" />
   <meta property="og:image" content="https://roychec.com/assets/og-image.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Roychec — Jeu d'échecs en ligne" />
   <meta name="twitter:description"
-        content="Affronte des joueurs en PvP temps réel ou l'IA, fais évoluer tes pièces et grimpe au classement. Gratuit." />
+        content="Roychec est un jeu d'échecs amélioré : achète des améliorations pour tes pièces et crée tes propres decks pour prendre l'avantage et gagner !" />
   <meta name="twitter:image" content="https://roychec.com/assets/og-image.png" />
   <!-- Données structurées (schema.org : WebSite + VideoGame) -->
   <script type="application/ld+json">
@@ -53,7 +53,7 @@
         "name": "Roychec",
         "url": "https://roychec.com/",
         "image": "https://roychec.com/assets/og-image.png",
-        "description": "Jeu d'échecs 2D jouable dans le navigateur : PvP en ligne en temps réel, mode solo contre l'IA, évolution des pièces et classement par trophées.",
+        "description": "Roychec est un jeu d'échecs amélioré : achète des améliorations pour tes pièces au fil de la partie et crée tes propres decks pour prendre l'avantage et gagner !",
         "applicationCategory": "Game",
         "operatingSystem": "Any",
         "genre": "Chess",
@@ -63,7 +63,10 @@
     ]
   }
   </script>
-  <link rel="icon" type="image/png" href="./assets/favicon.png" />
+  <!-- Icône du site : PNG compatible avec Google Search, SVG pour les navigateurs modernes. -->
+  <link rel="icon" type="image/png" sizes="48x48" href="./assets/favicon.png" />
+  <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+  <link rel="apple-touch-icon" sizes="180x180" href="./assets/favicon.png" />
   <style>
     /* Polices locales (DA §3) — .woff2 dans assets/fonts, jamais de CDN.
        font-display: swap => affichage immédiat en fallback puis bascule sans blocage. */
@@ -332,9 +335,14 @@
 <body>
   <canvas id="jeu" width="980" height="640"></canvas>
 
+  <section class="seo-intro" aria-labelledby="seo-title">
+    <h1 id="seo-title">Roychec, le jeu d'échecs amélioré</h1>
+    <p>Achète des améliorations pour tes pièces au fil de la partie et crée tes propres decks pour prendre l'avantage et gagner. Joue gratuitement dans ton navigateur.</p>
+  </section>
+
   <!-- Overlay d'auth (cycle A v3, refonte UX). Un seul écran visible à la fois via [hidden].
        Écrans : choice → (magic | password) → sent → pseudo. Voir account.js. -->
-  <div id="auth-overlay" hidden>
+  <div id="auth-overlay" hidden data-nosnippet>
     <div class="auth-card">
       <button id="auth-close" type="button" aria-label="Fermer">×</button>
 
