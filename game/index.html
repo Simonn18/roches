@@ -21,7 +21,7 @@
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'self'">
   <title>Roychec</title>
   <meta name="description"
-        content="Roychec est un jeu d'échecs amélioré : achète des améliorations pour tes pièces au fil de la partie et crée tes propres decks pour prendre l'avantage et gagner !" />
+        content="Roychec est un jeu d'échecs amélioré : achète des améliorations au fil de la partie et crée tes propres decks pour prendre l'avantage et gagner !" />
   <link rel="canonical" href="https://roychec.com/" />
   <!-- Réseaux sociaux (Open Graph + Twitter Cards) -->
   <meta property="og:type" content="website" />
@@ -29,13 +29,13 @@
   <meta property="og:locale" content="fr_FR" />
   <meta property="og:title" content="Roychec" />
   <meta property="og:description"
-        content="Roychec est un jeu d'échecs amélioré : achète des améliorations pour tes pièces et crée tes propres decks pour prendre l'avantage et gagner !" />
+        content="Roychec est un jeu d'échecs amélioré : achète des améliorations et crée tes propres decks pour prendre l'avantage et gagner !" />
   <meta property="og:url" content="https://roychec.com/" />
   <meta property="og:image" content="https://roychec.com/assets/og-image.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Roychec — Jeu d'échecs en ligne" />
   <meta name="twitter:description"
-        content="Roychec est un jeu d'échecs amélioré : achète des améliorations pour tes pièces et crée tes propres decks pour prendre l'avantage et gagner !" />
+        content="Roychec est un jeu d'échecs amélioré : achète des améliorations et crée tes propres decks pour prendre l'avantage et gagner !" />
   <meta name="twitter:image" content="https://roychec.com/assets/og-image.png" />
   <!-- Données structurées (schema.org : WebSite + VideoGame) -->
   <script type="application/ld+json">
@@ -53,7 +53,7 @@
         "name": "Roychec",
         "url": "https://roychec.com/",
         "image": "https://roychec.com/assets/og-image.png",
-        "description": "Roychec est un jeu d'échecs amélioré : achète des améliorations pour tes pièces au fil de la partie et crée tes propres decks pour prendre l'avantage et gagner !",
+        "description": "Roychec est un jeu d'échecs amélioré : achète des améliorations au fil de la partie et crée tes propres decks pour prendre l'avantage et gagner !",
         "applicationCategory": "Game",
         "operatingSystem": "Any",
         "genre": "Chess",
@@ -134,20 +134,6 @@
     canvas.game-screen {
       width: min(100%, 820px);
     }
-    /* --- Bloc d'introduction (SEO) : texte crawlable visible sous le jeu. ---
-       Visible (jamais caché) : c'est ce que Google indexe au-delà du title/meta. */
-    .seo-intro {
-      width: min(100% - 32px, 820px); box-sizing: border-box;
-      margin: 28px auto 48px; padding: 0 4px;
-      color: var(--ui-subtext); font-size: 14px; line-height: 1.6;
-    }
-    .seo-intro h1 {
-      margin: 0 0 10px;
-      font-family: 'Archivo Black', 'Nunito Sans', system-ui, sans-serif;
-      font-weight: 400; font-size: 20px;
-      color: var(--ui-text);
-    }
-
     /* --- Overlay d'authentification (cycle A, spec-online §5.1) ---
        Saisie texte (email / code OTP / pseudo) via de vrais <input> DOM superposés au
        canvas : le Canvas 2D ne gère pas nativement le clavier/curseur. L'overlay est
@@ -334,11 +320,6 @@
 </head>
 <body>
   <canvas id="jeu" width="980" height="640"></canvas>
-
-  <section class="seo-intro" aria-labelledby="seo-title">
-    <h1 id="seo-title">Roychec, le jeu d'échecs amélioré</h1>
-    <p>Achète des améliorations pour tes pièces au fil de la partie et crée tes propres decks pour prendre l'avantage et gagner. Joue gratuitement dans ton navigateur.</p>
-  </section>
 
   <!-- Overlay d'auth (cycle A v3, refonte UX). Un seul écran visible à la fois via [hidden].
        Écrans : choice → (magic | password) → sent → pseudo. Voir account.js. -->
