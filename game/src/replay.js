@@ -97,6 +97,7 @@ export function recordMove(state, piece, from, to, capturedType, bonus, mv, gain
     pasDiag: !!(mv && mv.pasDiag),
     grandSaut: !!(mv && mv.grandSaut),
     hauteFuite: !!(mv && mv.hauteFuite),
+    specialUpgrade: mv && mv.specialUpgrade ? mv.specialUpgrade : null,
     promo: mv && mv.promotion ? piece.type : null,
     castle: mv && mv.castle
       ? { rookFrom: toAlgebraic(mv.castle.rookFrom.r, mv.castle.rookFrom.c, state.board),

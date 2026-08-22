@@ -2,7 +2,7 @@
 // MVP (GDD §9) : hot-seat 2 joueurs, économie d'écus, 1 amélioration par type de pièce.
 // Cycle 1 IA (design/spec-ia.md) : menu d'accueil, mode PvAI optionnel, hook bot dummy.
 import { creerEtat, creerPlateau, inB, caseAt } from './board.js?v=110';
-import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8 } from './rules.js?v=116';
+import { coupsLegaux, ciblesRuee, ciblesRayon, ciblesVet, DIRS8, ameliorationUtilisee, consommerAmelioration } from './rules.js?v=116';
 import { initialiserChasse, recolterChasse } from './hunt.js?v=5';
 import { render, pixelVersCase, cellCenter, vueCase } from './render.js?v=218';
 import { iaDecideTour } from './ai.js?v=113';
@@ -617,8 +617,7 @@ function executerEvenementReplay(e) {
     state.board[from.r][from.c] = null;
     piece.r = to.r; piece.c = to.c;
     piece.aBouge = true;
-    if (e.grandSaut) piece.cooldowns['grand-saut'] = UPGRADES['grand-saut'].cooldown;
-    if (e.hauteFuite) piece.cooldowns['haute-fuite'] = UPGRADES['haute-fuite'].cooldown;
+    if (e.specialUpgrade) consommerAmelioration(piece, e.specialUpgrade);
     state.board[to.r][to.c] = piece;
     // Roque (GDD §5.1.b) : rejoue aussi le déplacement de la tour.
     if (e.castle) {
@@ -635,6 +634,7 @@ function executerEvenementReplay(e) {
     if (e.promo) {
       piece.type = e.promo;
       piece.upgrades = [];
+      piece.usedUpgrades = [];
       piece.shield = false;
       piece.cooldowns = {};
       piece._goldT = performance.now();
@@ -1163,15 +1163,17 @@ function resoudreApresCoup(piece, canChain, wasCapture) {
   if (piece.type === 'N' && piece.upgrades.includes('second')) {
     if (state.chain && state.chain.piece === piece && state.chain.type === 'second-galop') {
       // C'était le 2e saut : cooldown posé, le tour est consommé.
-      piece.cooldowns.second = UPGRADES['second'].cooldown;
+      consommerAmelioration(piece, 'second');
       finDeTour();
       return;
     }
-    if (canChain && !wasCapture && (piece.cooldowns.second || 0) === 0) {
+    if (canChain && !wasCapture && !ameliorationUtilisee(piece, 'second')) {
       state.chain = { piece, type: 'second-galop' };
       state.phase = 'play';
       selectionner(piece);
-      state.legalMoves = state.legalMoves.filter((m) => !m.capture); // 2e saut : jamais de capture
+      state.legalMoves = state.legalMoves
+        .filter((m) => !m.capture)
+        .map((m) => ({ ...m, specialUpgrade: 'second' })); // 2e saut : activation unique, jamais de capture
       if (estTourIA()) planifierCoupIA();
       return;
     }
@@ -1192,6 +1194,7 @@ function jouerCoup(piece, mv) {
     // revenu de base est appliqué via state.variant.revenueBase (0 en élim. ×2).
     // Pas de recordMove : l'attaquant reste sur place, or rejouer un event move
     // déplacerait la pièce sur la case du défenseur (executerEvenementReplay).
+    if (mv.specialUpgrade) consommerAmelioration(piece, mv.specialUpgrade);
     crediterCoup(state.turn, REVENU_PAR_COUP, 0, from, false);
     // Même si la pièce ne bouge pas, cette tentative de capture consomme le tour.
     // En PvP, l'adversaire doit rejouer exactement la même résolution pour
@@ -1230,9 +1233,7 @@ function jouerCoup(piece, mv) {
   piece.r = mv.r; piece.c = mv.c;
   state.board[mv.r][mv.c] = piece;
   piece.aBouge = true; // condition du roque (GDD §5.1.b)
-  if (mv.tele) piece.cooldowns.Tele = UPGRADES['Tele'].cooldown; // Téléportation : cooldown 5 (GDD §7)
-  if (mv.grandSaut) piece.cooldowns['grand-saut'] = UPGRADES['grand-saut'].cooldown;
-  if (mv.hauteFuite) piece.cooldowns['haute-fuite'] = UPGRADES['haute-fuite'].cooldown;
+  if (mv.specialUpgrade) consommerAmelioration(piece, mv.specialUpgrade);
 
   // Roque (GDD §5.1.b) : la tour accompagne le roi dans le même coup (repositionnée
   // instantanément, assumé v1 — le roi porte l'animation de glissement).
@@ -1252,6 +1253,7 @@ function jouerCoup(piece, mv) {
   if (mv.promotion && piece.type === 'P') {
     piece.type = ['Q', 'R', 'B', 'N'].includes(mv.promo) ? mv.promo : 'Q';
     piece.upgrades = [];
+    piece.usedUpgrades = [];
     piece.shield = false;
     piece.rempartGranted = false;
     piece.cooldowns = {};
@@ -1263,11 +1265,6 @@ function jouerCoup(piece, mv) {
   // l'écart de state.ecus (revenu + bonus + éventuel filet), ce que recordMove()
   // stocke pour la fidélité du replay sous variantes élim.×2.
   const wasCapture = bonus > 0;
-  // Consommation des améliorations d'attaque unique (Folie / Feinte) lors d'une capture.
-  if (wasCapture) {
-    if (piece.type === 'B' && piece.upgrades.includes('reprise')) piece.folieUsed = true;
-    if (piece.type === 'Q' && piece.upgrades.includes('feinte')) piece.feinteUsed = true;
-  }
   const credite = crediterCoup(state.turn, REVENU_PAR_COUP,
     bonus, { r: mv.r, c: mv.c }, wasCapture);
   // Enregistrement replay : après crédit des écus et stagnation_tick (état à jour).
@@ -1980,10 +1977,15 @@ function hashState(s) {
       const cds = Object.keys(p.cooldowns).filter((k) => p.cooldowns[k] > 0)
         .sort().map((k) => k + p.cooldowns[k]).join(',');
       const up = [...p.upgrades].sort().join(',');
+      const used = [...new Set([
+        ...(Array.isArray(p.usedUpgrades) ? p.usedUpgrades : []),
+        ...(p.folieUsed ? ['reprise'] : []),
+        ...(p.feinteUsed ? ['feinte'] : []),
+      ])].sort().join(',');
       str += `${p.owner}${p.type}${p.shield ? 1 : 0}${p.sacrificeArmed ? 1 : 0}`
         + `${p.decretUsed ? 1 : 0}${p.doubleCoupUsed ? 1 : 0}${p.rempartGranted ? 1 : 0}`
         + `${p.aBouge ? 1 : 0}` // condition du roque (GDD §5.1.b) — divergence = coups légaux divergents
-        + `[${cds}][${up}]`
+        + `[${cds}][${up}][${used}]`
         + (p.epineZone ? `{${p.epineZone.r},${p.epineZone.c},${p.epineZone.turns}}` : '{}');
     }
   }
@@ -2042,6 +2044,7 @@ function pvwEmitMove(piece, from, to, capturedType, bonus, mv) {
     pasDiag: !!(mv && mv.pasDiag),
     grandSaut: !!(mv && mv.grandSaut),
     hauteFuite: !!(mv && mv.hauteFuite),
+    specialUpgrade: mv && mv.specialUpgrade ? mv.specialUpgrade : null,
     // Promotion (GDD §5.1.b) : au point d'émission piece.type EST déjà le type promu.
     promo: mv && mv.promotion ? piece.type : null,
   });
@@ -2230,6 +2233,7 @@ let _resyncId = 100000;function makePiece(d) {
   return {
     id: d.id || _resyncId++, type: d.type, owner: d.owner, r: d.r, c: d.c,
     upgrades: Array.isArray(d.upgrades) ? [...d.upgrades] : [],
+    usedUpgrades: Array.isArray(d.usedUpgrades) ? [...d.usedUpgrades] : [],
     shield: !!d.shield,
     cooldowns: d.cooldowns ? { ...d.cooldowns } : {},
     debuffs: d.debuffs ? { ...d.debuffs } : {},
@@ -2260,7 +2264,7 @@ function pvwBuildSnapshot() {
         shield: q.shield, cooldowns: q.cooldowns, debuffs: q.debuffs,
         doubleCoupUsed: q.doubleCoupUsed, decretUsed: q.decretUsed,
         sacrificeArmed: q.sacrificeArmed, rempartGranted: q.rempartGranted,
-        folieUsed: q.folieUsed, feinteUsed: q.feinteUsed, shtUsed: q.shtUsed,
+        usedUpgrades: q.usedUpgrades, folieUsed: q.folieUsed, feinteUsed: q.feinteUsed, shtUsed: q.shtUsed,
         aBouge: q.aBouge,
         epineZone: q.epineZone ? { ...q.epineZone } : null,
       });
@@ -2323,7 +2327,10 @@ function pvwApplySnapshot(snap) {
     state.chain = piece ? { piece, type: snap.chain.type } : null;
     if (state.chain) {
       selectionner(piece);
-      if (snap.chain.type === 'second-galop') state.legalMoves = state.legalMoves.filter((m) => !m.capture);
+      if (snap.chain.type === 'second-galop')    state.legalMoves = state.legalMoves
+      .filter((m) => !m.capture)
+      .map((m) => ({ ...m, specialUpgrade: 'second' }));
+
     }
   } else {
     state.chain = null;

@@ -31,7 +31,7 @@ statut: valide
   en ligne **refusent** la sélection (fallback Standard × Standard, log d'avertissement
   côté code). **Pas de timer d'horloge de partie** dans les variantes locales.
   Variantes **Élimination ×2** assorties d'un **timer d'inactivité** : seuil
-  **10 tours-joueur cumulés** sans capture par aucun camp → injection **silencieuse**
+  **  10 tours-joueur cumulés** sans capture par aucun camp → injection **silencieuse**
   de **+2 écus** au joueur qui vient de jouer (compté dans le plafond de la variante),
   reset du compteur sur la 1re capture. Catalogue 15 cartes inchangé (mêmes coûts
   4-15, mêmes cooldowns, mêmes effets). Détail mécanique §5.2.b + matrice chiffrée
@@ -294,6 +294,7 @@ que la flamme remplisse le halo au lieu d'être perdue dans le cadre large.
   - Déclencher un pouvoir actif **consomme le tour** (à la place d'un coup), sauf mention contraire
     de la carte (ex. « Double coup »).
   - Chaque pouvoir a un **cooldown en tours du joueur** (§6/§7) ; certains sont **à usage unique**.
+  - Toute amélioration de catégorie **[D]** est à **usage unique pour son mouvement spécial** : dès que ce mouvement est joué, la carte est consommée et ne génère plus ce mouvement. Les déplacements classiques de la pièce restent disponibles.
   - Un pouvoir en cooldown est indisponible (icône grisée + compteur).
 - **Effet** : dépend de la carte (bouclier, tir à distance, saut, etc.).
 - **Feedback** : icône de pouvoir sur la pièce ; anneau de cooldown ; télégraphie de la zone/cible
@@ -355,7 +356,7 @@ Conséquence pour le code : pas de champ `moveCount` déterminant les déblocage
 ## 6. Catalogue d'améliorations (MVP)
 
 Catégories : **[D]** déplacement · **[A]** actif · **[S]** stat. Coûts en écus (barème §7).
-Chaque carte est propre à un type de pièce. Cooldowns exprimés en **tours du joueur**.
+Chaque carte est propre à un type de pièce. Les cooldowns des cartes [A] sont exprimés en **tours du joueur**; les cartes [D] se consomment au premier mouvement spécial joué.
 
 ### Pion
 | Carte | Cat. | Coût | Effet |
@@ -367,7 +368,7 @@ Chaque carte est propre à un type de pièce. Cooldowns exprimés en **tours du 
 ### Cavalier
 | Carte | Cat. | Coût | Effet |
 |---|---|---|---|
-| Second galop | D | 8 | Le tour où son saut **ne capture pas**, le cavalier peut enchaîner immédiatement un **2e saut** (cooldown 3). Ce 2e saut est un **repositionnement seul : il ne peut jamais capturer** (voir §6.1). L'enchaînement est facultatif — le refuser ne pose pas le cooldown. |
+| Second galop | D | 8 | Le tour où son saut **ne capture pas**, le cavalier peut enchaîner immédiatement un **2e saut** unique. Ce 2e saut est un **repositionnement seul : il ne peut jamais capturer** (voir §6.1). L'enchaînement est facultatif — le refuser conserve la carte. |
 | Ruée (charge) | A | 9 | Actif, cooldown 4 : capture une pièce adverse à distance de cavalier **sans se déplacer**. |
 | Monture blindée | S | 7 | Absorbe la première capture subie (survit une fois), puis boost consommé. |
 
@@ -388,7 +389,7 @@ Chaque carte est propre à un type de pièce. Cooldowns exprimés en **tours du 
 ### Dame
 | Carte | Cat. | Coût | Effet |
 |---|---|---|---|
-| Téléportation courte | D | 12 | Actif à mouvement, cooldown 5 : la dame se pose sur n'importe quelle case vide à ≤3 cases (ignore les obstacles). |
+| Téléportation courte | D | 12 | Actif à mouvement à usage unique : la dame se pose sur n'importe quelle case vide à ≤3 cases (ignore les obstacles), puis la carte est consommée. |
 | Double coup | A | 15 | Actif, **usage unique**, ne consomme pas le tour : après un coup de la dame, rejouez immédiatement un 2e coup avec elle. |
 | Couronne | S | 9 | La dame absorbe la première capture subie (survit une fois). |
 
@@ -404,14 +405,12 @@ Chaque carte est propre à un type de pièce. Cooldowns exprimés en **tours du 
 > plafond de 2 améliorations par pièce.
 
 ### 6.1 Règle détaillée — Second galop
-- **Déclenchement** : uniquement après un **1er saut sans capture** du cavalier équipé, s'il n'est
-  pas en cooldown.
+- **Déclenchement** : uniquement après un **1er saut sans capture** du cavalier équipé, si la carte n'a pas déjà été consommée.
 - **2e saut** : c'est un mouvement de cavalier classique **restreint aux cases sans capture**. Le
   cavalier **ne peut jamais capturer sur son 2e saut**, même si une prise est disponible.
 - **Refus** : l'enchaînement est facultatif. Le joueur peut le **décliner** (`Espace` / bouton) ;
-  dans ce cas le cooldown **n'est pas posé** et le tour se termine.
-- **Coût** : dès qu'un 2e saut est joué, le cooldown (3 tours du joueur) est posé et le tour se
-  termine.
+  dans ce cas la carte reste disponible et le tour se termine.
+- **Coût** : dès qu'un 2e saut est joué, la carte est consommée et le tour se termine.
 - **Pourquoi cette restriction** : autoriser une capture sur le 2e saut donnerait au cavalier une
   **double prise en un seul tour** (ou une prise après repositionnement libre), un tempo bien trop
   fort pour une carte à 8 écus. Le Second galop reste un outil de **mobilité/repositionnement**,
@@ -464,7 +463,7 @@ plus tôt si le joueur capture agressivement.
 ### Cooldowns (en tours du joueur)
 | Type d'effet | Cooldown |
 |---|---|
-| Enchaînement mouvement (Second galop, Téléportation) | 3-5 |
+| Enchaînement mouvement (Second galop, Téléportation) | — (usage unique) |
 | Tir à distance (Ruée, Rayon sacré) | 4 |
 | Zone défensive (Rempart, Sacrifice) | 5-6 |
 | Usage unique (Bouclier, Double coup, Décret) | — (une fois) |

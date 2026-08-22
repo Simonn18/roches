@@ -329,10 +329,12 @@ export const STEPS = [
     },
     hint(state) { return state.selected ? null : { cells: [{ r: 4, c: 4 }] }; },
     check(state) {
-      // La téléportation pose son cooldown : preuve que le coup joué était bien un tele.
+      // La téléportation est consommée : preuve que le coup joué était bien un tele.
       for (const row of state.board) {
         for (const p of row) {
-          if (p && p.owner === 0 && p.type === 'Q') return (p.cooldowns.Tele || 0) > 0;
+          if (p && p.owner === 0 && p.type === 'Q') {
+            return Array.isArray(p.usedUpgrades) && p.usedUpgrades.includes('Tele');
+          }
         }
       }
       return false;

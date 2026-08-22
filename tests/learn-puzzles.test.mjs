@@ -17,7 +17,7 @@ const SOLUTIONS = [
   { move: { r: 4, c: 6 }, wrong: { r: 3, c: 4 } },
   { move: { r: 5, c: 2 }, wrong: { r: 3, c: 3 } },
   { target: { r: 5, c: 6 }, wrong: { r: 2, c: 3 } },
-  { move: { r: 2, c: 5 }, wrong: { r: 3, c: 3 } },
+  { move: { r: 2, c: 2 }, wrong: { r: 3, c: 3 } },
 ];
 
 function etatPuzzle(index) {
@@ -206,8 +206,8 @@ describe('Puzzles tactiques — lignes et refus des mauvais coups', () => {
   test('la réponse du puzzle 7 pointe vers le pion adverse', () => {
     const { state } = etatPuzzle(6);
     const response = puzzleReponse(state);
-    assert.deepEqual(response.from, { r: 1, c: 7 });
-    assert.deepEqual(response.to, { r: 2, c: 7 });
+    assert.deepEqual(response.from, { r: 0, c: 4 });
+    assert.deepEqual(response.to, { r: 1, c: 3 });
   });
 
   test('la réponse Couronne part bien du roi en d2', () => {
@@ -226,7 +226,9 @@ describe('Puzzles tactiques — lignes et refus des mauvais coups', () => {
 
       assert.equal(source?.owner, 1, `${PUZZLES[index].id}: réponse ennemie attendue`);
       if (!response.shieldedCapture) {
-        assert.equal(destination, null, `${PUZZLES[index].id}: arrivée libre attendue`);
+        const returnsToStartingSquare = destination === state.learnExpectedPiece;
+        assert.equal(destination === null || returnsToStartingSquare, true,
+          `${PUZZLES[index].id}: arrivée libre attendue`);
       } else {
         assert.equal(destination?.type, 'P', `${PUZZLES[index].id}: cible de reprise attendue`);
       }

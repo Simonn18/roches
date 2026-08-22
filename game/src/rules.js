@@ -17,20 +17,49 @@ export const DIRS8 = [...DIAG, ...ORTHO];
 // Types affectés par la Zone de contrôle (valeur ≤ 3 ; tour, dame et roi exemptés).
 const TYPES_FAIBLES = new Set(['P', 'N', 'B']);
 
-function pousse(m, board, p, r, c, capturableOnly = false, moveOnly = false) {
-  const t = caseAt(board, r, c);
-  if (t === undefined) return;            // hors plateau
-  if (t === null) { if (!capturableOnly) m.push({ r, c, capture: false }); return; }
-  if (t.owner !== p.owner && !moveOnly) m.push({ r, c, capture: true });
+export function ameliorationUtilisee(piece, id) {
+  if (!piece || !id) return false;
+  if (Array.isArray(piece.usedUpgrades) && piece.usedUpgrades.includes(id)) return true;
+  // Compatibilité avec les anciennes pièces/replays qui n'ont pas encore
+  // `usedUpgrades` mais ont déjà consommé Folie ou Feinte.
+  if (id === 'reprise' && piece.folieUsed) return true;
+  if (id === 'feinte' && piece.feinteUsed) return true;
+  return false;
 }
 
-function glisse(m, board, p, dirs) {
+export function consommerAmelioration(piece, id) {
+  if (!piece || !id || ameliorationUtilisee(piece, id)) return;
+  if (!Array.isArray(piece.usedUpgrades)) piece.usedUpgrades = [];
+  piece.usedUpgrades.push(id);
+  if (id === 'reprise') piece.folieUsed = true;
+  if (id === 'feinte') piece.feinteUsed = true;
+}
+
+function pousse(m, board, p, r, c, capturableOnly = false, moveOnly = false, specialUpgrade = null) {
+  const t = caseAt(board, r, c);
+  if (t === undefined) return;            // hors plateau
+  if (t === null) {
+    if (!capturableOnly) m.push({ r, c, capture: false, ...(specialUpgrade ? { specialUpgrade } : {}) });
+    return;
+  }
+  if (t.owner !== p.owner && !moveOnly) {
+    m.push({ r, c, capture: true, ...(specialUpgrade ? { specialUpgrade } : {}) });
+  }
+}
+
+function glisse(m, board, p, dirs, specialUpgrade = null) {
   for (const [dr, dc] of dirs) {
     let r = p.r + dr, c = p.c + dc;
     while (inB(board, r, c)) {
       const t = board[r][c];
-      if (t === null) { m.push({ r, c, capture: false }); }
-      else { if (t.owner !== p.owner) m.push({ r, c, capture: true }); break; }
+      if (t === null) {
+        m.push({ r, c, capture: false, ...(specialUpgrade ? { specialUpgrade } : {}) });
+      } else {
+        if (t.owner !== p.owner) {
+          m.push({ r, c, capture: true, ...(specialUpgrade ? { specialUpgrade } : {}) });
+        }
+        break;
+      }
       r += dr; c += dc;
     }
   }
@@ -67,17 +96,17 @@ function coupsPion(board, p) {
     if (t && t.owner !== p.owner) m.push({ r: p.r + dir, c: p.c + dc, capture: true });
   }
   // Marche arrière [D] : recule d'une case, case vide uniquement, jamais pour capturer.
-  if (p.upgrades.includes('marche-arriere')) {
+  if (p.upgrades.includes('marche-arriere') && !ameliorationUtilisee(p, 'marche-arriere')) {
     if (caseAt(board, p.r - dir, p.c) === null) {
-      m.push({ r: p.r - dir, c: p.c, capture: false });
+      m.push({ r: p.r - dir, c: p.c, capture: false, specialUpgrade: 'marche-arriere' });
     }
   }
   // Pas diagonal [D] : avance d'une case en diagonale, mais uniquement sur
   // une case vide — ce n'est pas une capture diagonale supplémentaire.
-  if (p.upgrades.includes('pas-diag')) {
+  if (p.upgrades.includes('pas-diag') && !ameliorationUtilisee(p, 'pas-diag')) {
     for (const dc of [-1, 1]) {
       if (caseAt(board, p.r + dir, p.c + dc) === null) {
-        m.push({ r: p.r + dir, c: p.c + dc, capture: false, pasDiag: true });
+        m.push({ r: p.r + dir, c: p.c + dc, capture: false, pasDiag: true, specialUpgrade: 'pas-diag' });
       }
     }
   }
@@ -93,7 +122,7 @@ function coupsCavalier(board, p) {
   for (const [dr, dc] of KNIGHT) pousse(m, board, p, p.r + dr, p.c + dc);
   // Grand saut [D] : bond de 3×1 ou 3×2. Le saut ne capture jamais et
   // demande une case intermédiaire libre pour éviter de traverser un obstacle.
-  if (p.upgrades.includes('grand-saut') && (p.cooldowns['grand-saut'] || 0) === 0) {
+  if (p.upgrades.includes('grand-saut') && !ameliorationUtilisee(p, 'grand-saut')) {
     for (const [dr, dc] of GRAND_SAUT) {
       // L'intermédiaire est toujours un pas de cavalier vers la destination :
       // on réduit la composante LONGUE (3 → 2, ou 2 → 1) et on conserve la
@@ -112,7 +141,7 @@ function coupsCavalier(board, p) {
       const intermediate = caseAt(board, p.r + iR, p.c + iC);
       const destination = caseAt(board, p.r + dr, p.c + dc);
       if (intermediate === null && destination === null) {
-        m.push({ r: p.r + dr, c: p.c + dc, capture: false, grandSaut: true });
+        m.push({ r: p.r + dr, c: p.c + dc, capture: false, grandSaut: true, specialUpgrade: 'grand-saut' });
       }
     }
   }
@@ -126,13 +155,15 @@ function coupsFou(board, p) {
   glisse(m, board, p, DIAG);                    // coup de base
   // Pas de côté [D] (demande user 31/07) : le fou se déplace comme un cavalier
   // (8 sauts en L), en plus de sa glisse diagonale de base.
-  if (p.upgrades.includes('pas-de-cote')) {
-    for (const [dr, dc] of KNIGHT) pousse(m, board, p, p.r + dr, p.c + dc);
+  if (p.upgrades.includes('pas-de-cote') && !ameliorationUtilisee(p, 'pas-de-cote')) {
+    for (const [dr, dc] of KNIGHT) pousse(m, board, p, p.r + dr, p.c + dc, false, false, 'pas-de-cote');
   }
   // Folie [D] : usage unique, la prochaine attaque se déplace comme une dame.
   // On ajoute tous les déplacements (capture + vides) dans les 8 directions.
-  if (p.upgrades.includes('reprise') && !p.folieUsed) {
-    glisse(m, board, p, DIRS8);
+  if (p.upgrades.includes('reprise') && !ameliorationUtilisee(p, 'reprise')) {
+    // La diagonale est déjà le déplacement normal du fou : seule la ligne
+    // orthogonale constitue l'activation spéciale de Folie.
+    glisse(m, board, p, ORTHO, 'reprise');
   }
   return m;
 }
@@ -141,12 +172,12 @@ function coupsTour(board, p) {
   const m = [];
   glisse(m, board, p, ORTHO);                    // coup de base
   // Pivot [D] : un pas d'une case en diagonale (une seule case), capture incluse.
-  if (p.upgrades.includes('pivot')) {
-    for (const [dr, dc] of DIAG) pousse(m, board, p, p.r + dr, p.c + dc);
+  if (p.upgrades.includes('pivot') && !ameliorationUtilisee(p, 'pivot')) {
+    for (const [dr, dc] of DIAG) pousse(m, board, p, p.r + dr, p.c + dc, false, false, 'pivot');
   }
   // Enjambeur [D] : la tour saute la première pièce rencontrée sur son glissement
   // (jamais le roi) et atterrit sur la première case libre derrière elle.
-  if (p.upgrades.includes('enjambeur')) {
+  if (p.upgrades.includes('enjambeur') && !ameliorationUtilisee(p, 'enjambeur')) {
     for (const [dr, dc] of ORTHO) {
       let r = p.r + dr, c = p.c + dc;
       // Glisser jusqu'à trouver une pièce
@@ -158,7 +189,7 @@ function coupsTour(board, p) {
           // Regarder la case juste derrière
           const br = r + dr, bc = c + dc;
           if (inB(board, br, bc) && board[br][bc] === null) {
-            m.push({ r: br, c: bc, capture: false });
+            m.push({ r: br, c: bc, capture: false, specialUpgrade: 'enjambeur' });
           }
           break;
         }
@@ -175,21 +206,20 @@ function coupsDame(board, p) {
 
   // Feinte [D] : usage unique, la prochaine attaque se déplace comme toutes les
   // pièces. On ajoute les déplacements à la façon du cavalier (cases vides + captures).
-  if (p.upgrades.includes('feinte') && !p.feinteUsed) {
+  if (p.upgrades.includes('feinte') && !ameliorationUtilisee(p, 'feinte')) {
     for (const [dr, dc] of KNIGHT) {
       const r = p.r + dr, c = p.c + dc;
       if (inB(board, r, c)) {
         const t = board[r][c];
-        if (t === null) m.push({ r, c, capture: false });
-        else if (t.owner !== p.owner) m.push({ r, c, capture: true });
+        if (t === null) m.push({ r, c, capture: false, specialUpgrade: 'feinte' });
+        else if (t.owner !== p.owner) m.push({ r, c, capture: true, specialUpgrade: 'feinte' });
       }
     }
   }
 
   // Téléportation courte [D] : cases VIDES à distance de Chebyshev ≤ 3, obstacles
-  // ignorés. Disponible seulement hors cooldown. On marque tele:true et on exclut
-  // les cases déjà atteignables normalement (pas de doublon ni de cooldown injustifié).
-  if (p.upgrades.includes('Tele') && (p.cooldowns.Tele || 0) === 0) {
+  // ignorés. On marque tele:true et on exclut les cases déjà atteignables normalement.
+  if (p.upgrades.includes('Tele') && !ameliorationUtilisee(p, 'Tele')) {
     const dejaAtteint = new Set(m.map((x) => x.r + ',' + x.c));
     for (let dr = -3; dr <= 3; dr++) {
       for (let dc = -3; dc <= 3; dc++) {
@@ -198,7 +228,7 @@ function coupsDame(board, p) {
         if (!inB(board, r, c)) continue;
         if (board[r][c] !== null) continue;          // cases vides uniquement (jamais de capture)
         if (dejaAtteint.has(r + ',' + c)) continue;  // déjà un coup normal
-        m.push({ r, c, capture: false, tele: true });
+        m.push({ r, c, capture: false, tele: true, specialUpgrade: 'Tele' });
       }
     }
   }
@@ -227,7 +257,7 @@ function coupsRoi(board, p) {
   }
   // Haute fuite [D] : bond de 3 cases en ligne droite (ortho ou diagonale).
   // Jamais de capture : les deux cases intermédiaires et l'arrivée sont vides.
-  if (p.upgrades.includes('haute-fuite')) {
+  if (p.upgrades.includes('haute-fuite') && !ameliorationUtilisee(p, 'haute-fuite')) {
     for (const [dr, dc] of [...DIAG, ...ORTHO]) {
       const r1 = p.r + dr, c1 = p.c + dc;
       const r2 = p.r + 2 * dr, c2 = p.c + 2 * dc;
@@ -235,19 +265,19 @@ function coupsRoi(board, p) {
       if (caseAt(board, r1, c1) === null
           && caseAt(board, r2, c2) === null
           && caseAt(board, r3, c3) === null) {
-        m.push({ r: r3, c: c3, capture: false, hauteFuite: true });
+        m.push({ r: r3, c: c3, capture: false, hauteFuite: true, specialUpgrade: 'haute-fuite' });
       }
     }
   }
   // Passe royal [D] : bond de 2 cases en ligne droite (ortho ou diagonale).
   // Jamais de capture : la case intermédiaire ET la case d'arrivée doivent être vides.
-  if (p.upgrades.includes('passe-royale')) {
+  if (p.upgrades.includes('passe-royale') && !ameliorationUtilisee(p, 'passe-royale')) {
     const deja = new Set(m.map((x) => x.r + ',' + x.c)); // dédup vs roque (même case d'arrivée)
     for (const [dr, dc] of [...DIAG, ...ORTHO]) {
       const inter = caseAt(board, p.r + dr, p.c + dc);
       const dest = caseAt(board, p.r + 2 * dr, p.c + 2 * dc);
       if (inter === null && dest === null && !deja.has((p.r + 2 * dr) + ',' + (p.c + 2 * dc))) {
-        m.push({ r: p.r + 2 * dr, c: p.c + 2 * dc, capture: false });
+        m.push({ r: p.r + 2 * dr, c: p.c + 2 * dc, capture: false, specialUpgrade: 'passe-royale' });
       }
     }
   }

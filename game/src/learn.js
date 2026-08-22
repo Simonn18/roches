@@ -475,7 +475,8 @@ export const LEARN_GAMES = [
     detail: 'Sélectionne la dame encerclée puis choisis l’anneau ambre en e7. Aucun pion ne doit être déplacé.',
     objective: 'Sortir de l’encerclement', setup: scenarioTeleportation,
     hint: () => ({ cells: [{ r: 4, c: 4 }, { r: 1, c: 4 }] }),
-    check: (state) => state.board[1][4]?.type === 'Q' && (state.board[1][4].cooldowns.Tele || 0) > 0,
+    check: (state) => state.board[1][4]?.type === 'Q'
+      && state.board[1][4].usedUpgrades?.includes('Tele'),
   },
   {
     id: 'hypnose', title: 'Hypnose', upgrade: 'Hypnose', upgradeId: 'hypnose', category: 'ACTIF', cost: 10, color: '#F0B15E',
@@ -641,7 +642,7 @@ export const LEARN_GAMES = [
     hint: (state) => state.chain ? { cells: [{ r: 2, c: 3 }, { r: 1, c: 5 }] } : { cells: [{ r: 4, c: 4 }, { r: 2, c: 3 }] },
     check: (state) => state.board[1][5]?.type === 'N'
       && state.board[1][5].upgrades.includes('second')
-      && (state.board[1][5].cooldowns.second || 0) > 0,
+      && state.board[1][5].usedUpgrades?.includes('second'),
   },
   {
     id: 'pas-diag', title: 'Pas diagonal', upgrade: 'Pas diagonal', upgradeId: 'pas-diag', category: 'DÉPLACEMENT', cost: 4, color: '#8FB8E0',
@@ -660,7 +661,7 @@ export const LEARN_GAMES = [
     hint: () => ({ cells: [{ r: 4, c: 4 }, { r: 1, c: 5 }] }),
     check: (state) => state.board[1][5]?.type === 'N'
       && state.board[1][5].upgrades.includes('grand-saut')
-      && (state.board[1][5].cooldowns['grand-saut'] || 0) > 0,
+      && state.board[1][5].usedUpgrades?.includes('grand-saut'),
   },
   {
     id: 'haute-fuite', title: 'Haute fuite', upgrade: 'Haute fuite', upgradeId: 'haute-fuite', category: 'DÉPLACEMENT', cost: 10, color: '#8FB8E0',

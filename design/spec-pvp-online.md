@@ -475,7 +475,7 @@ neuve à inventer** — on branche l'émission là où le replay enregistre déj
 canonique** de l'état pertinent :
 ```
 pour chaque case r,c (ordre fixe) : owner|type|shield|sacrificeArmed|decretUsed|
-    doubleCoupUsed|rempartGranted|sortedCooldowns|sortedUpgrades
+    doubleCoupUsed|rempartGranted|sortedCooldowns|sortedUpgrades|sortedUsedUpgrades
 puis : ecus[0]|ecus[1]|turn|chain?piece.id:chainType
 ```
 Exclut tout ce qui est cosmétique (`anim`, `popups`, `flashes`, `_goldT`, `ui`). Deux moteurs

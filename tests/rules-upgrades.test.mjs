@@ -3,7 +3,8 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { creerPiece } from '../game/src/board.js?v=109';
-import { coupsLegaux, zonesInterdites } from '../game/src/rules.js?v=116';
+import { coupsLegaux, zonesInterdites, consommerAmelioration } from '../game/src/rules.js?v=116';
+import { UPGRADES } from '../game/src/constants.js?v=113';
 
 function plateauVide(rows = 8, cols = 8) {
   return Array.from({ length: rows }, () => Array(cols).fill(null));
@@ -21,6 +22,26 @@ function contient(moves, r, c, predicate = () => true) {
 }
 
 describe('Améliorations des cases bonus — règles utilisables', () => {
+  test('Pivot est consommé après son premier déplacement diagonal', () => {
+    const board = plateauVide();
+    const rook = placer(board, 'R', 0, 4, 4, ['pivot']);
+
+    const firstMoves = coupsLegaux(board, rook);
+    assert.equal(contient(firstMoves, 3, 3, (move) => move.specialUpgrade === 'pivot'), true);
+
+    consommerAmelioration(rook, 'pivot');
+    const secondMoves = coupsLegaux(board, rook);
+    assert.equal(contient(secondMoves, 3, 3, (move) => move.specialUpgrade === 'pivot'), false);
+    assert.equal(contient(secondMoves, 4, 7), true);
+    assert.deepEqual(rook.usedUpgrades, ['pivot']);
+  });
+
+  test('toutes les améliorations de déplacement sont à usage unique', () => {
+    const movementUpgrades = Object.values(UPGRADES).filter((upgrade) => upgrade.cat === 'D');
+    assert.ok(movementUpgrades.length > 0);
+    assert.ok(movementUpgrades.every((upgrade) => upgrade.once === true));
+  });
+
   test('Pas diagonal avance en diagonale sans capturer', () => {
     const board = plateauVide();
     const pawn = placer(board, 'P', 0, 4, 3, ['pas-diag']);

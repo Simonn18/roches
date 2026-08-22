@@ -8,7 +8,7 @@
 //   d'achat « émergente » (achat-en-coup-complet) est RETIRÉE.
 // Pouvoirs actifs (ex-règles D-E) : hors-scope v1/v2 (le bot achète, ne déclenche pas).
 // Invariant préservé : la recherche travaille sur des CLONES, l'état réel n'est jamais muté.
-import { coupsLegaux, DIRS8 } from './rules.js?v=116';
+import { coupsLegaux, DIRS8, ameliorationUtilisee } from './rules.js?v=116';
 import {
   VALEUR_PIECE, UPGRADES, UPGRADES_PAR_TYPE, MAX_UPGRADES_PAR_PIECE,
   MAX_STATS_PAR_JOUEUR, estAmeliorationStat,
@@ -25,12 +25,15 @@ function clonePiece(p) {
   return {
     id: p.id, type: p.type, owner: p.owner, r: p.r, c: p.c,
     upgrades: [...p.upgrades],
+    usedUpgrades: Array.isArray(p.usedUpgrades) ? [...p.usedUpgrades] : [],
     shield: p.shield,
     cooldowns: { ...p.cooldowns },
     doubleCoupUsed: p.doubleCoupUsed,
     decretUsed: p.decretUsed,
     sacrificeArmed: p.sacrificeArmed,
     rempartGranted: p.rempartGranted,
+    folieUsed: p.folieUsed,
+    feinteUsed: p.feinteUsed,
     epineZone: p.epineZone ? { ...p.epineZone } : null,
     aBouge: p.aBouge, // condition du roque (GDD §5.1.b) — la recherche doit la voir
   };
@@ -46,8 +49,12 @@ function applyMove(board, piece, move) {
   piece.c = move.c;
   board[move.r][move.c] = piece;
   piece.aBouge = true;
-  if (move.grandSaut) piece.cooldowns['grand-saut'] = UPGRADES['grand-saut'].cooldown;
-  if (move.hauteFuite) piece.cooldowns['haute-fuite'] = UPGRADES['haute-fuite'].cooldown;
+  if (move.specialUpgrade) {
+    if (!Array.isArray(piece.usedUpgrades)) piece.usedUpgrades = [];
+    if (!piece.usedUpgrades.includes(move.specialUpgrade)) piece.usedUpgrades.push(move.specialUpgrade);
+    if (move.specialUpgrade === 'reprise') piece.folieUsed = true;
+    if (move.specialUpgrade === 'feinte') piece.feinteUsed = true;
+  }
   // Roque (GDD §5.1.b) : la tour suit dans la simulation aussi, sinon l'éval juge
   // une position fausse (tour restée dans le coin).
   if (move.castle) {
@@ -64,6 +71,7 @@ function applyMove(board, piece, move) {
   if (move.promotion && piece.type === 'P') {
     piece.type = 'Q';
     piece.upgrades = [];
+    piece.usedUpgrades = [];
     piece.shield = false;
     piece.cooldowns = {};
   }
@@ -132,7 +140,7 @@ function evalBoard(board, aiPlayer) {
       // capacités. Terme symétrique (valorise aussi les upgrades adverses en négatif).
       upgradesScore += sign * p.upgrades.length * 0.5;
       if (p.shield && SHIELD_IDS.some(u => p.upgrades.includes(u))) upgradesScore += sign * 1.5;
-      if (p.upgrades.includes('Tele') && (p.cooldowns.Tele || 0) === 0) upgradesScore += sign * 2.0;
+      if (p.upgrades.includes('Tele') && !ameliorationUtilisee(p, 'Tele')) upgradesScore += sign * 2.0;
       if (p.type === 'K' && p.sacrificeArmed) upgradesScore += sign * 3.0;
       for (const cd of Object.values(p.cooldowns)) { if (cd > 5) upgradesScore -= sign * 0.5; }
 

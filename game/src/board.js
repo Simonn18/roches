@@ -29,8 +29,9 @@ export function creerPiece(type, owner, r, c) {
     owner,           // 0 = Joueur 1 (bas), 1 = Joueur 2 (haut)
     r, c,            // position, tenue synchro avec le plateau
     upgrades: [],    // ids d'améliorations achetées
+    usedUpgrades: [], // ids des améliorations consommées après leur activation
     shield: false,   // absorbe la prochaine capture (Forteresse, Bouclier, Monture, Couronne, Parade, Majesté)
-    cooldowns: {},   // { ruee, Rayon, Tele, second, sacrifice, vet, epine, grand-saut } en tours du joueur
+    cooldowns: {},   // pouvoirs actifs; les mouvements [D] consommés sont suivis dans usedUpgrades
     epineZone: null, // { r, c, owner, turns } — case gelée par Épine
     debuffs: {},     // { sht, root, hypnoseAura } en tours restants
     doubleCoupUsed: false,  // Double coup (usage unique) consommé

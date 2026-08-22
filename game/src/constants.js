@@ -16,7 +16,7 @@ export const LETTRE = { P: 'P', N: 'N', B: 'F', R: 'T', Q: 'D', K: 'R' };
 // 3 carte par type de pièce, mix des catégories. cat: D=déplacement, A=actif, S=stat.
 export const UPGRADES = {
   'marche-arriere': {
-    id: 'marche-arriere', nom: 'Marche arrière', cat: 'D', cout: 4, piece: 'P',
+    id: 'marche-arriere', nom: 'Marche arrière', cat: 'D', cout: 4, piece: 'P', once: true,
     desc: "Recule d'une case (jamais pour capturer).",
   },
   'bouclier':{
@@ -29,7 +29,7 @@ export const UPGRADES = {
   },
   
   'second': {
-    id: 'second', nom: 'Second Galop', cat: 'D', cout: 8, piece: 'N', cooldown: 3,
+    id: 'second', nom: 'Second Galop', cat: 'D', cout: 8, piece: 'N', once: true,
     desc: 'Le cavalier peut, une fois par tour où il ne capture pas, enchaîner un 2e saut (le deuxième saut ne peut pas capturer)',
   },
   'ruee': {
@@ -42,7 +42,7 @@ export const UPGRADES = {
   },
 
   'pas-de-cote': {
-    id: 'pas-de-cote', nom: 'Pas de côté', cat: 'D', cout: 6, piece: 'B',
+    id: 'pas-de-cote', nom: 'Pas de côté', cat: 'D', cout: 6, piece: 'B', once: true,
     desc: "Le fou peut se déplacer comme un cavalier (saut en L), en plus de sa diagonale.",
   },
   'Rayon': {
@@ -55,7 +55,7 @@ export const UPGRADES = {
   },
 
   'pivot': {
-    id: 'pivot', nom: 'Pivot', cat: 'D', cout: 7, piece: 'R',
+    id: 'pivot', nom: 'Pivot', cat: 'D', cout: 7, piece: 'R', once: true,
     desc: "La tour peut se déplacer d'une case en diagonale (1 case seulement).",
   },
   'rempart': {
@@ -68,7 +68,7 @@ export const UPGRADES = {
   },
 
   'Tele': {
-    id: 'Tele', nom: 'Téléportation courte', cat: 'D', cout: 12, piece: 'Q', cooldown:5,
+    id: 'Tele', nom: 'Téléportation courte', cat: 'D', cout: 12, piece: 'Q', once: true,
     desc: "la dame se pose sur n'importe quelle case vide à 3 cases autour maximum (ignore les obstacles)",
   },
   'double-coup': {
@@ -81,7 +81,7 @@ export const UPGRADES = {
   },
 
   'passe-royale': {
-    id: 'passe-royale', nom: 'Passe royal', cat: 'D', cout: 8, piece: 'K',
+    id: 'passe-royale', nom: 'Passe royal', cat: 'D', cout: 8, piece: 'K', once: true,
     desc:"Le roi peut se déplacer de 2 cases en ligne droite (orthogonal/diagonal), cases libres.",
   },
   // Roi — 1re actif : si la reine adverse est à 2 cases ou moins, elle ne peut plus bouger pendant 2 tours
@@ -97,7 +97,7 @@ export const UPGRADES = {
   // --- Catalogue étendu [21:30] — 2 D + 2 A + 1 S par pièce (5 cartes × 6 types = 30) ---
   // Pion — 2e déplacement (cumul avec Marche arrière)
   'pas-diag': {
-    id: 'pas-diag', nom: 'Pas diagonal', cat: 'D', cout: 4, piece: 'P',
+    id: 'pas-diag', nom: 'Pas diagonal', cat: 'D', cout: 4, piece: 'P', once: true,
     desc: "Avance d'une case en diagonale, sans capturer.",
   },
   // Pion — 2e actif : geler la case
@@ -107,7 +107,7 @@ export const UPGRADES = {
   },
   // Cavalier — 2e déplacement : bond long (3,1) ou (3,2)
   'grand-saut': {
-    id: 'grand-saut', nom: 'Grand saut', cat: 'D', cout: 9, piece: 'N', cooldown: 4,
+    id: 'grand-saut', nom: 'Grand saut', cat: 'D', cout: 9, piece: 'N', once: true,
     desc: 'Cavalier peut sauter en (3,1) ou (3,2) — cases intermédiaire et finale libres.',
   },
   // Cavalier — 2e actif : repousse une pièce adverse sur une case d'attaque
@@ -117,7 +117,7 @@ export const UPGRADES = {
   },
   // Fou — 2e déplacement : pour la prochaine attaque, le fou se déplace comme une dame
   'reprise': {
-    id: 'reprise', nom: 'Folie', cat: 'D', cout: 5, piece: 'B',
+    id: 'reprise', nom: 'Folie', cat: 'D', cout: 5, piece: 'B', once: true,
     desc: "Pour la prochaine attaque, le fou se déplace comme une dame.",
   },
   // Fou — 2e actif : les pièces ennemies (hors roi/reine) ne peuvent plus bouger
@@ -128,7 +128,7 @@ export const UPGRADES = {
   },
   // Tour — 2e déplacement : saut de la 1re pièce
   'enjambeur': {
-    id: 'enjambeur', nom: 'Enjambeur', cat: 'D', cout: 6, piece: 'R',
+    id: 'enjambeur', nom: 'Enjambeur', cat: 'D', cout: 6, piece: 'R', once: true,
     desc: "La tour peut sauter la première pièce rencontrée sur son glissement (jamais le roi).",
   },
   // Tour — 2e actif : échange de place avec un pion allié dans le champ d'action de la tour
@@ -138,7 +138,7 @@ export const UPGRADES = {
   },
   // Dame — 2e déplacement : pour la prochaine attaque, la dame se déplace comme n'importe quelle pièce
   'feinte': {
-    id: 'feinte', nom: 'Feinte', cat: 'D', cout: 12, piece: 'Q', cooldown: 5,
+    id: 'feinte', nom: 'Feinte', cat: 'D', cout: 12, piece: 'Q', once: true,
     desc: "Pour la prochaine attaque, la dame peut se déplacer comme n'importe quelle pièce.",
   },
   // Dame — 2e actif : empêche le roi adverse d'utiliser ses améliorations pendant 2 tours
@@ -148,7 +148,7 @@ export const UPGRADES = {
   },
   // Roi — 2e déplacement : fuite de 3 cases
   'haute-fuite': {
-    id: 'haute-fuite', nom: 'Haute fuite', cat: 'D', cout: 10, piece: 'K',
+    id: 'haute-fuite', nom: 'Haute fuite', cat: 'D', cout: 10, piece: 'K', once: true,
     desc: 'Le roi peut fuir de 3 cases tout droit (ortho/diag) — cases libres, sans capture.',
   },
   // Roi — 1re stat : survit à la première tentative de capture
