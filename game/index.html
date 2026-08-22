@@ -12,7 +12,7 @@
          (CSS inline) — traqué en M4 (audit) pour vendoring local futures versions.
        connect-src 'self' https://esm.sh https://*.supabase.co wss://*.supabase.co = Rest + Realtime
          WS + source maps esm.sh (.mjs.map = data read-only, jamais exécutée — pas
-         d'extension de surface). img-src data: autorise le favicon SVG inline.
+         d'extension de surface). img-src data: autorise les images inline nécessaires.
        object-src/base-uri/frame-src/form-action désactivés (defense-in-depth).
        ⮕ Un header HTTP serveur (Content-Security-Policy dans nginx/Caddy) sera
        préférable en prod : le meta-tag est limité (ne couvre pas frame-ancestors,
@@ -63,9 +63,8 @@
     ]
   }
   </script>
-  <!-- Icône du site : PNG compatible avec Google Search, SVG pour les navigateurs modernes. -->
+  <!-- Icône du site : favicon PNG utilisé par les navigateurs et Google Search. -->
   <link rel="icon" type="image/png" sizes="48x48" href="./assets/favicon.png" />
-  <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
   <link rel="apple-touch-icon" sizes="180x180" href="./assets/favicon.png" />
   <style>
     /* Polices locales (DA §3) — .woff2 dans assets/fonts, jamais de CDN.
